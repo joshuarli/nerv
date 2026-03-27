@@ -87,27 +87,15 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     );
     session.permissions_enabled = opts.permissions;
 
-    // Apply default thinking level from config ("on" or "off").
-    if let Some(ref level_str) = config.default_thinking_level {
+    // Apply default thinking level from config (true = on, false = off).
+    if let Some(enabled) = config.default_thinking_level {
         use crate::agent::types::ThinkingLevel;
-        let level = match level_str.to_lowercase().as_str() {
-            "on" | "true" | "enabled" => ThinkingLevel::On,
-            _ => ThinkingLevel::Off,
-        };
-        session.agent.state.thinking_level = level;
+        session.agent.state.thinking_level = if enabled { ThinkingLevel::On } else { ThinkingLevel::Off };
     }
 
     // Apply default effort level from config ("low", "medium", "high", "max").
-    if let Some(ref effort_str) = config.default_effort_level {
-        use crate::agent::types::EffortLevel;
-        let effort = match effort_str.to_lowercase().as_str() {
-            "low" => Some(EffortLevel::Low),
-            "medium" => Some(EffortLevel::Medium),
-            "high" => Some(EffortLevel::High),
-            "max" => Some(EffortLevel::Max),
-            _ => None,
-        };
-        session.agent.state.effort_level = effort;
+    if let Some(effort) = config.default_effort_level {
+        session.agent.state.effort_level = Some(effort);
     }
 
     Bootstrap {
