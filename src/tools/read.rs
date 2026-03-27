@@ -69,22 +69,13 @@ impl AgentTool for ReadTool {
                 } else {
                     format!("{} ({} lines)", path_str, n)
                 };
-                ToolResult {
-                    content,
-                    details: Some(serde_json::json!({"display": display})),
-                    is_error: false,
-                }
+                ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
             }
             Err(e) => {
-                let hint = if e.kind() == std::io::ErrorKind::NotFound {
-                    format!("File not found: {} (cwd: {})", path_str, self.cwd.display())
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    ToolResult::error(format!("File not found: {} (cwd: {})", path_str, self.cwd.display()))
                 } else {
-                    format!("Error reading {}: {}", path_str, e)
-                };
-                ToolResult {
-                    content: hint,
-                    details: None,
-                    is_error: true,
+                    ToolResult::error(format!("Error reading {}: {}", path_str, e))
                 }
             }
         }

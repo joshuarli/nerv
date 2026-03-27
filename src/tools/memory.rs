@@ -91,74 +91,41 @@ impl AgentTool for MemoryTool {
         match action {
             "list" => {
                 if memories.is_empty() {
-                    ToolResult {
-                        content: "No memories stored.".into(),
-                        details: None,
-                        is_error: false,
-                    }
+                    ToolResult::ok("No memories stored.")
                 } else {
-                    let display: Vec<String> = memories
+                    let lines: Vec<String> = memories
                         .iter()
                         .enumerate()
                         .map(|(i, m)| format!("{}. {}", i + 1, m))
                         .collect();
-                    ToolResult {
-                        content: display.join("\n"),
-                        details: None,
-                        is_error: false,
-                    }
+                    ToolResult::ok(lines.join("\n"))
                 }
             }
             "add" => {
                 let content = input["content"].as_str().unwrap_or("").trim().to_string();
-                // Compress to single line
                 let line = content.replace('\n', " ");
                 memories.push(line.clone());
                 match self.write_memories(&memories) {
-                    Ok(()) => ToolResult {
-                        content: format!("Memory added: {}", line),
-                        details: None,
-                        is_error: false,
-                    },
-                    Err(e) => ToolResult {
-                        content: format!("Failed to write memory: {}", e),
-                        details: None,
-                        is_error: true,
-                    },
+                    Ok(()) => ToolResult::ok(format!("Memory added: {}", line)),
+                    Err(e) => ToolResult::error(format!("Failed to write memory: {}", e)),
                 }
             }
             "remove" => {
                 let idx_str = input["content"].as_str().unwrap_or("0");
                 let idx: usize = idx_str.parse().unwrap_or(0);
                 if idx == 0 || idx > memories.len() {
-                    return ToolResult {
-                        content: format!(
-                            "Invalid index: {}. Use 'list' to see available memories.",
-                            idx_str
-                        ),
-                        details: None,
-                        is_error: true,
-                    };
+                    return ToolResult::error(format!(
+                        "Invalid index: {}. Use 'list' to see available memories.",
+                        idx_str
+                    ));
                 }
                 let removed = memories.remove(idx - 1);
                 match self.write_memories(&memories) {
-                    Ok(()) => ToolResult {
-                        content: format!("Removed: {}", removed),
-                        details: None,
-                        is_error: false,
-                    },
-                    Err(e) => ToolResult {
-                        content: format!("Failed to write memory: {}", e),
-                        details: None,
-                        is_error: true,
-                    },
+                    Ok(()) => ToolResult::ok(format!("Removed: {}", removed)),
+                    Err(e) => ToolResult::error(format!("Failed to write memory: {}", e)),
                 }
             }
-            _ => ToolResult {
-                content: "Unknown action".into(),
-                details: None,
-                is_error: true,
-            },
+            _ => ToolResult::error("Unknown action"),
         }
     }
 }

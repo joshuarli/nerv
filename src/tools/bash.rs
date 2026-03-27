@@ -50,11 +50,7 @@ impl AgentTool for BashTool {
         {
             Ok(c) => c,
             Err(e) => {
-                return ToolResult {
-                    content: format!("Failed to spawn: {}", e),
-                    details: None,
-                    is_error: true,
-                };
+                return ToolResult::error(format!("Failed to spawn: {}", e));
             }
         };
 
@@ -108,10 +104,11 @@ impl AgentTool for BashTool {
         } else {
             content.clone()
         };
-        ToolResult {
-            content,
-            details: Some(serde_json::json!({"exit_code": exit_code, "truncated": tr.truncated, "display": display})),
-            is_error: exit_code != Some(0),
+        let details = serde_json::json!({"exit_code": exit_code, "truncated": tr.truncated, "display": display});
+        if exit_code != Some(0) {
+            ToolResult { content, details: Some(details), is_error: true }
+        } else {
+            ToolResult::ok_with_details(content, details)
         }
     }
 }
