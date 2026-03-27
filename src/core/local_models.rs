@@ -96,7 +96,10 @@ pub fn recommended_defaults(model_path: &Path) -> LocalModel {
     } else {
         1024
     };
-    let ubatch_size = (batch_size / 4).max(256);
+    // On Apple Silicon, unified memory means no VRAM spill penalty from large ubatch.
+    // Match ubatch to batch for maximum Metal throughput. On memory-constrained systems,
+    // fall back to batch/2 to avoid stalling the scheduler.
+    let ubatch_size = if remaining_gb > 6.0 { batch_size } else { (batch_size / 2).max(256) };
 
     let extra_args = vec![
         "-fa".into(),
@@ -119,10 +122,17 @@ pub fn recommended_defaults(model_path: &Path) -> LocalModel {
         "q8_0".into(),
         "-ctv".into(),
         "q8_0".into(),
-        "-nkvo".into(),
+        // KV offload to Metal enabled (no -nkvo): on Apple Silicon unified memory,
+        // keeping KV cache on GPU avoids CPU round-trips during generation.
         "--no-context-shift".into(),
         "--cache-reuse".into(),
         "256".into(),
+        // No busy-polling: inference is Metal-bound, spinning wastes P-cores.
+        "--poll".into(),
+        "0".into(),
+        // Elevate generation thread priority to reduce OS scheduling jitter.
+        "--prio".into(),
+        "2".into(),
     ];
 
     LocalModel {
