@@ -1,10 +1,20 @@
-/// Interactive session picker for /resume with FTS5 search.
+/// Full-screen session picker for /session.
+///
+/// Implements [`FullscreenList`] so it can be driven by [`run_fullscreen_picker`].
+/// Search is performed synchronously via the `search_fn` closure passed at
+/// construction, which typically calls `SessionManager::search_sessions` on a
+/// dedicated read-only DB connection.
+use std::io::Write;
+
 use super::display::{format_age, shorten_path, truncate_str};
+use super::fullscreen_picker::FullscreenList;
 use super::theme;
 
 use crate::session::manager::{SearchResult, SessionSummary};
 
-enum PickerMode {
+// ─────────────────────────── types ──────────────────────────────────────────
+
+enum Mode {
     Browse,
     Search,
 }
@@ -12,182 +22,223 @@ enum PickerMode {
 pub struct SessionPicker {
     all_sessions: Vec<SessionSummary>,
     search_results: Vec<SearchResult>,
-    pub query: String,
-    pub selected: usize,
-    mode: PickerMode,
+    query: String,
+    selected: usize,
+    mode: Mode,
+    /// Synchronous search callback.
+    search_fn: Box<dyn Fn(&str) -> Vec<SearchResult>>,
+    repo_root: Option<String>,
 }
 
+// ─────────────────────────── impl ───────────────────────────────────────────
+
 impl SessionPicker {
-    pub fn new(sessions: Vec<SessionSummary>) -> Self {
+    pub fn new(
+        sessions: Vec<SessionSummary>,
+        search_fn: Box<dyn Fn(&str) -> Vec<SearchResult>>,
+        repo_root: Option<String>,
+    ) -> Self {
         Self {
             all_sessions: sessions,
             search_results: Vec::new(),
             query: String::new(),
             selected: 0,
-            mode: PickerMode::Browse,
+            mode: Mode::Browse,
+            search_fn,
+            repo_root,
         }
     }
 
-    pub fn move_up(&mut self) {
+    fn visible_count(&self) -> usize {
+        match self.mode {
+            Mode::Browse => self.all_sessions.len(),
+            Mode::Search => self.search_results.len(),
+        }
+    }
+
+    fn run_search(&mut self) {
+        self.search_results = (self.search_fn)(&self.query);
+        self.selected = 0;
+    }
+}
+
+// ─────────────────────── FullscreenList impl ─────────────────────────────────
+
+impl FullscreenList for SessionPicker {
+    fn move_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
         }
     }
 
-    pub fn move_down(&mut self) {
-        let len = self.visible_count();
-        if self.selected + 1 < len {
+    fn move_down(&mut self) {
+        if self.selected + 1 < self.visible_count() {
             self.selected += 1;
         }
     }
 
-    pub fn push_char(&mut self, ch: char) {
+    fn push_char(&mut self, ch: char) {
         self.query.push(ch);
-        self.mode = PickerMode::Search;
-        self.selected = 0;
+        self.mode = Mode::Search;
+        self.run_search();
     }
 
-    pub fn pop_char(&mut self) {
+    fn pop_char(&mut self) {
         self.query.pop();
         if self.query.is_empty() {
-            self.mode = PickerMode::Browse;
+            self.mode = Mode::Browse;
+            self.selected = 0;
+        } else {
+            self.run_search();
         }
-        self.selected = 0;
     }
 
-    pub fn clear_query(&mut self) {
+    fn clear_query(&mut self) {
         self.query.clear();
-        self.mode = PickerMode::Browse;
+        self.mode = Mode::Browse;
         self.selected = 0;
     }
 
-    pub fn update_results(&mut self, results: Vec<SearchResult>) {
-        self.search_results = results;
-        if self.selected >= self.visible_count() {
-            self.selected = self.visible_count().saturating_sub(1);
-        }
-    }
-
-    pub fn has_query(&self) -> bool {
-        !self.query.is_empty()
-    }
-
-    fn visible_count(&self) -> usize {
+    fn enter(&self) -> Option<String> {
         match self.mode {
-            PickerMode::Browse => self.all_sessions.len().min(20),
-            PickerMode::Search => self.search_results.len().min(20),
+            Mode::Browse => self.all_sessions.get(self.selected).map(|s| s.id_short.clone()),
+            Mode::Search => self.search_results.get(self.selected).map(|r| r.id_short.clone()),
         }
     }
 
-    pub fn selected_id(&self) -> Option<&str> {
-        match self.mode {
-            PickerMode::Browse => self
-                .all_sessions
-                .get(self.selected)
-                .map(|s| s.id_short.as_str()),
-            PickerMode::Search => self
-                .search_results
-                .get(self.selected)
-                .map(|s| s.id_short.as_str()),
-        }
-    }
-
-    pub fn render_lines(&self, repo_root: Option<&str>) -> Vec<String> {
+    fn render(&self, out: &mut dyn Write, cols: u16, rows: u16) {
         let home = crate::home_dir()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_default();
-        let mut lines = Vec::new();
+        let repo = self.repo_root.as_deref();
 
-        // Search input line
-        lines.push(format!(
-            "{}Search sessions:{} {}{}\u{2588}{}",
-            theme::MUTED,
-            theme::RESET,
-            theme::BOLD,
-            self.query,
-            theme::RESET,
-        ));
+        // Available rows: 1 header + 1 search bar + list + 1 footer
+        let list_rows = (rows as usize).saturating_sub(3);
+        let cols = cols as usize;
 
+        // ── header ─────────────────────────────────────────────────────────
+        let title = "  Sessions";
+        let hint = "↑↓ navigate · Enter select · Esc cancel  ";
+        let gap = cols.saturating_sub(title.len() + hint.len());
+        let _ = write!(
+            out,
+            "\x1b[H{bold}{title}{reset}{muted}{gap}{hint}{reset}\r\n",
+            bold = theme::BOLD,
+            reset = theme::RESET,
+            muted = theme::MUTED,
+            title = title,
+            gap = " ".repeat(gap),
+            hint = hint,
+        );
+
+        // ── search bar ─────────────────────────────────────────────────────
+        let _ = write!(
+            out,
+            "{muted}  /{reset} {bold}{query}{reset}{cursor}\x1b[K\r\n",
+            muted = theme::MUTED,
+            reset = theme::RESET,
+            bold = theme::BOLD,
+            query = self.query,
+            cursor = if self.query.is_empty() { "\u{2588}" } else { "" },
+        );
+
+        // ── list ───────────────────────────────────────────────────────────
         match self.mode {
-            PickerMode::Browse => {
+            Mode::Browse => {
                 if self.all_sessions.is_empty() {
-                    lines.push(format!(
-                        " {}No previous sessions found.{}",
-                        theme::MUTED,
-                        theme::RESET,
-                    ));
+                    let _ = write!(
+                        out,
+                        "\r\n  {}No previous sessions.{}\r\n",
+                        theme::MUTED, theme::RESET
+                    );
                 } else {
-                    for (i, s) in self.all_sessions.iter().take(20).enumerate() {
-                        let age = format_age(&s.modified);
-                        // Show the auto-generated name if available, otherwise fall back to preview.
-                        let label = if let Some(ref name) = s.name {
-                            name.as_str()
-                        } else if s.preview.is_empty() {
-                            "(empty)"
-                        } else {
-                            truncate_str(&s.preview, 50)
-                        };
-                        let cwd_short = shorten_path(&s.cwd, &home, repo_root);
-
-                        let (marker, end) = if i == self.selected {
-                            (theme::REVERSE, theme::RESET)
-                        } else {
-                            ("", "")
-                        };
-                        lines.push(format!(
-                            " {}{} {:>4} {:>3}msg {}  {}{}",
-                            marker, s.id_short, age, s.message_count, cwd_short, label, end,
-                        ));
+                    for (i, s) in self.all_sessions.iter().take(list_rows).enumerate() {
+                        render_session_row(out, i, self.selected, s, &home, repo, cols);
                     }
                 }
             }
-            PickerMode::Search => {
+            Mode::Search => {
                 if self.search_results.is_empty() {
-                    lines.push(format!(
-                        " {}No matches.{}",
-                        theme::MUTED,
-                        theme::RESET,
-                    ));
+                    let _ = write!(
+                        out,
+                        "\r\n  {}No matches.{}\r\n",
+                        theme::MUTED, theme::RESET
+                    );
                 } else {
-                    for (i, r) in self.search_results.iter().take(20).enumerate() {
-                        let age = format_age(&r.modified);
-                        let cwd_short = shorten_path(&r.cwd, &home, repo_root);
-                        let excerpt = truncate_str(&r.excerpt, 60);
-
-                        let selected = i == self.selected;
-                        // Replace placeholders with ANSI codes. When the row is
-                        // selected (REVERSE), use bold for highlights instead of
-                        // color so the reset doesn't break the reverse video.
-                        let excerpt = if selected {
-                            excerpt
-                                .replace("<<HL>>", theme::BOLD)
-                                .replace("<</HL>>", theme::RESET_BOLD)
-                        } else {
-                            excerpt
-                                .replace("<<HL>>", theme::MATCH_HL)
-                                .replace("<</HL>>", theme::RESET)
-                        };
-
-                        let (marker, end) = if selected {
-                            (theme::REVERSE, theme::RESET)
-                        } else {
-                            ("", "")
-                        };
-                        lines.push(format!(
-                            " {}{} {:>4} {:>3}msg {}  {}{}",
-                            marker, r.id_short, age, r.message_count, cwd_short, excerpt, end,
-                        ));
+                    for (i, r) in self.search_results.iter().take(list_rows).enumerate() {
+                        render_search_row(out, i, self.selected, r, &home, repo, cols);
                     }
                 }
             }
         }
+    }
+}
 
-        lines.push(format!(
-            " {}↑↓ navigate, Enter select, Esc cancel{}",
-            theme::MUTED,
-            theme::RESET,
-        ));
+// ─────────────────────────── row helpers ─────────────────────────────────────
 
-        lines
+fn render_session_row(
+    out: &mut dyn Write,
+    idx: usize,
+    selected: usize,
+    s: &SessionSummary,
+    home: &str,
+    repo: Option<&str>,
+    cols: usize,
+) {
+    let selected = idx == selected;
+    let age = format_age(&s.modified);
+    let label = if let Some(ref name) = s.name {
+        name.as_str()
+    } else if s.preview.is_empty() {
+        "(empty)"
+    } else {
+        &s.preview
+    };
+    let cwd_short = shorten_path(&s.cwd, home, repo);
+
+    // Fixed columns: "  {id_short}  {age}  {msg_count}msg  {cwd}  "
+    let meta = format!("  {}  {:>4}  {:>3}msg  {}  ", s.id_short, age, s.message_count, cwd_short);
+    let label_width = cols.saturating_sub(meta.len());
+    let label = truncate_str(label, label_width);
+
+    if selected {
+        let _ = write!(out, "{rev}{meta}{label:<lw$}{reset}\x1b[K\r\n",
+            rev = theme::REVERSE, reset = theme::RESET,
+            meta = meta, label = label, lw = label_width);
+    } else {
+        let _ = write!(out, "{meta}{label}\x1b[K\r\n", meta = meta, label = label);
+    }
+}
+
+fn render_search_row(
+    out: &mut dyn Write,
+    idx: usize,
+    selected: usize,
+    r: &SearchResult,
+    home: &str,
+    repo: Option<&str>,
+    cols: usize,
+) {
+    let is_selected = idx == selected;
+    let age = format_age(&r.modified);
+    let cwd_short = shorten_path(&r.cwd, home, repo);
+
+    let meta = format!("  {}  {:>4}  {:>3}msg  {}  ", r.id_short, age, r.message_count, cwd_short);
+    let excerpt_width = cols.saturating_sub(meta.len());
+    let raw_excerpt = truncate_str(&r.excerpt, excerpt_width * 2); // allow some slop for ANSI tags
+
+    // Resolve <<HL>>…<</HL>> placeholders.
+    let excerpt = if is_selected {
+        raw_excerpt.replace("<<HL>>", theme::BOLD).replace("<</HL>>", theme::RESET_BOLD)
+    } else {
+        raw_excerpt.replace("<<HL>>", theme::MATCH_HL).replace("<</HL>>", theme::RESET)
+    };
+
+    if is_selected {
+        let _ = write!(out, "{rev}{meta}{excerpt}{reset}\x1b[K\r\n",
+            rev = theme::REVERSE, reset = theme::RESET,
+            meta = meta, excerpt = excerpt);
+    } else {
+        let _ = write!(out, "{meta}{excerpt}\x1b[K\r\n", meta = meta, excerpt = excerpt);
     }
 }

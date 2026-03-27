@@ -1,7 +1,14 @@
+/// Full-screen session tree selector for /tree.
+///
+/// Implements [`FullscreenList`] so it can be driven by [`run_fullscreen_picker`].
 use std::collections::HashSet;
+use std::io::Write;
 
+use super::fullscreen_picker::FullscreenList;
 use super::theme;
 use crate::session::types::SessionTreeNode;
+
+// ─────────────────────────── types ──────────────────────────────────────────
 
 struct FlatNode {
     entry_id: String,
@@ -18,17 +25,18 @@ struct FlatNode {
 pub struct TreeSelector {
     nodes: Vec<FlatNode>,
     selected: usize,
-    scroll_offset: usize,
     active_path: HashSet<String>,
     current_leaf_id: Option<String>,
 }
+
+// ─────────────────────────── impl ───────────────────────────────────────────
 
 impl TreeSelector {
     pub fn new(tree: Vec<SessionTreeNode>, current_leaf_id: Option<String>) -> Self {
         let active_path = build_active_path(&tree, current_leaf_id.as_deref());
         let nodes = flatten(&tree, &active_path);
 
-        // Start selection on the current leaf
+        // Start selection on the current leaf.
         let selected = current_leaf_id
             .as_deref()
             .and_then(|lid| nodes.iter().position(|n| n.entry_id == lid))
@@ -37,75 +45,89 @@ impl TreeSelector {
         Self {
             nodes,
             selected,
-            scroll_offset: 0,
             active_path,
             current_leaf_id,
         }
     }
+}
 
-    pub fn move_up(&mut self) {
+// ──────────────────────── FullscreenList impl ────────────────────────────────
+
+impl FullscreenList for TreeSelector {
+    fn move_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
-            self.adjust_scroll();
         }
     }
 
-    pub fn move_down(&mut self) {
+    fn move_down(&mut self) {
         if self.selected + 1 < self.nodes.len() {
             self.selected += 1;
-            self.adjust_scroll();
         }
     }
 
-    pub fn selected_entry_id(&self) -> Option<&str> {
-        self.nodes.get(self.selected).map(|n| n.entry_id.as_str())
+    // Tree has no text search — these are no-ops.
+    fn push_char(&mut self, _ch: char) {}
+    fn pop_char(&mut self) {}
+    fn clear_query(&mut self) {}
+
+    fn enter(&self) -> Option<String> {
+        self.nodes.get(self.selected).map(|n| n.entry_id.clone())
     }
 
-    fn adjust_scroll(&mut self) {
-        let max_visible = 20;
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
-        }
-        if self.selected >= self.scroll_offset + max_visible {
-            self.scroll_offset = self.selected - max_visible + 1;
-        }
-    }
+    fn render(&self, out: &mut dyn Write, cols: u16, rows: u16) {
+        let cols = cols as usize;
+        let list_rows = (rows as usize).saturating_sub(2); // header + footer
 
-    pub fn render_lines(&self) -> Vec<String> {
-        let max_visible = 20;
-        let mut lines = Vec::new();
+        // ── header ─────────────────────────────────────────────────────────
+        let title = "  Session tree";
+        let hint = "↑↓ navigate · Enter select · Esc cancel  ";
+        let gap = cols.saturating_sub(title.len() + hint.len());
+        let _ = write!(
+            out,
+            "\x1b[H{bold}{title}{reset}{muted}{gap}{hint}{reset}\r\n",
+            bold = theme::BOLD,
+            reset = theme::RESET,
+            muted = theme::MUTED,
+            title = title,
+            gap = " ".repeat(gap),
+            hint = hint,
+        );
 
-        lines.push(format!(
-            "{}Session tree (↑↓ navigate, Enter select, Esc cancel):{}",
-            theme::MUTED,
-            theme::RESET,
-        ));
+        // ── scroll window ──────────────────────────────────────────────────
+        // Keep selected in the center of the viewport when possible.
+        let half = list_rows / 2;
+        let scroll_offset = if self.selected <= half {
+            0
+        } else if self.selected + half >= self.nodes.len() {
+            self.nodes.len().saturating_sub(list_rows)
+        } else {
+            self.selected - half
+        };
 
-        let end = (self.scroll_offset + max_visible).min(self.nodes.len());
-        for i in self.scroll_offset..end {
+        let end = (scroll_offset + list_rows).min(self.nodes.len());
+
+        for i in scroll_offset..end {
             let node = &self.nodes[i];
-            let mut line = String::new();
+            let is_selected = i == self.selected;
+            let is_current = self.current_leaf_id.as_deref() == Some(&node.entry_id);
+            let is_active = self.active_path.contains(&node.entry_id);
 
-            // Build indent + connectors
-            line.push(' ');
+            // ── indent + connector ─────────────────────────────────────────
+            let mut prefix = String::from(" ");
             if node.indent > 0 {
-                // Simple indent with connector
                 let base_indent = (node.indent - 1) * 3;
                 for _ in 0..base_indent {
-                    line.push(' ');
+                    prefix.push(' ');
                 }
                 if node.show_connector {
-                    if node.is_last {
-                        line.push_str("└─ ");
-                    } else {
-                        line.push_str("├─ ");
-                    }
+                    prefix.push_str(if node.is_last { "└─ " } else { "├─ " });
                 } else {
-                    line.push_str("   ");
+                    prefix.push_str("   ");
                 }
             }
 
-            // Role marker + summary
+            // ── role marker ────────────────────────────────────────────────
             let (marker, style) = if node.is_meta {
                 ("~", theme::DIM)
             } else if node.is_user {
@@ -116,66 +138,50 @@ impl TreeSelector {
                 ("●", "")
             };
 
-            let is_active = self.active_path.contains(&node.entry_id);
-            let is_current = self.current_leaf_id.as_deref() == Some(&node.entry_id);
-            let is_selected = i == self.selected;
-
-            let summary = if node.summary.is_empty() {
-                "(empty)".to_string()
-            } else {
-                node.summary.clone()
-            };
+            let summary = if node.summary.is_empty() { "(empty)" } else { &node.summary };
+            // Truncate so we don't wrap.
+            let content_width = cols.saturating_sub(prefix.len() + 2 /* " X " */);
+            let summary = &summary[..summary.len().min(content_width)];
 
             if is_selected {
-                line = format!(
-                    "{}{} {} {}{}",
-                    theme::REVERSE,
-                    line,
-                    marker,
-                    summary,
-                    theme::RESET,
+                let _ = write!(
+                    out, "{rev}{prefix} {marker} {summary}{reset}\x1b[K\r\n",
+                    rev = theme::REVERSE, reset = theme::RESET,
+                    prefix = prefix, marker = marker, summary = summary,
                 );
             } else if is_current {
-                line = format!(
-                    "{}{} {} {} ◀{}",
-                    theme::ACCENT_BOLD,
-                    line,
-                    marker,
-                    summary,
-                    theme::RESET,
+                let _ = write!(
+                    out, "{bold}{prefix} {marker} {summary} ◀{reset}\x1b[K\r\n",
+                    bold = theme::ACCENT_BOLD, reset = theme::RESET,
+                    prefix = prefix, marker = marker, summary = summary,
                 );
             } else if is_active {
-                line = format!(
-                    "{}{} {} {}{}",
-                    style,
-                    line,
-                    marker,
-                    summary,
-                    theme::RESET,
+                let _ = write!(
+                    out, "{style}{prefix} {marker} {summary}{reset}\x1b[K\r\n",
+                    style = style, reset = theme::RESET,
+                    prefix = prefix, marker = marker, summary = summary,
                 );
             } else {
-                line = format!(
-                    "{}{} {} {}{}",
-                    theme::MUTED,
-                    line,
-                    marker,
-                    summary,
-                    theme::RESET,
+                let _ = write!(
+                    out, "{muted}{prefix} {marker} {summary}{reset}\x1b[K\r\n",
+                    muted = theme::MUTED, reset = theme::RESET,
+                    prefix = prefix, marker = marker, summary = summary,
                 );
             }
-
-            lines.push(line);
         }
 
-        if self.nodes.len() > max_visible {
-            lines.push(format!(
-                "{} ({}/{}){}", theme::DIM, self.selected + 1, self.nodes.len(), theme::RESET
-            ));
+        // ── scroll indicator ───────────────────────────────────────────────
+        if self.nodes.len() > list_rows {
+            let _ = write!(
+                out, "{muted}  {sel}/{total}{reset}\x1b[K\r\n",
+                muted = theme::DIM, reset = theme::RESET,
+                sel = self.selected + 1, total = self.nodes.len(),
+            );
         }
-
-        lines
     }
 }
+
+// ─────────────────────────── tree helpers ────────────────────────────────────
 
 /// Walk from current leaf to root, collecting IDs on the active path.
 fn build_active_path(tree: &[SessionTreeNode], leaf_id: Option<&str>) -> HashSet<String> {
@@ -183,18 +189,17 @@ fn build_active_path(tree: &[SessionTreeNode], leaf_id: Option<&str>) -> HashSet
         return HashSet::new();
     };
 
-    // Build id→parent map from the tree
     let mut parent_of: std::collections::HashMap<&str, Option<&str>> =
         std::collections::HashMap::new();
 
     fn index_tree<'a>(
         node: &'a SessionTreeNode,
         parent_id: Option<&'a str>,
-        parent_of: &mut std::collections::HashMap<&'a str, Option<&'a str>>,
+        map: &mut std::collections::HashMap<&'a str, Option<&'a str>>,
     ) {
-        parent_of.insert(&node.entry_id, parent_id);
+        map.insert(&node.entry_id, parent_id);
         for child in &node.children {
-            index_tree(child, Some(&node.entry_id), parent_of);
+            index_tree(child, Some(&node.entry_id), map);
         }
     }
 
@@ -211,14 +216,13 @@ fn build_active_path(tree: &[SessionTreeNode], leaf_id: Option<&str>) -> HashSet
     path
 }
 
-/// Flatten tree into display order, prioritizing the active branch.
+/// Flatten tree into display order, active branch first.
 fn flatten(tree: &[SessionTreeNode], active_path: &HashSet<String>) -> Vec<FlatNode> {
     let mut result = Vec::new();
 
     // Stack: (node, indent, show_connector, is_last)
     let mut stack: Vec<(&SessionTreeNode, usize, bool, bool)> = Vec::new();
 
-    // Push roots in reverse (so first root is processed first)
     let roots: Vec<&SessionTreeNode> = tree.iter().collect();
     for (i, root) in roots.iter().enumerate().rev() {
         let multi = roots.len() > 1;
@@ -226,7 +230,7 @@ fn flatten(tree: &[SessionTreeNode], active_path: &HashSet<String>) -> Vec<FlatN
     }
 
     while let Some((node, indent, show_connector, is_last)) = stack.pop() {
-        // Skip system_prompt and tool_result entries — too noisy
+        // Skip noisy entry types.
         let dominated = matches!(
             node.entry_type.as_str(),
             "system_prompt" | "tool_result" | "custom_message"
@@ -250,7 +254,7 @@ fn flatten(tree: &[SessionTreeNode], active_path: &HashSet<String>) -> Vec<FlatN
             });
         }
 
-        // Sort children: active branch first, then by timestamp
+        // Sort children: active branch first, then by timestamp.
         let mut children: Vec<&SessionTreeNode> = node.children.iter().collect();
         children.sort_by(|a, b| {
             let a_active = contains_active(a, active_path);
@@ -261,7 +265,6 @@ fn flatten(tree: &[SessionTreeNode], active_path: &HashSet<String>) -> Vec<FlatN
         let multi = children.len() > 1;
         let child_indent = if multi { indent + 1 } else { indent };
 
-        // Push in reverse so first child is popped first
         for (i, child) in children.iter().enumerate().rev() {
             stack.push((child, child_indent, multi, i == children.len() - 1));
         }
