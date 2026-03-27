@@ -3,12 +3,14 @@
 Eval harness — drives nerv headlessly against coding tasks.
 
 Usage:
-    python3 eval/run.py [--task <name>] [--all] [--json] [--binary <path>]
+    python3 eval/run.py [--task <name>] [--model <name>] [--binary <path>] [--json]
 
 Tasks live in eval/tasks/<name>/ with:
     repo/       git repo fixture (copied to tmpdir)
     setup.sh    optional setup script (run in tmpdir before prompt)
     task.json   {"prompt": "...", "verify": "cargo test", "max_turns": 20}
+
+Reports are written to eval/reports/<timestamp>/.
 """
 
 import json
@@ -19,6 +21,7 @@ import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 
@@ -44,6 +47,7 @@ class EvalResult:
 
 
 EVAL_DIR = Path(__file__).parent / "tasks"
+REPORT_DIR = Path(__file__).parent / "reports"
 NERV_BINARY = Path(__file__).parent.parent / "target" / "debug" / "nerv"
 
 
@@ -74,8 +78,8 @@ def run_nerv(
     max_turns: int = 20,
     timeout: int = 120,
     model: str | None = None,
-) -> dict:
-    """Run nerv in print mode, return parsed JSON output."""
+) -> tuple[dict, str, str]:
+    """Run nerv in print mode. Returns (parsed_json, stdout, stderr)."""
     cmd = [str(binary), "--print", "--max-turns", str(max_turns)]
     if model:
         cmd.extend(["--model", model])
@@ -88,30 +92,70 @@ def run_nerv(
         timeout=timeout,
     )
 
-    if result.returncode != 0 and not result.stdout.strip():
-        return {"error": result.stderr.strip() or f"exit code {result.returncode}"}
+    stdout = result.stdout
+    stderr = result.stderr
+
+    if result.returncode != 0 and not stdout.strip():
+        return {"error": stderr.strip() or f"exit code {result.returncode}"}, stdout, stderr
 
     try:
-        return json.loads(result.stdout)
+        return json.loads(stdout), stdout, stderr
     except json.JSONDecodeError:
-        return {"error": f"invalid JSON output: {result.stdout[:200]}"}
+        return {"error": f"invalid JSON output: {stdout[:200]}"}, stdout, stderr
 
 
-def verify(command: str, work_dir: Path, expected_exit: int = 0) -> bool:
-    """Run verification command and check exit code."""
+def verify(command: str, work_dir: Path, expected_exit: int = 0) -> tuple[bool, str]:
+    """Run verification command. Returns (passed, output)."""
     try:
         result = subprocess.run(
             ["/bin/bash", "-c", command],
             cwd=work_dir,
             capture_output=True,
+            text=True,
             timeout=30,
         )
-        return result.returncode == expected_exit
+        output = result.stdout
+        if result.stderr:
+            output += "\n[stderr]\n" + result.stderr
+        return result.returncode == expected_exit, output
     except subprocess.TimeoutExpired:
-        return False
+        return False, "verification timed out"
 
 
-def run_task(task_dir: Path, binary: Path, model: str | None = None) -> EvalResult:
+def write_report(report_dir: Path, task_name: str, config: dict,
+                 nerv_output: dict, nerv_stdout: str, nerv_stderr: str,
+                 passed: bool, verify_output: str, result: EvalResult):
+    """Write detailed task report."""
+    task_dir = report_dir / task_name
+    task_dir.mkdir(parents=True, exist_ok=True)
+
+    # Full nerv JSON output
+    with open(task_dir / "nerv_output.json", "w") as f:
+        json.dump(nerv_output, f, indent=2)
+
+    # Raw stdout/stderr
+    if nerv_stderr.strip():
+        with open(task_dir / "nerv_stderr.txt", "w") as f:
+            f.write(nerv_stderr)
+
+    # Verification output
+    with open(task_dir / "verify_output.txt", "w") as f:
+        f.write(verify_output)
+
+    # Summary
+    summary = {
+        "task": task_name,
+        "passed": passed,
+        "prompt": config["prompt"],
+        "verify_command": config["verify"],
+        **asdict(result),
+    }
+    with open(task_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+
+
+def run_task(task_dir: Path, binary: Path, report_dir: Path,
+             model: str | None = None) -> EvalResult:
     task_name = task_dir.name
     config = load_task(task_dir)
 
@@ -120,7 +164,7 @@ def run_task(task_dir: Path, binary: Path, model: str | None = None) -> EvalResu
         setup_workdir(task_dir, work_dir)
 
         start = time.monotonic()
-        output = run_nerv(
+        nerv_output, nerv_stdout, nerv_stderr = run_nerv(
             binary,
             config["prompt"],
             work_dir,
@@ -129,28 +173,32 @@ def run_task(task_dir: Path, binary: Path, model: str | None = None) -> EvalResu
         )
         wall_time = time.monotonic() - start
 
-        if "error" in output:
-            return EvalResult(
+        if "error" in nerv_output:
+            result = EvalResult(
                 task=task_name,
                 passed=False,
-                wall_time_s=wall_time,
-                error=output["error"],
+                wall_time_s=round(wall_time, 2),
+                error=nerv_output["error"],
             )
+            write_report(report_dir, task_name, config,
+                         nerv_output, nerv_stdout, nerv_stderr,
+                         False, "", result)
+            return result
 
-        # Extract metrics from nerv JSON output
-        metrics = output.get("metrics", {})
+        # Extract metrics
+        metrics = nerv_output.get("metrics", {})
         tool_calls = [
             ToolCall(name=tc["name"], is_error=tc.get("is_error", False))
             for tc in metrics.get("tool_calls", [])
         ]
 
-        passed = verify(
+        passed, verify_output = verify(
             config["verify"],
             work_dir,
             config.get("expected_exit", 0),
         )
 
-        return EvalResult(
+        result = EvalResult(
             task=task_name,
             passed=passed,
             turns=metrics.get("turns", 0),
@@ -162,6 +210,12 @@ def run_task(task_dir: Path, binary: Path, model: str | None = None) -> EvalResu
             cost=metrics.get("cost", 0.0),
             wall_time_s=round(wall_time, 2),
         )
+
+        write_report(report_dir, task_name, config,
+                     nerv_output, nerv_stdout, nerv_stderr,
+                     passed, verify_output, result)
+
+        return result
 
 
 def main():
@@ -201,13 +255,19 @@ def main():
         print("No matching tasks found.", file=sys.stderr)
         sys.exit(1)
 
+    # Create report directory
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    model_tag = model or "default"
+    report_dir = REPORT_DIR / f"{timestamp}_{model_tag}"
+    report_dir.mkdir(parents=True, exist_ok=True)
+
     results: list[EvalResult] = []
 
     for task_dir in task_dirs:
         if not json_output:
             print(f"  {task_dir.name} ... ", end="", flush=True, file=sys.stderr)
 
-        result = run_task(task_dir, binary, model=model)
+        result = run_task(task_dir, binary, report_dir, model=model)
 
         if not json_output:
             if result.passed:
@@ -223,6 +283,10 @@ def main():
 
         results.append(result)
 
+    # Write overall results
+    with open(report_dir / "results.json", "w") as f:
+        json.dump([asdict(r) for r in results], f, indent=2)
+
     if json_output:
         print(json.dumps([asdict(r) for r in results], indent=2))
     else:
@@ -237,6 +301,7 @@ def main():
             f"{total_tokens} tokens | ${total_cost:.4f}",
             file=sys.stderr,
         )
+        print(f"  report: {report_dir}", file=sys.stderr)
 
 
 if __name__ == "__main__":

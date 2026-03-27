@@ -995,11 +995,72 @@ fn print_mode(args: &[String]) {
         .last()
         .unwrap_or_default();
 
+    // Build message trace for debugging
+    let trace: Vec<serde_json::Value> = new_messages
+        .iter()
+        .filter_map(|msg| match msg {
+            nerv::agent::types::AgentMessage::User { content, .. } => {
+                let text: String = content
+                    .iter()
+                    .filter_map(|c| match c {
+                        nerv::agent::types::ContentItem::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                Some(serde_json::json!({"role": "user", "text": text}))
+            }
+            nerv::agent::types::AgentMessage::Assistant(a) => {
+                let text = a.text_content();
+                let tools: Vec<serde_json::Value> = a
+                    .content
+                    .iter()
+                    .filter_map(|b| match b {
+                        nerv::agent::types::ContentBlock::ToolCall { name, arguments, .. } => {
+                            Some(serde_json::json!({"tool": name, "args": arguments}))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let mut entry = serde_json::json!({"role": "assistant"});
+                if !text.is_empty() {
+                    entry["text"] = serde_json::Value::String(text);
+                }
+                if !tools.is_empty() {
+                    entry["tool_calls"] = serde_json::Value::Array(tools);
+                }
+                entry["stop_reason"] = serde_json::Value::String(format!("{:?}", a.stop_reason));
+                Some(entry)
+            }
+            nerv::agent::types::AgentMessage::ToolResult {
+                content, is_error, ..
+            } => {
+                let text: String = content
+                    .iter()
+                    .filter_map(|c| match c {
+                        nerv::agent::types::ContentItem::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                // Truncate long tool results in the trace
+                let text = if text.len() > 500 {
+                    format!("{}...[truncated {}b]", &text[..500], text.len())
+                } else {
+                    text
+                };
+                Some(serde_json::json!({"role": "tool_result", "text": text, "is_error": is_error}))
+            }
+            _ => None,
+        })
+        .collect();
+
     let output = serde_json::json!({
         "success": !new_messages.iter().any(|msg| matches!(msg,
             nerv::agent::types::AgentMessage::Assistant(a) if a.stop_reason.is_error()
         )),
         "final_text": final_text,
+        "trace": trace,
         "metrics": {
             "turns": m.turns,
             "tool_calls": m.tool_calls,
