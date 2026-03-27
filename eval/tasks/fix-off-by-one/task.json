@@ -1,5 +1,5 @@
 {
-  "prompt": "There is a bug in src/lib.rs — the sum function has an off-by-one error. Fix it so all tests pass.",
-  "verify": "cd src && rustc --edition 2021 --test lib.rs -o /tmp/nerv-eval-test && /tmp/nerv-eval-test",
+  "prompt": "There is a bug in sum.py — the sum_to function has an off-by-one error. Fix it so all tests pass. Run python3 test_sum.py to verify.",
+  "verify": "python3 test_sum.py",
   "max_turns": 10
 }
