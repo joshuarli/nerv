@@ -1,11 +1,11 @@
 {
-  "prompt": "The tests in test_project.py are failing because they import retrieve_data instead of fetch_data. The function was renamed in the spec but the codebase still uses the old name. Rename fetch_data to retrieve_data, fetch_data_batch to retrieve_data_batch, fetch_data_cached to retrieve_data_cached, fetch_data_with_retry to retrieve_data_with_retry, fetch_data_or_default to retrieve_data_or_default, fetch_data_monitored to retrieve_data_monitored, and fetch_data_batch_monitored to retrieve_data_batch_monitored across ALL files. Run tests to verify.",
+  "prompt": "The tests in test_project.py are failing. We renamed the public API from fetch_data to retrieve_data but forgot to update the implementation files. Rename all fetch_data variants to retrieve_data across the entire codebase and make the tests pass.",
   "verify": "python3 test_project.py",
   "max_turns": 25,
-  "on_fail": "Some tests are still failing. Make sure you renamed every occurrence in every file — check imports, function definitions, function calls, and docstrings.",
+  "on_fail": "Some tests are still failing. Check every .py file for leftover references to fetch_data.",
   "goals": {
     "max_edit_calls": 8,
     "max_turns": 15,
-    "description": "Grep for fetch_data, read all 7 source files, rename in each with multi-edit, verify. Ideal: ~12 turns. Inefficient: 25+ turns with per-file read-edit-check cycles."
+    "description": "Grep for fetch_data, read all 8 source files, rename in each with multi-edit, verify. Ideal: ~12 turns. Inefficient: 25+ turns with per-file read-edit-check cycles."
   }
 }

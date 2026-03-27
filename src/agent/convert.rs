@@ -421,17 +421,35 @@ fn compress_bash_success(text: &str) -> Option<String> {
         && !text.contains("error[")
         && !text.contains("error:")
     {
-        if text.contains("Finished") {
-            // Extract the "Finished" line
-            if let Some(line) = text.lines().rfind(|l| l.contains("Finished")) {
-                return Some(line.trim().to_string());
-            }
+        if let Some(line) = text.lines().rfind(|l| l.contains("Finished")) {
+            return Some(line.trim().to_string());
         }
     }
 
     // cargo test with all passing
     if let Some(line) = text.lines().rfind(|l| l.starts_with("test result:")) {
         if line.contains("0 failed") {
+            return Some(line.trim().to_string());
+        }
+    }
+
+    // Python unittest: "Ran N tests... OK"
+    if text.contains("Ran ") && text.lines().any(|l| l.trim() == "OK") {
+        if let Some(line) = text.lines().rfind(|l| l.starts_with("Ran ")) {
+            return Some(line.trim().to_string());
+        }
+    }
+
+    // pytest: "N passed" with no failures
+    if let Some(line) = text.lines().rfind(|l| l.contains(" passed")) {
+        if !line.contains("failed") && !line.contains("error") {
+            return Some(line.trim().to_string());
+        }
+    }
+
+    // make: no error, last line is a target or "Nothing to be done"
+    if text.contains("make") && !text.contains("Error ") && !text.contains("error:") {
+        if let Some(line) = text.lines().rfind(|l| l.contains("Nothing to be done")) {
             return Some(line.trim().to_string());
         }
     }
@@ -1308,6 +1326,83 @@ test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
             assert!(
                 arguments.get("new_text").is_none(),
                 "new_text should be stripped from stale edit"
+            );
+        } else {
+            panic!("expected tool call");
+        }
+    }
+
+    #[test]
+    fn bash_success_python_unittest() {
+        let output = "\
+.....................
+----------------------------------------------------------------------
+Ran 21 tests in 0.003s
+
+OK";
+        assert_eq!(
+            compress_bash_success(output),
+            Some("Ran 21 tests in 0.003s".into())
+        );
+    }
+
+    #[test]
+    fn bash_success_pytest() {
+        let output = "\
+============================= test session starts ==============================
+collected 15 items
+
+test_foo.py ...............                                              [100%]
+
+============================== 15 passed in 0.42s ==============================";
+        assert_eq!(
+            compress_bash_success(output),
+            Some("============================== 15 passed in 0.42s ==============================".into())
+        );
+    }
+
+    #[test]
+    fn bash_failure_not_compressed() {
+        // Python unittest failure
+        let fail = "\
+..F..
+FAILED (failures=1)";
+        assert_eq!(compress_bash_success(fail), None);
+
+        // cargo test failure
+        let cargo_fail = "test result: FAILED. 24 passed; 1 failed; 0 ignored";
+        assert_eq!(compress_bash_success(cargo_fail), None);
+
+        // cargo check error
+        let check_fail = "Compiling nerv v0.1.0\nerror[E0308]: mismatched types";
+        assert_eq!(compress_bash_success(check_fail), None);
+    }
+
+    #[test]
+    fn recent_edit_args_preserved() {
+        // Edit in recent turns should keep full args
+        let big_content = "x".repeat(3000);
+        let msgs = vec![
+            user("fix it"),
+            assistant_tool_call(
+                "e1",
+                "edit",
+                serde_json::json!({
+                    "path": "src/lib.rs",
+                    "old_text": big_content,
+                    "new_text": "replaced"
+                }),
+            ),
+            tool_result("e1", "Edited src/lib.rs"),
+            assistant_text("Done."),
+        ];
+
+        let result = transform_context(msgs, 200_000);
+        let edit_msg = get_assistant(&result[1]);
+        if let ContentBlock::ToolCall { arguments, .. } = &edit_msg.content[0] {
+            assert!(
+                arguments.get("old_text").is_some(),
+                "recent edit should preserve old_text"
             );
         } else {
             panic!("expected tool call");

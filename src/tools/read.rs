@@ -58,9 +58,10 @@ impl AgentTool for ReadTool {
         let explicit_limit = input.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize);
         let abs_path = self.resolve_path(path_str);
 
-        // Check mtime cache: if file unchanged since last full read, return short marker.
-        // Only applies to full-file reads (offset 0, no explicit limit).
-        if offset == 0 && explicit_limit.is_none() {
+        // Check mtime cache: if file unchanged since last read from the start,
+        // return short marker. Works with any limit since auto-size returns the
+        // full file for small files, and large files are cached at their full size.
+        if offset == 0 {
             if let Ok(meta) = std::fs::metadata(&abs_path) {
                 if let Ok(mtime) = meta.modified() {
                     if let Ok(cache) = self.cache.lock() {
@@ -113,8 +114,8 @@ impl AgentTool for ReadTool {
                     format!("{} ({} lines)", path_str, n)
                 };
 
-                // Update cache with this file's mtime (full reads only)
-                if offset == 0 && explicit_limit.is_none() {
+                // Update cache with this file's mtime (reads from start only)
+                if offset == 0 {
                     if let Ok(meta) = std::fs::metadata(&abs_path) {
                         if let Ok(mtime) = meta.modified() {
                             if let Ok(mut cache) = self.cache.lock() {
@@ -137,5 +138,97 @@ impl AgentTool for ReadTool {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::agent::AgentTool;
+    use std::sync::Arc;
+
+    fn make_tool(dir: &Path) -> Arc<ReadTool> {
+        Arc::new(ReadTool::new(dir.to_path_buf()))
+    }
+
+    fn read_call(tool: &dyn AgentTool, path: &str) -> ToolResult {
+        let cb: UpdateCallback = Arc::new(|_| {});
+        tool.execute(serde_json::json!({"path": path}), cb)
+    }
+
+    fn read_call_with_limit(tool: &dyn AgentTool, path: &str, limit: u64) -> ToolResult {
+        let cb: UpdateCallback = Arc::new(|_| {});
+        tool.execute(serde_json::json!({"path": path, "limit": limit}), cb)
+    }
+
+    #[test]
+    fn mtime_cache_returns_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "line1\nline2\nline3\n").unwrap();
+
+        let tool = make_tool(dir.path());
+
+        // First read — should return full content
+        let r1 = read_call(tool.as_ref(), "test.txt");
+        assert!(!r1.is_error);
+        assert!(r1.content.contains("line1"), "first read should have content");
+
+        // Second read (same file, unchanged) — should return cache hit
+        let r2 = read_call(tool.as_ref(), "test.txt");
+        assert!(!r2.is_error);
+        assert!(
+            r2.content.contains("unchanged"),
+            "second read of unchanged file should be cached: {}",
+            r2.content
+        );
+
+        // Modify the file — cache should invalidate
+        std::fs::write(&file, "modified\n").unwrap();
+        let r3 = read_call(tool.as_ref(), "test.txt");
+        assert!(!r3.is_error);
+        assert!(
+            r3.content.contains("modified"),
+            "read after modification should return new content"
+        );
+    }
+
+    #[test]
+    fn mtime_cache_with_explicit_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("small.txt");
+        std::fs::write(&file, "a\nb\nc\n").unwrap();
+
+        let tool = make_tool(dir.path());
+
+        // First read with no limit
+        let r1 = read_call(tool.as_ref(), "small.txt");
+        assert!(r1.content.contains("a"));
+
+        // Second read with explicit limit — should still hit cache
+        let r2 = read_call_with_limit(tool.as_ref(), "small.txt", 2);
+        assert!(
+            r2.content.contains("unchanged"),
+            "explicit limit should still hit cache for unchanged file: {}",
+            r2.content
+        );
+    }
+
+    #[test]
+    fn auto_size_returns_full_small_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("small.py");
+        let content = (0..50).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        std::fs::write(&file, &content).unwrap();
+
+        let tool = make_tool(dir.path());
+
+        // Read with limit=10 — should still get all 50 lines (auto-size)
+        let r = read_call_with_limit(tool.as_ref(), "small.py", 10);
+        assert!(!r.is_error);
+        assert!(
+            r.content.contains("line 49"),
+            "auto-size should return full file for small files: last line missing"
+        );
     }
 }

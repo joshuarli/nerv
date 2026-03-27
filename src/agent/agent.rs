@@ -218,17 +218,17 @@ impl Agent {
         // Estimate current context usage and inject budget note so the model
         // can self-regulate (batch more aggressively when context is growing).
         let estimated_tokens: usize = transformed.iter().map(crate::compaction::estimate_tokens).sum();
-        let turn_count = transformed
+        let tool_rounds = transformed
             .iter()
-            .filter(|m| matches!(m, AgentMessage::User { .. }))
+            .filter(|m| matches!(m, AgentMessage::Assistant(_)))
             .count();
-        let system_prompt = if turn_count > 1 {
+        let system_prompt = if tool_rounds > 1 {
             format!(
-                "{}\n\n[Context: ~{}k/{}k tokens, {} turns]",
+                "{}\n\n[Context: ~{}k/{}k tokens, {} tool rounds]",
                 self.state.system_prompt,
                 estimated_tokens / 1000,
                 model.context_window / 1000,
-                turn_count,
+                tool_rounds,
             )
         } else {
             self.state.system_prompt.clone()
