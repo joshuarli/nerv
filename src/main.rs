@@ -722,8 +722,8 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
                 Ok(local_path) => {
                     let mut models = load_models(nerv_dir);
 
-                    // Derive alias from repo name
-                    let alias = hf_repo
+                    // Derive alias from repo name + quant
+                    let base_alias = hf_repo
                         .rsplit('/')
                         .next()
                         .unwrap_or(hf_repo)
@@ -732,6 +732,9 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
                         .chars()
                         .take(30)
                         .collect::<String>();
+                    
+                    // Append quant to alias for uniqueness
+                    let alias = format!("{}-{}", base_alias, quant.to_lowercase());
 
                     if models.iter().any(|m| m.alias == alias) {
                         println!("Model '{}' already in models.json", alias);
