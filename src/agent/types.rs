@@ -46,11 +46,18 @@ impl Cost {
 pub enum ThinkingLevel {
     #[default]
     Off,
-    Minimal,
+    On,
+}
+
+/// Effort level for Anthropic's adaptive thinking API.
+/// When set, the model decides its own thinking token budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EffortLevel {
     Low,
     Medium,
     High,
-    Xhigh,
+    Max,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

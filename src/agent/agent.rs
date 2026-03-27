@@ -70,6 +70,8 @@ pub struct AgentState {
     pub messages: Vec<AgentMessage>,
     pub model: Option<Model>,
     pub thinking_level: ThinkingLevel,
+    /// When set, uses Anthropic's adaptive effort API instead of a fixed budget.
+    pub effort_level: Option<EffortLevel>,
     pub system_prompt: String,
     pub tools: Vec<Arc<dyn AgentTool>>,
     pub is_streaming: bool,
@@ -93,6 +95,7 @@ impl Agent {
                 messages: Vec::new(),
                 model: None,
                 thinking_level: ThinkingLevel::default(),
+                effort_level: None,
                 system_prompt: String::new(),
                 tools: Vec::new(),
                 is_streaming: false,
@@ -275,7 +278,7 @@ impl Agent {
             })
             .collect();
 
-        let thinking = resolve_thinking(self.state.thinking_level, &model);
+        let thinking = resolve_thinking(self.state.thinking_level, self.state.effort_level, &model);
         let base_max = 32_000u32.min(model.max_output_tokens);
         let max_tokens = if let Some(ref t) = thinking {
             adjust_max_tokens_for_thinking(base_max, model.max_output_tokens, t).0

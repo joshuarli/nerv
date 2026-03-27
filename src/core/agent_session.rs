@@ -46,6 +46,9 @@ pub enum AgentSessionEvent {
     ThinkingLevelChanged {
         level: ThinkingLevel,
     },
+    EffortLevelChanged {
+        level: Option<EffortLevel>,
+    },
     ExportDone {
         result: Result<String, String>,
     },
@@ -115,6 +118,7 @@ pub enum SessionCommand {
     LoadSession { id: String },
     SetModel { provider: String, model_id: String },
     SetThinkingLevel { level: ThinkingLevel },
+    SetEffortLevel { level: Option<EffortLevel> },
     Compact { custom_instructions: Option<String> },
     ExportJsonl,
     ExportHtml,
@@ -986,6 +990,10 @@ pub fn session_task(
             }
             SessionCommand::SetThinkingLevel { level } => {
                 session.set_thinking_level(level, &event_tx)
+            }
+            SessionCommand::SetEffortLevel { level } => {
+                session.agent.state.effort_level = level;
+                let _ = event_tx.send(AgentSessionEvent::EffortLevelChanged { level });
             }
             SessionCommand::SetPlanMode { enabled } => {
                 session.set_plan_mode(enabled, &event_tx);

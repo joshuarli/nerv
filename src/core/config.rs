@@ -40,6 +40,7 @@ pub struct NervConfig {
     pub custom_providers: Vec<CustomProviderConfig>,
     pub default_model: Option<String>,
     pub default_thinking_level: Option<String>,
+    pub default_effort_level: Option<String>,
     pub auto_compact: Option<bool>,
     /// Model used for background compaction summarisation.
     /// Accepts any model id recognised by the model registry (fuzzy match).

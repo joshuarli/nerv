@@ -144,20 +144,27 @@ impl ProviderRegistry {
     }
 }
 
-pub fn resolve_thinking(level: ThinkingLevel, _model: &Model) -> Option<ThinkingRequest> {
+pub fn resolve_thinking(
+    level: ThinkingLevel,
+    effort: Option<EffortLevel>,
+    _model: &Model,
+) -> Option<ThinkingRequest> {
+    // Effort overrides thinking level — adaptive mode lets the model pick its own budget
+    if let Some(e) = effort {
+        return Some(ThinkingRequest::Adaptive {
+            effort: match e {
+                EffortLevel::Low => AdaptiveEffort::Low,
+                EffortLevel::Medium => AdaptiveEffort::Medium,
+                EffortLevel::High => AdaptiveEffort::High,
+                EffortLevel::Max => AdaptiveEffort::Max,
+            },
+        });
+    }
     if level == ThinkingLevel::Off {
         return None;
     }
-    // Always send thinking config — local reasoning models need it too
-    Some(ThinkingRequest::Budget {
-        tokens: match level {
-            ThinkingLevel::Minimal => 1_024,
-            ThinkingLevel::Low => 2_048,
-            ThinkingLevel::Medium => 8_192,
-            ThinkingLevel::High | ThinkingLevel::Xhigh => 16_384,
-            ThinkingLevel::Off => unreachable!(),
-        },
-    })
+    // thinking on: use a sensible default budget
+    Some(ThinkingRequest::Budget { tokens: 10_000 })
 }
 
 pub fn adjust_max_tokens_for_thinking(

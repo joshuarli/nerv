@@ -15,6 +15,7 @@ pub struct InteractiveMode {
     pub is_streaming: bool,
     current_model: Option<Model>,
     current_thinking: ThinkingLevel,
+    current_effort: Option<EffortLevel>,
     session_cost: Cost,
     model_registry: Arc<ModelRegistry>,
     skills: Vec<crate::core::skills::Skill>,
@@ -60,6 +61,7 @@ impl InteractiveMode {
             is_streaming: false,
             current_model: initial_model,
             current_thinking: ThinkingLevel::Off,
+            current_effort: None,
             session_cost: Cost::default(),
             model_registry,
             skills,
@@ -99,6 +101,10 @@ impl InteractiveMode {
             AgentSessionEvent::ThinkingLevelChanged { level } => {
                 self.current_thinking = level;
                 layout.footer.set_thinking(level);
+            }
+            AgentSessionEvent::EffortLevelChanged { level: effort } => {
+                self.current_effort = effort;
+                layout.footer.set_effort(effort);
             }
             AgentSessionEvent::PlanModeChanged { enabled } => {
                 self.plan_mode = enabled;
@@ -554,29 +560,21 @@ impl InteractiveMode {
                 }
             }
             "/think" | "/thinking" => {
+                // Toggle on/off, or accept "on"/"off" argument.
                 let next = if args.is_empty() {
-                    // Cycle
-                    match self.current_thinking {
-                        ThinkingLevel::Off => ThinkingLevel::Low,
-                        ThinkingLevel::Minimal => ThinkingLevel::Low,
-                        ThinkingLevel::Low => ThinkingLevel::Medium,
-                        ThinkingLevel::Medium => ThinkingLevel::High,
-                        ThinkingLevel::High => ThinkingLevel::Off,
-                        ThinkingLevel::Xhigh => ThinkingLevel::Off,
+                    if self.current_thinking == ThinkingLevel::Off {
+                        ThinkingLevel::On
+                    } else {
+                        ThinkingLevel::Off
                     }
                 } else {
                     match args {
-                        "off" => ThinkingLevel::Off,
-                        "minimal" | "min" => ThinkingLevel::Minimal,
-                        "low" => ThinkingLevel::Low,
-                        "medium" | "med" => ThinkingLevel::Medium,
-                        "high" => ThinkingLevel::High,
-                        "xhigh" | "max" => ThinkingLevel::Xhigh,
+                        "on" | "true" | "1" => ThinkingLevel::On,
+                        "off" | "false" | "0" => ThinkingLevel::Off,
                         _ => {
-                            self.status_message = Some(format!(
-                                "Unknown level: {}. Options: off, low, medium, high, xhigh",
-                                args
-                            ));
+                            self.status_message = Some(
+                                "Usage: /think [on|off]".into(),
+                            );
                             return;
                         }
                     }
@@ -585,7 +583,48 @@ impl InteractiveMode {
                     .cmd_tx
                     .try_send(SessionCommand::SetThinkingLevel { level: next });
                 self.current_thinking = next;
-                self.status_message = Some(format!("Thinking: {:?}", next));
+                let label = if next == ThinkingLevel::On {
+                    "Thinking on"
+                } else {
+                    "Thinking off"
+                };
+                self.status_message = Some(label.into());
+            }
+            "/effort" => {
+                // Set adaptive effort level (low/medium/high/max) or "off" to clear.
+                let next: Option<EffortLevel> = if args.is_empty() {
+                    // Cycle: off → low → medium → high → max → off
+                    match self.current_effort {
+                        None => Some(EffortLevel::Low),
+                        Some(EffortLevel::Low) => Some(EffortLevel::Medium),
+                        Some(EffortLevel::Medium) => Some(EffortLevel::High),
+                        Some(EffortLevel::High) => Some(EffortLevel::Max),
+                        Some(EffortLevel::Max) => None,
+                    }
+                } else {
+                    match args {
+                        "off" | "none" => None,
+                        "low" => Some(EffortLevel::Low),
+                        "medium" | "med" => Some(EffortLevel::Medium),
+                        "high" => Some(EffortLevel::High),
+                        "max" => Some(EffortLevel::Max),
+                        _ => {
+                            self.status_message = Some(
+                                "Usage: /effort [off|low|medium|high|max]".into(),
+                            );
+                            return;
+                        }
+                    }
+                };
+                let _ = self
+                    .cmd_tx
+                    .try_send(SessionCommand::SetEffortLevel { level: next });
+                self.current_effort = next;
+                let label = match next {
+                    None => "Effort: off".into(),
+                    Some(e) => format!("Effort: {:?}", e).to_lowercase().replace("some(", "").replace(")", ""),
+                };
+                self.status_message = Some(format!("Effort: {}", label));
             }
             "/plan" => {
                 let enabled = !self.plan_mode;
@@ -593,10 +632,20 @@ impl InteractiveMode {
                 let _ = self.cmd_tx.try_send(SessionCommand::SetPlanMode { enabled });
             }
             "/session" => {
+                let thinking_str = if self.current_thinking == ThinkingLevel::On {
+                    "on"
+                } else {
+                    "off"
+                };
+                let effort_str = match self.current_effort {
+                    None => "off".into(),
+                    Some(e) => format!("{:?}", e).to_lowercase(),
+                };
                 self.status_message = Some(format!(
-                    "Model: {} | Thinking: {:?} | Cost: ${:.4}",
+                    "Model: {} | Thinking: {} | Effort: {} | Cost: ${:.4}",
                     self.model_name(),
-                    self.current_thinking,
+                    thinking_str,
+                    effort_str,
                     self.session_cost.total,
                 ));
             }
@@ -682,7 +731,8 @@ impl InteractiveMode {
                 let mut help = String::from(
                     "Commands:\n\
                      /model          — list/switch models\n\
-                     /think [level]  — set thinking (off/low/medium/high/xhigh)\n\
+                     /think [on|off] — toggle extended thinking (Shift+Tab to cycle)\n\
+                     /effort [low|medium|high|max] — set adaptive effort level\n\
                      /login [provider] — OAuth login (default: anthropic)\n\
                      /logout [provider] — remove stored credentials\n\
                      /compact        — compact context\n\
@@ -704,7 +754,7 @@ impl InteractiveMode {
                         help.push_str(&format!("\n /{}  — {}", skill.name, skill.description));
                     }
                 }
-                help.push_str("\n\nKeys: Enter=send  Shift/Ctrl+Enter=newline  Shift+Tab=plan  Esc/^C=quit  ^G=$EDITOR");
+                help.push_str("\n\nKeys: Enter=send  Shift/Ctrl+Enter=newline  Shift+Tab=think  Esc/^C=quit  ^G=$EDITOR");
                 self.status_message = Some(help);
             }
             _ => {
@@ -854,15 +904,12 @@ impl InteractiveMode {
         self.current_thinking
     }
 
-    /// Cycle through thinking levels: Off → Low → Medium → High → Off
+    /// Toggle thinking on/off (Shift+Tab)
     pub fn cycle_thinking(&mut self) -> ThinkingLevel {
-        self.current_thinking = match self.current_thinking {
-            ThinkingLevel::Off => ThinkingLevel::Low,
-            ThinkingLevel::Minimal => ThinkingLevel::Low,
-            ThinkingLevel::Low => ThinkingLevel::Medium,
-            ThinkingLevel::Medium => ThinkingLevel::High,
-            ThinkingLevel::High => ThinkingLevel::Off,
-            ThinkingLevel::Xhigh => ThinkingLevel::Off,
+        self.current_thinking = if self.current_thinking == ThinkingLevel::Off {
+            ThinkingLevel::On
+        } else {
+            ThinkingLevel::Off
         };
         self.current_thinking
     }

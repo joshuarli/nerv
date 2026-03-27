@@ -9,7 +9,8 @@ pub struct FooterComponent {
     session_name: Option<String>,
     model_id: String,
     provider_name: String,
-    thinking_level: ThinkingLevel,
+    thinking_on: bool,
+    effort_level: Option<EffortLevel>,
     context_window: u32,
     context_used: u32,
     /// Input and output costs accumulated across all API calls in this session.
@@ -57,7 +58,8 @@ impl FooterComponent {
             session_name: None,
             model_id: String::new(),
             provider_name: String::new(),
-            thinking_level: ThinkingLevel::Off,
+            thinking_on: false,
+            effort_level: None,
             context_window: 0,
             context_used: 0,
             cost_input: 0.0,
@@ -107,7 +109,11 @@ impl FooterComponent {
     }
 
     pub fn set_thinking(&mut self, level: ThinkingLevel) {
-        self.thinking_level = level;
+        self.thinking_on = level == ThinkingLevel::On;
+    }
+
+    pub fn set_effort(&mut self, level: Option<EffortLevel>) {
+        self.effort_level = level;
     }
 
     pub fn set_context_used(&mut self, tokens: u32) {
@@ -170,20 +176,26 @@ impl Component for FooterComponent {
             String::new()
         };
 
-        let think_right = match self.thinking_level {
-            ThinkingLevel::Off => format!("{}thinking off{}", dim, r),
-            ThinkingLevel::Minimal | ThinkingLevel::Low => {
-                let name = format!("{:?}", self.thinking_level).to_lowercase();
-                format!("{}{} thinking{}", theme::THINKING_LOW, name, r)
+        // Show thinking on/off, and effort level if set.
+        let think_right = if self.thinking_on {
+            if let Some(effort) = self.effort_level {
+                let name = match effort {
+                    EffortLevel::Low => "low",
+                    EffortLevel::Medium => "medium",
+                    EffortLevel::High => "high",
+                    EffortLevel::Max => "max",
+                };
+                let color = match effort {
+                    EffortLevel::Low => theme::THINKING_LOW,
+                    EffortLevel::Medium => theme::THINKING,
+                    EffortLevel::High | EffortLevel::Max => theme::THINKING_HIGH,
+                };
+                format!("{}thinking {} effort{}", color, name, r)
+            } else {
+                format!("{}thinking on{}", theme::THINKING, r)
             }
-            ThinkingLevel::Medium => {
-                let name = format!("{:?}", self.thinking_level).to_lowercase();
-                format!("{}{} thinking{}", theme::THINKING, name, r)
-            }
-            ThinkingLevel::High | ThinkingLevel::Xhigh => {
-                let name = format!("{:?}", self.thinking_level).to_lowercase();
-                format!("{}{} thinking{}", theme::THINKING_HIGH, name, r)
-            }
+        } else {
+            format!("{}thinking off{}", dim, r)
         };
 
         let mode_right = format!("{}{}", plan_tag, think_right);
