@@ -78,6 +78,29 @@ fn check_bash(args: &serde_json::Value, repo_root: Option<&Path>) -> Permission 
         return Permission::Ask(format!("bash uses subshell/eval: {}", truncate_cmd(cmd)));
     }
 
+    // Using sed/head/tail/awk directly on files — should use the read tool instead
+    // Don't flag pipes (e.g., `rg | head` is fine) or grep flags (e.g., --no-heading is fine)
+    let has_pipe = cmd.contains('|');
+    
+    if !has_pipe {
+        // sed with file path — should use read instead
+        if cmd.contains("sed ") && (cmd.contains(".rs") || cmd.contains(".toml") || cmd.contains(".md") || cmd.contains("/")) {
+            return Permission::Ask(format!("use the read tool instead of bash + sed: {}", truncate_cmd(cmd)));
+        }
+        // tail with file extension — should use read
+        if (cmd.contains(" tail ") || cmd.starts_with("tail ")) && (cmd.contains(".rs") || cmd.contains(".toml") || cmd.contains(".md")) {
+            return Permission::Ask(format!("use the read tool instead of bash + tail: {}", truncate_cmd(cmd)));
+        }
+        // head with file extension (not in flag like --no-heading)
+        if (cmd.contains(" head ") || cmd.starts_with("head ")) && (cmd.contains(".rs") || cmd.contains(".toml") || cmd.contains(".md")) {
+            return Permission::Ask(format!("use the read tool instead of bash + head: {}", truncate_cmd(cmd)));
+        }
+        // awk with file extension
+        if (cmd.contains(" awk ") || cmd.starts_with("awk ")) && (cmd.contains(".rs") || cmd.contains(".toml") || cmd.contains(".md")) {
+            return Permission::Ask(format!("use the read tool instead of bash + awk: {}", truncate_cmd(cmd)));
+        }
+    }
+
     // Check for paths outside repo in the command (including after redirects)
     if let Some(root) = repo_root {
         // Extract all tokens, including redirect targets
@@ -387,4 +410,41 @@ mod tests {
         let args = serde_json::json!({"command": r#"git commit -m "fix prompt for // patterns""#});
         assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
     }
+
+    #[test]
+    fn bash_sed_for_reading_asks() {
+        let args = serde_json::json!({"command": "sed -n '5,10p' src/main.rs"});
+        assert!(matches!(
+            check("bash", &args, Some(&repo())),
+            Permission::Ask(_)
+        ));
+    }
+
+    #[test]
+    fn bash_head_for_reading_asks() {
+        let args = serde_json::json!({"command": "head -n 20 src/main.rs"});
+        assert!(matches!(
+            check("bash", &args, Some(&repo())),
+            Permission::Ask(_)
+        ));
+    }
+
+    #[test]
+    fn bash_tail_for_reading_asks() {
+        let args = serde_json::json!({"command": "tail -n 50 Cargo.toml"});
+        assert!(matches!(
+            check("bash", &args, Some(&repo())),
+            Permission::Ask(_)
+        ));
+    }
+
+    #[test]
+    fn bash_awk_for_reading_asks() {
+        let args = serde_json::json!({"command": "awk '{print NR, $0}' src/lib.rs"});
+        assert!(matches!(
+            check("bash", &args, Some(&repo())),
+            Permission::Ask(_)
+        ));
+    }
 }
+

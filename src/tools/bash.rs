@@ -94,17 +94,32 @@ impl AgentTool for BashTool {
         } else {
             tr.content
         };
+
+        // Check if this is a text-reading command (sed/head/tail/awk) — don't show display for these
+        // Match on tool invocations, not just substring (e.g., "awk" in "hawk" or comments)
+        let is_text_reading = (command.contains("sed ") && (command.contains(".rs") || command.contains(".toml") || command.contains(".md") || command.contains("/")))
+            || (command.contains(" head ") || command.starts_with("head ")) && (command.contains(".rs") || command.contains(".toml") || command.contains(".md"))
+            || (command.contains(" tail ") || command.starts_with("tail ")) && (command.contains(".rs") || command.contains(".toml") || command.contains(".md"))
+            || (command.contains(" awk ") || command.starts_with("awk ")) && (command.contains(".rs") || command.contains(".toml") || command.contains(".md"));
+
         let line_count = content.lines().count();
-        let display = if exit_code != Some(0) {
-            format!("exit {} ({} lines)", exit_code.unwrap_or(-1), line_count)
+        let display = if is_text_reading {
+            // No display preview for text-reading tools — agent should use the read tool instead
+            None
+        } else if exit_code != Some(0) {
+            Some(format!("exit {} ({} lines)", exit_code.unwrap_or(-1), line_count))
         } else if line_count > 5 {
             // Show first 3 lines + count for long output
             let preview: String = content.lines().take(3).collect::<Vec<_>>().join("\n");
-            format!("{}\n  ... ({} lines)", preview, line_count)
+            Some(format!("{}\n  ... ({} lines)", preview, line_count))
         } else {
-            content.clone()
+            Some(content.clone())
         };
-        let details = serde_json::json!({"exit_code": exit_code, "truncated": tr.truncated, "display": display});
+
+        let mut details = serde_json::json!({"exit_code": exit_code, "truncated": tr.truncated});
+        if let Some(disp) = display {
+            details["display"] = serde_json::json!(disp);
+        }
         if exit_code != Some(0) {
             ToolResult { content, details: Some(details), is_error: true }
         } else {
