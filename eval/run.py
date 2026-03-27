@@ -321,9 +321,10 @@ def main():
             if result.passed:
                 hint = " +hint" if result.hint_used else ""
                 att = f" ({result.attempts} attempts)" if result.attempts > 1 else ""
+                ctx = result.tokens_in + result.tokens_cache_read
                 print(
                     f"PASS{att}{hint}  ({result.turns} turns, {result.total_tool_calls} tools, "
-                    f"{result.tokens_in}+{result.tokens_out} tok, "
+                    f"{ctx}+{result.tokens_out} tok, "
                     f"${result.cost:.4f}, {result.wall_time_s}s)",
                     file=sys.stderr,
                 )
@@ -343,7 +344,7 @@ def main():
     else:
         passed = sum(1 for r in results if r.passed)
         total = len(results)
-        total_tokens = sum(r.tokens_in + r.tokens_out for r in results)
+        total_tokens = sum(r.tokens_in + r.tokens_cache_read + r.tokens_out for r in results)
         total_cost = sum(r.cost for r in results)
         total_tools = sum(r.total_tool_calls for r in results)
         print(file=sys.stderr)
