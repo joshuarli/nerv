@@ -1,7 +1,24 @@
-//! HTML session export.
+//! Session export (HTML, JSONL).
 
 use crate::agent::types::*;
 use crate::session::types::SessionEntry;
+
+/// Export a session from the database by ID as JSONL.
+pub fn export_session_jsonl(
+    session_id: &str,
+    path: &std::path::Path,
+    nerv_dir: &std::path::Path,
+) -> Result<String, String> {
+    let mut session_manager = crate::session::SessionManager::new(nerv_dir);
+    session_manager
+        .load_session(session_id)
+        .map_err(|e| e.to_string())?;
+    let content = session_manager
+        .export_jsonl()
+        .ok_or_else(|| "no session content".to_string())?;
+    std::fs::write(path, content).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
 
 /// Export a session from the database by ID.
 pub fn export_session_html(
