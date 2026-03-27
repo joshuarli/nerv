@@ -86,14 +86,19 @@ def run_nerv(
     cmd = [str(binary), "--print", "--max-turns", str(max_turns)]
     if model:
         cmd.extend(["--model", model])
-    result = subprocess.run(
-        cmd,
-        input=prompt,
-        capture_output=True,
-        text=True,
-        cwd=work_dir,
-        timeout=timeout,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            cwd=work_dir,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        return {"error": f"timeout after {timeout}s"}, e.stdout or "", e.stderr or ""
+    except KeyboardInterrupt:
+        return {"error": "interrupted"}, "", ""
 
     stdout = result.stdout
     stderr = result.stderr
