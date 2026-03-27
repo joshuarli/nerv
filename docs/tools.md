@@ -6,18 +6,28 @@ mutex to prevent concurrent writes to the same path.
 
 ## Design principle: separate LLM content from display
 
-Every tool result has two channels:
+Every tool result has three channels:
 
 - **`content`** (string) — sent to the LLM as the tool result. Must be
   minimal. The LLM already knows what it asked for; it doesn't need
   verbose confirmation. Every token here costs money and consumes context.
-- **`details`** (JSON, optional) — used by the TUI for rich display to the
-  user. Diffs, syntax-highlighted output, metadata. Never sent to the LLM.
+- **`details.display`** (string, optional) — compact summary shown in the
+  TUI instead of the full content. If absent, the TUI falls back to
+  truncated content.
+- **`details`** (JSON, optional) — rich metadata for the TUI. Diffs,
+  exit codes, truncation info. Never sent to the LLM.
 
-Example: the edit tool returns `content: "Edited sum.py"` to the LLM but
-puts the full unified diff in `details.diff` for the TUI to render.
-This saves hundreds of tokens per edit while still showing the user
-exactly what changed.
+What the user sees vs what the LLM sees:
+
+| Tool | LLM (`content`) | User (`details.display`) |
+|---|---|---|
+| read | Full file with line numbers | `foo.rs (50 lines)` |
+| edit | `Edited foo.rs` | Full unified diff |
+| grep | All matching lines | `12 matches` |
+| find | All file paths | `8 files` |
+| ls | Full tree | `. (24 entries)` |
+| bash | Full stdout + stderr | First 3 lines + count |
+| write | `Wrote 1234 bytes to foo.rs` | same |
 
 ## read
 
