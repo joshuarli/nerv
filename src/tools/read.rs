@@ -71,13 +71,16 @@ impl AgentTool for ReadTool {
         let explicit_limit = input.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize);
         let abs_path = self.resolve_path(path_str);
 
-        if offset == 0 {
+        // Check mtime cache. For files under AUTO_SIZE_LINES we always return the
+        // full file (ignoring offset/limit), so the cache applies regardless of offset.
+        // For larger files, only cache offset=0 reads.
+        {
             if let Ok(meta) = std::fs::metadata(&abs_path) {
                 if let Ok(mtime) = meta.modified() {
                     if let Ok(cache) = self.cache.lock() {
                         if let Some(entry) = cache.get(&abs_path) {
-                            // Unchanged — return short marker
-                            if entry.mtime == mtime {
+                            let full_file = offset == 0 || entry.line_count <= AUTO_SIZE_LINES;
+                            if full_file && entry.mtime == mtime {
                                 let msg = format!(
                                     "[unchanged since last read: {} ({} lines)]",
                                     path_str, entry.line_count
@@ -87,7 +90,7 @@ impl AgentTool for ReadTool {
                                     serde_json::json!({"display": format!("{} (unchanged)", path_str)}),
                                 );
                             }
-                            // Changed — fall through to full read below
+                            // Changed or partial read of large file — fall through
                         }
                     }
                 }
@@ -100,8 +103,8 @@ impl AgentTool for ReadTool {
                 let line_count = text.lines().count();
                 let result = format_file_content(path_str, &text, offset, explicit_limit);
 
-                // Update cache (reads from start only)
-                if offset == 0 {
+                // Update cache when we returned the full file
+                if offset == 0 || line_count <= AUTO_SIZE_LINES {
                     self.update_cache(&abs_path, line_count);
                 }
 
@@ -119,16 +122,21 @@ impl AgentTool for ReadTool {
 }
 
 /// Format file content with line numbers for the model.
+/// Auto-size threshold: files under this many lines are always returned in full,
+/// ignoring offset and limit. Most source files fit. Only generated code,
+/// vendored deps, or data files should ever chunk.
+const AUTO_SIZE_LINES: usize = 2000;
+
 fn format_file_content(path_str: &str, text: &str, offset: usize, explicit_limit: Option<usize>) -> ToolResult {
     let line_count = text.lines().count();
-    // For small files (< 300 lines), return the whole file even if
-    // the model requested a smaller limit. Prevents multi-chunk reads.
-    let limit = if line_count <= 300 && offset == 0 {
-        line_count
+    // For files under AUTO_SIZE_LINES, return the whole file regardless of
+    // offset/limit. The model often sends small limits (120) out of habit,
+    // causing 10+ chunked reads of a 1200-line file. Override that.
+    let (start, limit) = if line_count <= AUTO_SIZE_LINES {
+        (0, line_count)
     } else {
-        explicit_limit.unwrap_or(DEFAULT_MAX_LINES)
+        (offset.min(line_count), explicit_limit.unwrap_or(DEFAULT_MAX_LINES))
     };
-    let start = offset.min(line_count);
     let end = (start + limit).min(line_count);
     let n = end - start;
 
@@ -247,6 +255,47 @@ mod tests {
         assert!(
             r.content.contains("line 49"),
             "auto-size should return full file for small files: last line missing"
+        );
+    }
+
+    #[test]
+    fn auto_size_ignores_offset_for_medium_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("medium.rs");
+        // 500 lines — under AUTO_SIZE_LINES
+        let content = (0..500).map(|i| format!("fn line_{}() {{}}", i)).collect::<Vec<_>>().join("\n");
+        std::fs::write(&file, &content).unwrap();
+
+        let tool = make_tool(dir.path());
+
+        // Read with offset=200, limit=100 — should still get the full file
+        let cb: UpdateCallback = Arc::new(|_| {});
+        let r = tool.execute(serde_json::json!({"path": "medium.rs", "offset": 200, "limit": 100}), cb);
+        assert!(!r.is_error);
+        assert!(r.content.contains("line_0"), "should contain first line despite offset=200");
+        assert!(r.content.contains("line_499"), "should contain last line despite limit=100");
+    }
+
+    #[test]
+    fn cache_hits_on_offset_read_of_auto_sized_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("medium.rs");
+        let content = (0..500).map(|i| format!("fn line_{}() {{}}", i)).collect::<Vec<_>>().join("\n");
+        std::fs::write(&file, &content).unwrap();
+
+        let tool = make_tool(dir.path());
+
+        // First read — full file, populates cache
+        let r1 = read_call(tool.as_ref(), "medium.rs");
+        assert!(r1.content.contains("line_0"));
+
+        // Second read with offset=200 — should hit cache (file unchanged, under auto-size)
+        let cb: UpdateCallback = Arc::new(|_| {});
+        let r2 = tool.execute(serde_json::json!({"path": "medium.rs", "offset": 200, "limit": 50}), cb);
+        assert!(
+            r2.content.contains("unchanged"),
+            "offset read of unchanged auto-sized file should hit cache: {}",
+            r2.content
         );
     }
 
