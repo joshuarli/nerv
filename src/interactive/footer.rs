@@ -12,11 +12,14 @@ pub struct FooterComponent {
     thinking_level: ThinkingLevel,
     context_window: u32,
     context_used: u32,
-    total_cost: f64,
+    /// Input and output costs accumulated across all API calls in this session.
+    cost_input: f64,
+    cost_output: f64,
     provider_online: Option<bool>,
     plan_mode: bool,
-    /// Total input tokens sent across all API calls in this session.
+    /// Total input/output tokens sent across all API calls in this session.
     total_input: u64,
+    total_output: u64,
     /// Number of API calls made in this session.
     api_calls: u32,
 }
@@ -57,10 +60,12 @@ impl FooterComponent {
             thinking_level: ThinkingLevel::Off,
             context_window: 0,
             context_used: 0,
-            total_cost: 0.0,
+            cost_input: 0.0,
+            cost_output: 0.0,
             provider_online: None,
             plan_mode: false,
             total_input: 0,
+            total_output: 0,
             api_calls: 0,
         }
     }
@@ -116,7 +121,10 @@ impl FooterComponent {
     pub fn reset_context(&mut self) {
         self.context_used = 0;
         self.total_input = 0;
+        self.total_output = 0;
         self.api_calls = 0;
+        self.cost_input = 0.0;
+        self.cost_output = 0.0;
     }
 
     /// Record an API call's input tokens (called on each UsageUpdate).
@@ -126,10 +134,11 @@ impl FooterComponent {
     }
 
     pub fn add_cost(&mut self, usage: &Usage, pricing: &ModelPricing) {
-        self.total_cost += (pricing.input / 1_000_000.0) * usage.input as f64;
-        self.total_cost += (pricing.output / 1_000_000.0) * usage.output as f64;
-        self.total_cost += (pricing.cache_read / 1_000_000.0) * usage.cache_read as f64;
-        self.total_cost += (pricing.cache_write / 1_000_000.0) * usage.cache_write as f64;
+        self.cost_input += (pricing.input / 1_000_000.0) * usage.input as f64;
+        self.cost_input += (pricing.cache_read / 1_000_000.0) * usage.cache_read as f64;
+        self.cost_input += (pricing.cache_write / 1_000_000.0) * usage.cache_write as f64;
+        self.cost_output += (pricing.output / 1_000_000.0) * usage.output as f64;
+        self.total_output += usage.output as u64;
     }
 }
 
@@ -216,16 +225,34 @@ impl Component for FooterComponent {
             fmt_tokens(self.context_window),
             r,
         );
-        let cost = if self.total_cost > 0.001 {
-            format!(" {}${:.3}{}", theme::COST, self.total_cost, r)
+        let total_cost = self.cost_input + self.cost_output;
+        let cost = if total_cost > 0.001 {
+            format!(" {}${:.3}{}", theme::COST, total_cost, r)
         } else {
             String::new()
         };
         // Show cumulative API usage when the agentic loop made multiple calls,
         // so the user understands why cost is higher than context_used suggests.
         let api_info = if self.api_calls > 1 {
+            let in_cost = if self.cost_input > 0.001 {
+                format!(" (${}){}", fmt_cost(self.cost_input), dim)
+            } else {
+                String::new()
+            };
+            let out_cost = if self.cost_output > 0.001 {
+                format!(" (${}){}", fmt_cost(self.cost_output), dim)
+            } else {
+                String::new()
+            };
             format!(
-                " {}({} calls, {} tok){}", dim, self.api_calls, fmt_tokens_u64(self.total_input), r,
+                " {}({} calls, {} tok in{}, {} tok out{}){}",
+                dim,
+                self.api_calls,
+                fmt_tokens_u64(self.total_input),
+                in_cost,
+                fmt_tokens_u64(self.total_output),
+                out_cost,
+                r,
             )
         } else {
             String::new()
@@ -263,6 +290,16 @@ fn right_align(left: &str, right: &str, width: usize) -> String {
         format!("{}{}{}", left, padding, trunc)
     } else {
         truncate_to_width(left, width as u16).to_string()
+    }
+}
+
+fn fmt_cost(dollars: f64) -> String {
+    if dollars < 0.01 {
+        format!("{:.4}", dollars)
+    } else if dollars < 1.0 {
+        format!("{:.3}", dollars)
+    } else {
+        format!("{:.2}", dollars)
     }
 }
 
