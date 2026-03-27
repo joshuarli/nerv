@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use super::convert::{convert_to_llm, transform_context};
+use super::convert::{RECENT_TURNS, convert_to_llm, transform_context};
 use super::provider::*;
 use super::types::*;
 
@@ -140,9 +140,13 @@ impl Agent {
             });
         }
 
+        // Freeze the stale/recent cutoff so that transform_context produces a stable
+        // prefix across all API calls in this tool loop — critical for cache reuse.
+        let stale_cutoff = self.state.messages.len().saturating_sub(RECENT_TURNS);
+
         let mut has_tool_calls = true;
         while has_tool_calls {
-            let assistant = self.stream_response(on_event);
+            let assistant = self.stream_response(on_event, stale_cutoff);
             new_messages.push(AgentMessage::Assistant(assistant.clone()));
 
             if assistant.stop_reason.is_error()
@@ -193,7 +197,7 @@ impl Agent {
         new_messages
     }
 
-    fn stream_response(&mut self, on_event: &dyn Fn(AgentEvent)) -> AssistantMessage {
+    fn stream_response(&mut self, on_event: &dyn Fn(AgentEvent), stale_cutoff: usize) -> AssistantMessage {
         let model = match &self.state.model {
             Some(m) => m.clone(),
             None => {
@@ -235,7 +239,7 @@ impl Agent {
             }
         };
 
-        let transformed = transform_context(self.state.messages.clone(), model.context_window);
+        let transformed = transform_context(self.state.messages.clone(), model.context_window, Some(stale_cutoff));
         let estimated_tokens: usize = transformed.iter().map(crate::compaction::estimate_tokens).sum();
 
         // Circuit breaker: if context grew by >10% since last call (and we're past 10k),

@@ -193,10 +193,28 @@ fn merge_into(existing: &mut LlmMessage, new: LlmMessage) {
 /// 3. Strip args from denied tool calls (is_error + "denied")
 /// 4. Truncate stale tool results to save tokens
 /// 5. Replace superseded read results (same file read again later)
-const RECENT_TURNS: usize = 10;
+///
+/// # Cache stability
+///
+/// Operations 4 and 5 are position-dependent: they only apply to messages
+/// before a "stale cutoff" index. If the cutoff is recomputed from
+/// `messages.len()` on every API call within a tool loop, it advances each
+/// iteration, mutating previously-sent messages and invalidating the prompt
+/// cache prefix. This forces cache *writes* (~$3.75/M on Sonnet) instead of
+/// cache *reads* (~$0.30/M) on every call — a 12x cost multiplier on input.
+///
+/// To avoid this, callers running an agentic tool loop should compute the
+/// cutoff once before entering the loop and pass it via `stale_cutoff`.
+/// New messages added during the loop are always beyond the frozen cutoff
+/// and included in full, while older messages stay stable.
+pub const RECENT_TURNS: usize = 10;
 const TRUNCATED_MAX_CHARS: usize = 200;
 
-pub fn transform_context(messages: Vec<AgentMessage>, _context_window: u32) -> Vec<AgentMessage> {
+pub fn transform_context(
+    messages: Vec<AgentMessage>,
+    _context_window: u32,
+    stale_cutoff: Option<usize>,
+) -> Vec<AgentMessage> {
     // Pass 0: find superseded reads — walk backwards, track latest read per path.
     // Earlier reads of the same file are replaced with a short marker.
     let superseded_ids = find_superseded_reads(&messages);
@@ -252,7 +270,10 @@ pub fn transform_context(messages: Vec<AgentMessage>, _context_window: u32) -> V
         .collect();
 
     // Pass 2: transform
-    let cutoff = messages.len().saturating_sub(RECENT_TURNS);
+    // When stale_cutoff is provided (frozen at the start of a prompt loop), use it
+    // so that the stale/recent boundary doesn't shift between consecutive API calls
+    // within the same tool loop — this keeps the message prefix stable for caching.
+    let cutoff = stale_cutoff.unwrap_or_else(|| messages.len().saturating_sub(RECENT_TURNS));
     messages
         .into_iter()
         .enumerate()
@@ -720,7 +741,7 @@ mod tests {
             usage: None,
             timestamp: 0,
         })];
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
         let a = match &result[0] {
             AgentMessage::Assistant(a) => a,
             _ => panic!("expected assistant"),
@@ -751,7 +772,7 @@ mod tests {
                 timestamp: 1,
             },
         ];
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
         let a = match &result[0] {
             AgentMessage::Assistant(a) => a,
             _ => panic!("expected assistant"),
@@ -789,7 +810,7 @@ mod tests {
                 timestamp: 1,
             },
         ];
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
         let a = match &result[0] {
             AgentMessage::Assistant(a) => a,
             _ => panic!("expected assistant"),
@@ -859,7 +880,7 @@ mod tests {
         }
 
         let before_len = total_text_len(&msgs);
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
         let after_len = total_text_len(&result);
 
         // All thinking should be gone
@@ -917,7 +938,7 @@ mod tests {
             assistant_text("Created the config file at config/myapp.conf instead."),
         ];
 
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
 
         // Denied tool call args should be stripped
         let denied_assistant = get_assistant(&result[1]);
@@ -988,7 +1009,7 @@ mod tests {
 
         msgs.push(assistant_text("Done refactoring."));
 
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
 
         // Early read results (first two) should be truncated
         let first_read_result = &result[2]; // tool_result for r0
@@ -1026,7 +1047,7 @@ mod tests {
         assert_eq!(before_thinking, 3);
         let before_len = total_text_len(&msgs);
 
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
 
         assert_eq!(count_thinking(&result), 0);
         assert_eq!(result.len(), 6, "message count should be preserved");
@@ -1070,7 +1091,7 @@ mod tests {
             assistant_text("Based on file1: ..."),
         ];
 
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
 
         // The assistant message should only have t1 (t2 is orphaned)
         let a = get_assistant(&result[1]);
@@ -1140,7 +1161,7 @@ mod tests {
 
         let msg_count = msgs.len();
         let before_len = total_text_len(&msgs);
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
 
         // Structure preserved
         assert_eq!(result.len(), msg_count, "all messages should be present");
@@ -1185,7 +1206,7 @@ mod tests {
             msgs.push(assistant_text(&format!("Here's what's in mod_{}.rs", i)));
         }
 
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
 
         // Early results (within first cutoff) should be truncated
         // Cutoff = len - RECENT_TURNS (10), so turns 0-9 are before cutoff
@@ -1239,7 +1260,7 @@ mod tests {
             assistant_text("Done."),
         ];
 
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
 
         // First read result should be superseded
         let first_read = match &result[2] {
@@ -1311,7 +1332,7 @@ test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
             msgs.push(assistant_text(&format!("a{}", i)));
         }
 
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
         let edit_msg = get_assistant(&result[1]);
         if let ContentBlock::ToolCall { arguments, .. } = &edit_msg.content[0] {
             // Should only have path, not old_text/new_text
@@ -1397,7 +1418,7 @@ FAILED (failures=1)";
             assistant_text("Done."),
         ];
 
-        let result = transform_context(msgs, 200_000);
+        let result = transform_context(msgs, 200_000, None);
         let edit_msg = get_assistant(&result[1]);
         if let ContentBlock::ToolCall { arguments, .. } = &edit_msg.content[0] {
             assert!(
@@ -1407,5 +1428,255 @@ FAILED (failures=1)";
         } else {
             panic!("expected tool call");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Cache prefix stability tests
+    //
+    // These test the core invariant that makes prompt caching work: within a
+    // single tool loop, consecutive calls to transform_context must produce
+    // identical output for all messages that existed in the previous call.
+    // If a message that was already sent to the API changes on the next call,
+    // the Anthropic prompt cache is invalidated and the full context gets
+    // cache-written at the premium rate instead of cache-read.
+    //
+    // Design context: pi-mono's coding agent avoids this problem entirely by
+    // using a pure, position-independent convertToLlm — the same message
+    // always serializes identically regardless of conversation length.
+    // nerv's transform_context applies position-dependent optimizations
+    // (stripping stale edit args, summarizing old tool results) which are
+    // valuable for context reduction but must not shift between consecutive
+    // API calls within a single tool loop.
+    // -----------------------------------------------------------------------
+
+    /// Serialize transform_context output to a stable string for prefix comparison.
+    fn serialize_messages(msgs: &[AgentMessage]) -> Vec<String> {
+        msgs.iter()
+            .map(|m| serde_json::to_string(m).unwrap())
+            .collect()
+    }
+
+    /// Build a conversation where every tool call is an edit with large args,
+    /// so that the stale/recent transition visibly strips content.
+    fn build_edit_heavy_conversation(rounds: usize) -> Vec<AgentMessage> {
+        let mut msgs = vec![user("implement /btw command")];
+        for i in 0..rounds {
+            let id = format!("t{}", i);
+            msgs.push(assistant_tool_call(
+                &id,
+                "edit",
+                serde_json::json!({
+                    "path": format!("src/file_{}.rs", i),
+                    "old_text": format!("original content line {}\n", i).repeat(50),
+                    "new_text": format!("replaced content line {}\n", i).repeat(50),
+                }),
+            ));
+            msgs.push(tool_result(&id, &format!("Edited src/file_{}.rs", i)));
+        }
+        msgs
+    }
+
+    /// Assert that every message in `prev` appears identically at the same
+    /// position in `curr`. This is the cache prefix stability invariant.
+    fn assert_prefix_stable(prev: &[String], curr: &[String], label: &str) {
+        assert!(
+            curr.len() >= prev.len(),
+            "{}: output shrank ({} → {})",
+            label,
+            prev.len(),
+            curr.len(),
+        );
+        for (i, (a, b)) in prev.iter().zip(curr.iter()).enumerate() {
+            assert_eq!(
+                a, b,
+                "{}: message {} changed between calls",
+                label, i,
+            );
+        }
+    }
+
+    #[test]
+    fn frozen_cutoff_keeps_prefix_stable_across_tool_loop() {
+        // Simulate a tool loop: start with RECENT_TURNS+5 rounds already in
+        // history (so some are "stale"), then add 6 more rounds one at a time.
+        // With a frozen cutoff, the prefix must be identical between calls.
+        let base_rounds = RECENT_TURNS + 5;
+        let mut msgs = build_edit_heavy_conversation(base_rounds);
+        let frozen_cutoff = msgs.len().saturating_sub(RECENT_TURNS);
+
+        let mut prev = serialize_messages(
+            &transform_context(msgs.clone(), 200_000, Some(frozen_cutoff)),
+        );
+
+        for round in 0..6 {
+            let id = format!("new_{}", round);
+            msgs.push(assistant_tool_call(
+                &id,
+                "edit",
+                serde_json::json!({
+                    "path": format!("src/new_{}.rs", round),
+                    "old_text": "x".repeat(2000),
+                    "new_text": "y".repeat(2000),
+                }),
+            ));
+            msgs.push(tool_result(&id, &format!("Edited src/new_{}.rs", round)));
+
+            let curr = serialize_messages(
+                &transform_context(msgs.clone(), 200_000, Some(frozen_cutoff)),
+            );
+            assert_prefix_stable(&prev, &curr, &format!("round {}", round));
+            prev = curr;
+        }
+    }
+
+    #[test]
+    fn unfrozen_cutoff_shifts_and_mutates_prefix() {
+        // Prove the problem: without a frozen cutoff, adding messages causes
+        // the cutoff to advance, mutating previously-sent messages.
+        // This test documents the OLD (broken) behavior.
+        let total_rounds = RECENT_TURNS + 3;
+        let mut msgs = build_edit_heavy_conversation(total_rounds);
+
+        let prev = serialize_messages(
+            &transform_context(msgs.clone(), 200_000, None),
+        );
+
+        // Add two more rounds so the cutoff advances, pushing previously-recent
+        // edits into the stale zone where their args get stripped.
+        for i in 0..2 {
+            let id = format!("extra_{}", i);
+            msgs.push(assistant_tool_call(
+                &id,
+                "edit",
+                serde_json::json!({
+                    "path": format!("src/extra_{}.rs", i),
+                    "old_text": "x".repeat(2000),
+                    "new_text": "y".repeat(2000),
+                }),
+            ));
+            msgs.push(tool_result(&id, &format!("Edited src/extra_{}.rs", i)));
+        }
+
+        let curr = serialize_messages(
+            &transform_context(msgs, 200_000, None),
+        );
+
+        let mut changed = 0;
+        for (a, b) in prev.iter().zip(curr.iter()) {
+            if a != b {
+                changed += 1;
+            }
+        }
+        assert!(
+            changed > 0,
+            "expected at least one prefix message to change when cutoff is not frozen \
+             — if this passes, the sliding cutoff no longer causes instability and \
+             this test should be updated",
+        );
+    }
+
+    #[test]
+    fn frozen_cutoff_still_strips_stale_content() {
+        // The frozen cutoff should still apply stale-turn optimizations to
+        // messages before the cutoff — we're not disabling compression,
+        // just making it stable.
+        let rounds = RECENT_TURNS + 5;
+        let msgs = build_edit_heavy_conversation(rounds);
+        let frozen_cutoff = msgs.len().saturating_sub(RECENT_TURNS);
+
+        let result = transform_context(msgs, 200_000, Some(frozen_cutoff));
+
+        // Messages before the cutoff: edit args stripped to just path
+        let early_edit = get_assistant(&result[1]);
+        if let ContentBlock::ToolCall {
+            name, arguments, ..
+        } = &early_edit.content[0]
+        {
+            assert_eq!(name, "edit");
+            assert!(
+                arguments.get("old_text").is_none(),
+                "stale edit should have old_text stripped",
+            );
+            assert!(
+                arguments.get("path").is_some(),
+                "stale edit should keep path",
+            );
+        } else {
+            panic!("expected tool call");
+        }
+
+        // Messages after the cutoff: full args preserved
+        let last_edit_idx = result
+            .iter()
+            .rposition(|m| matches!(
+                m,
+                AgentMessage::Assistant(a) if a.content.iter().any(|b| matches!(
+                    b,
+                    ContentBlock::ToolCall { name, .. } if name == "edit"
+                ))
+            ))
+            .expect("should have at least one edit in recent zone");
+        let recent_edit = get_assistant(&result[last_edit_idx]);
+        if let ContentBlock::ToolCall {
+            name, arguments, ..
+        } = &recent_edit.content[0]
+        {
+            assert_eq!(name, "edit");
+            assert!(
+                arguments.get("old_text").is_some(),
+                "recent edit should preserve old_text",
+            );
+        } else {
+            panic!("expected tool call");
+        }
+    }
+
+    #[test]
+    fn frozen_cutoff_stable_with_superseded_reads() {
+        // Superseded reads are another source of prefix instability: when a
+        // new read of the same file arrives, earlier reads get replaced with
+        // "[superseded by later read]". Verify that reads already superseded
+        // before the loop stay stable when a new read arrives during the loop.
+        let mut msgs = vec![
+            user("check the file"),
+            assistant_tool_call("r1", "read", serde_json::json!({"path": "src/main.rs"})),
+            tool_result("r1", "fn main() { old version }"),
+            assistant_tool_call("r2", "read", serde_json::json!({"path": "src/main.rs"})),
+            tool_result("r2", "fn main() { updated version }"),
+        ];
+        // Pad to push reads into stale zone
+        for i in 0..(RECENT_TURNS + 2) {
+            let id = format!("pad_{}", i);
+            msgs.push(assistant_tool_call(
+                &id,
+                "bash",
+                serde_json::json!({"command": format!("echo {}", i)}),
+            ));
+            msgs.push(tool_result(&id, &format!("{}", i)));
+        }
+
+        let frozen_cutoff = msgs.len().saturating_sub(RECENT_TURNS);
+        let prev = serialize_messages(
+            &transform_context(msgs.clone(), 200_000, Some(frozen_cutoff)),
+        );
+
+        // Add a THIRD read of the same file during the tool loop
+        msgs.push(assistant_tool_call(
+            "r3",
+            "read",
+            serde_json::json!({"path": "src/main.rs"}),
+        ));
+        msgs.push(tool_result("r3", "fn main() { newest version }"));
+
+        let curr = serialize_messages(
+            &transform_context(msgs, 200_000, Some(frozen_cutoff)),
+        );
+
+        // r1 was already superseded before the loop — it should stay stable
+        let r1_result_idx = 2; // tool_result for r1
+        assert_eq!(
+            prev[r1_result_idx], curr[r1_result_idx],
+            "already-superseded read (r1) should not change during loop",
+        );
     }
 }
