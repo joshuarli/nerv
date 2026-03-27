@@ -244,11 +244,27 @@ pub fn download_gguf(hf_repo: &str, quant: &str, cache_dir: &Path) -> anyhow::Re
 
     // Find the GGUF filename matching the quant pattern
     let api_url = format!("https://huggingface.co/api/models/{}/tree/main", hf_repo);
-    let resp: serde_json::Value = agent.get(&api_url).call()?.into_body().read_json()?;
+    let http_resp = agent.get(&api_url).call().map_err(|e| {
+        anyhow::anyhow!("HF API request failed for '{}': {}", hf_repo, e)
+    })?;
+    let status = http_resp.status();
+    let resp: serde_json::Value = http_resp.into_body().read_json().map_err(|e| {
+        anyhow::anyhow!("HF API returned non-JSON (status {}): {}", status, e)
+    })?;
 
-    let files = resp
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("unexpected HF API response"))?;
+    let files = resp.as_array().ok_or_else(|| {
+        // Show what we actually got — typically an error object like {"error": "..."}
+        let detail = resp
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| "unknown");
+        anyhow::anyhow!(
+            "HF API error for '{}' (status {}): {}",
+            hf_repo,
+            status,
+            detail,
+        )
+    })?;
 
     let quant_lower = quant.to_lowercase();
     let gguf_file = files
