@@ -68,11 +68,18 @@ impl AgentTool for ReadTool {
                     is_error: false,
                 }
             }
-            Err(e) => ToolResult {
-                content: format!("Error reading {}: {}", path_str, e),
-                details: None,
-                is_error: true,
-            },
+            Err(e) => {
+                let hint = if e.kind() == std::io::ErrorKind::NotFound {
+                    format!("File not found: {} (cwd: {})", path_str, self.cwd.display())
+                } else {
+                    format!("Error reading {}: {}", path_str, e)
+                };
+                ToolResult {
+                    content: hint,
+                    details: None,
+                    is_error: true,
+                }
+            }
         }
     }
 }

@@ -60,7 +60,8 @@ fn read_tool_nonexistent_file() {
     );
 
     assert!(result.is_error);
-    assert!(result.content.contains("Error"));
+    assert!(result.content.contains("not found") || result.content.contains("Error"),
+        "expected error message, got: {}", result.content);
 }
 
 #[test]
@@ -98,8 +99,9 @@ fn edit_tool_exact_match_replacement() {
     let content = std::fs::read_to_string(&file).unwrap();
     assert!(content.contains("println!(\"new\")"));
     assert!(!content.contains("println!(\"old\")"));
-    // Should return a diff
-    assert!(result.content.contains("---"));
+    assert!(result.content.contains("Edited"));
+    // Diff goes to details, not content
+    assert!(result.details.is_some());
 }
 
 #[test]
@@ -321,11 +323,14 @@ fn edit_multi_returns_diff() {
     );
 
     assert!(!result.is_error);
-    assert!(result.content.contains("-foo"), "diff missing -foo: {}", result.content);
-    assert!(result.content.contains("+FOO"), "diff missing +FOO: {}", result.content);
-    assert!(result.content.contains("-baz"), "diff missing -baz: {}", result.content);
-    assert!(result.content.contains("+BAZ"), "diff missing +BAZ: {}", result.content);
     assert!(result.content.contains("Applied 2 edits"));
+    // Diff is in details, not content
+    let details = result.details.unwrap();
+    let diff = details["diff"].as_str().unwrap();
+    assert!(diff.contains("-foo"), "diff missing -foo: {}", diff);
+    assert!(diff.contains("+FOO"), "diff missing +FOO: {}", diff);
+    assert!(diff.contains("-baz"), "diff missing -baz: {}", diff);
+    assert!(diff.contains("+BAZ"), "diff missing +BAZ: {}", diff);
 }
 
 #[test]
