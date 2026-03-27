@@ -56,9 +56,6 @@ pub enum AgentSessionEvent {
     SessionList {
         sessions: Vec<crate::session::manager::SessionSummary>,
     },
-    SearchResults {
-        results: Vec<crate::session::manager::SearchResult>,
-    },
     TreeData {
         tree: Vec<crate::session::types::SessionTreeNode>,
         current_leaf: Option<String>,
@@ -120,7 +117,6 @@ pub enum SessionCommand {
     ExportHtml,
     Login { provider: String },
     ListSessions { repo_root: Option<String> },
-    SearchSessions { query: String },
     GetTree,
     SwitchBranch { entry_id: String },
     CreateWorktree { branch_name: String, nerv_dir: PathBuf },
@@ -1010,10 +1006,6 @@ pub fn session_task(
                     sessions.retain(|s| s.cwd.starts_with(root.as_str()));
                 }
                 let _ = event_tx.send(AgentSessionEvent::SessionList { sessions });
-            }
-            SessionCommand::SearchSessions { query } => {
-                let results = session.session_manager.search_sessions(&query);
-                let _ = event_tx.send(AgentSessionEvent::SearchResults { results });
             }
             SessionCommand::GetTree => {
                 let tree = session.session_manager.get_tree();

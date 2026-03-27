@@ -2,13 +2,29 @@ use crossbeam_channel as channel;
 use std::sync::Arc;
 
 use super::layout::AppLayout;
-use super::session_picker::SessionPicker;
 use super::theme;
-use super::tree_selector::TreeSelector;
 use crate::agent::types::*;
 use crate::core::model_registry::ModelRegistry;
 use crate::core::*;
+use crate::session::types::SessionTreeNode;
 use crate::tui;
+
+/// Returned by [`InteractiveMode::handle_event`] when a full-screen picker
+/// should be launched by the caller.
+pub enum PickerRequest {
+    /// Open the session picker.  Sessions are ready; search_fn is synchronous.
+    SessionPicker {
+        sessions: Vec<crate::session::manager::SessionSummary>,
+        repo_root: Option<String>,
+    },
+    /// Open the session tree selector.
+    TreeSelector {
+        tree: Vec<SessionTreeNode>,
+        current_leaf: Option<String>,
+    },
+    /// Open the model picker.
+    ModelPicker,
+}
 
 pub struct InteractiveMode {
     cmd_tx: channel::Sender<SessionCommand>,
@@ -33,10 +49,6 @@ pub struct InteractiveMode {
     message_history: Vec<String>,
     /// Current position in history (None = not browsing).
     pub history_index: Option<usize>,
-    /// Session picker state (when /resume is active).
-    pub session_picker: Option<SessionPicker>,
-    /// Tree selector state (when /tree is active).
-    pub tree_selector: Option<TreeSelector>,
     /// Saved editor text when entering history browse.
     history_saved_text: String,
     /// Pending permission request — waiting for y/n from user.
@@ -68,8 +80,6 @@ impl InteractiveMode {
             status_message: None,
             status_is_error: false,
             quit_requested: false,
-            session_picker: None,
-            tree_selector: None,
             last_response: None,
             pending_messages: Vec::new(),
             editing_queue_idx: None,
@@ -87,7 +97,7 @@ impl InteractiveMode {
         event: AgentSessionEvent,
         layout: &mut AppLayout,
         tui: &mut tui::TUI,
-    ) {
+    ) -> Option<PickerRequest> {
         match event {
             AgentSessionEvent::Agent(agent_event) => {
                 self.handle_agent_event(agent_event, layout, tui);
@@ -114,20 +124,17 @@ impl InteractiveMode {
                 self.status_is_error = is_error;
             }
             AgentSessionEvent::SessionList { sessions } => {
-                self.session_picker = Some(SessionPicker::new(sessions));
-            }
-            AgentSessionEvent::SearchResults { results } => {
-                if let Some(ref mut picker) = self.session_picker {
-                    picker.update_results(results);
-                }
+                return Some(PickerRequest::SessionPicker {
+                    sessions,
+                    repo_root: self.repo_root.clone(),
+                });
             }
             AgentSessionEvent::TreeData { tree, current_leaf } => {
-                // Check if tree has any branch points worth showing
                 let total_nodes = count_tree_nodes(&tree);
                 if total_nodes == 0 {
                     self.status_message = Some("No entries in session.".into());
                 } else {
-                    self.tree_selector = Some(TreeSelector::new(tree, current_leaf));
+                    return Some(PickerRequest::TreeSelector { tree, current_leaf });
                 }
             }
             AgentSessionEvent::ExportDone { result } => match result {
@@ -334,6 +341,7 @@ impl InteractiveMode {
             }
             _ => {}
         }
+        None
     }
 
     fn handle_agent_event(
@@ -455,24 +463,23 @@ impl InteractiveMode {
         }
     }
 
-    pub fn handle_submit(&mut self, text: String) {
+    pub fn handle_submit(&mut self, text: String) -> Option<PickerRequest> {
         if text.trim().is_empty() {
-            return;
+            return None;
         }
 
         // Reset history browse on submit
         self.history_index = None;
 
         if text.starts_with('/') {
-            self.handle_slash_command(&text);
-            return;
+            return self.handle_slash_command(&text);
         }
 
         // Bare "plan" enables plan mode
         if text.trim().eq_ignore_ascii_case("plan") && !self.plan_mode {
             self.plan_mode = true;
             let _ = self.cmd_tx.try_send(SessionCommand::SetPlanMode { enabled: true });
-            return;
+            return None;
         }
 
         // Record in history (avoid consecutive duplicates)
@@ -491,13 +498,14 @@ impl InteractiveMode {
             self.editing_queue_idx = None;
             let _ = self.cmd_tx.send(SessionCommand::Prompt { text });
         }
+        None
     }
 
     pub fn handle_abort(&self) {
         let _ = self.cmd_tx.send(SessionCommand::Abort);
     }
 
-    fn handle_slash_command(&mut self, text: &str) {
+    fn handle_slash_command(&mut self, text: &str) -> Option<PickerRequest> {
         let parts: Vec<&str> = text.splitn(2, ' ').collect();
         let command = parts[0];
         let args = parts.get(1).copied().unwrap_or("").trim();
@@ -526,31 +534,7 @@ impl InteractiveMode {
                         self.status_message = Some(format!("Unknown model: {}", args));
                     }
                 } else {
-                    let models = self.model_registry.available_models();
-                    if models.is_empty() {
-                        self.status_message = Some(
-                            "No models available.\n\
-                             /login            — login to Anthropic (Claude)\n\
-                             ANTHROPIC_API_KEY — set env var for API key auth\n\
-                             Configure a custom provider in ~/.nerv/config.jsonc"
-                                .into(),
-                        );
-                    } else {
-                        let current = self.model_name();
-                        let mut lines = vec![format!("Current: {}", current), String::new()];
-                        let mut last_provider = String::new();
-                        for m in &models {
-                            if m.provider_name != last_provider {
-                                lines.push(format!("  [{}]", m.provider_name));
-                                last_provider = m.provider_name.clone();
-                            }
-                            let marker = if m.name == current { " *" } else { "" };
-                            lines.push(format!("    {} ({}){}", m.name, m.id, marker));
-                        }
-                        lines.push(String::new());
-                        lines.push("/model <id> — switch model".into());
-                        self.status_message = Some(lines.join("\n"));
-                    }
+                    return Some(PickerRequest::ModelPicker);
                 }
             }
             "/think" | "/thinking" => {
@@ -577,7 +561,7 @@ impl InteractiveMode {
                                 "Unknown level: {}. Options: off, low, medium, high, xhigh",
                                 args
                             ));
-                            return;
+                            return None;
                         }
                     }
                 };
@@ -593,12 +577,10 @@ impl InteractiveMode {
                 let _ = self.cmd_tx.try_send(SessionCommand::SetPlanMode { enabled });
             }
             "/session" => {
-                self.status_message = Some(format!(
-                    "Model: {} | Thinking: {:?} | Cost: ${:.4}",
-                    self.model_name(),
-                    self.current_thinking,
-                    self.session_cost.total,
-                ));
+                // Open full-screen session picker.
+                let _ = self.cmd_tx.send(SessionCommand::ListSessions {
+                    repo_root: self.repo_root.clone(),
+                });
             }
             "/export" | "/share" => {
                 if args == "jsonl" {
@@ -611,6 +593,7 @@ impl InteractiveMode {
             }
             "/resume" => {
                 if args.is_empty() {
+                    // Open full-screen session picker.
                     let _ = self.cmd_tx.send(SessionCommand::ListSessions {
                         repo_root: self.repo_root.clone(),
                     });
@@ -686,7 +669,7 @@ impl InteractiveMode {
                      /login [provider] — OAuth login (default: anthropic)\n\
                      /logout [provider] — remove stored credentials\n\
                      /compact        — compact context\n\
-                     /session        — show session info\n\
+                     /session        — browse and resume sessions\n\
                      /export [jsonl]  — export session to ~/.nerv/exports/ (html by default)\n\
                      /copy           — copy last response to clipboard\n\
                      /resume [id]    — list/load sessions\n\
@@ -723,12 +706,13 @@ impl InteractiveMode {
                         format!("{}\n\n{}", skill.content, args)
                     };
                     let _ = self.cmd_tx.send(SessionCommand::Prompt { text: prompt });
-                    return;
+                    return None;
                 }
 
                 self.status_message = Some(format!("Unknown command: {}. Try /help", command));
             }
         }
+        None
     }
 
     /// Navigate up through message history. Returns text for editor, or None.
@@ -794,6 +778,10 @@ impl InteractiveMode {
 
     pub fn cmd_tx(&self) -> &channel::Sender<SessionCommand> {
         &self.cmd_tx
+    }
+
+    pub fn model_registry(&self) -> &Arc<ModelRegistry> {
+        &self.model_registry
     }
 
     pub fn model_name(&self) -> &str {

@@ -15,7 +15,6 @@ use crate::tui::utils::wrap_text_with_ansi;
 pub struct ChatWriter {
     blocks: Vec<Block>,
     streaming: Option<StreamingState>,
-    picker_lines: Vec<String>,
     // Per-block render cache (interior mutability for use in &self render)
     cache: RefCell<RenderCache>,
 }
@@ -48,7 +47,6 @@ impl ChatWriter {
         Self {
             blocks: Vec::new(),
             streaming: None,
-            picker_lines: Vec::new(),
             cache: RefCell::new(RenderCache {
                 block_lines: Vec::new(),
                 width: 0,
@@ -157,14 +155,6 @@ impl ChatWriter {
         self.blocks.push(Block::Spacer);
     }
 
-    pub fn set_picker(&mut self, lines: Vec<String>) {
-        self.picker_lines = lines;
-    }
-
-    pub fn clear_picker(&mut self) {
-        self.picker_lines.clear();
-    }
-
     pub fn streaming_len(&self) -> usize {
         self.streaming
             .as_ref()
@@ -216,11 +206,6 @@ impl Component for ChatWriter {
             if !s.text.is_empty() {
                 out.extend(Markdown::new(&s.text).render(width));
             }
-        }
-
-        // Ephemeral picker (never cached)
-        for line in &self.picker_lines {
-            out.extend(wrap_text_with_ansi(line, width));
         }
 
         out
