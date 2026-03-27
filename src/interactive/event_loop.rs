@@ -59,6 +59,8 @@ pub struct InteractiveMode {
     pub pending_permission_details: Option<(String, serde_json::Value)>,
     /// Plan mode: read-only research mode, no file mutations.
     pub plan_mode: bool,
+    /// Current auto-compact threshold (0–100). Mirrors what was last sent to the session.
+    pub compact_threshold: u8,
 }
 
 impl InteractiveMode {
@@ -95,6 +97,7 @@ impl InteractiveMode {
             pending_permission: None,
             pending_permission_details: None,
             plan_mode: false,
+            compact_threshold: 50,
         }
     }
 
@@ -677,6 +680,7 @@ impl InteractiveMode {
                 // `/compact at 70` — set session threshold; `/compact` — compact now
                 if let Some(rest) = args.strip_prefix("at ") {
                     if let Ok(pct) = rest.trim().parse::<u8>() {
+                        self.compact_threshold = pct;
                         let _ = self
                             .cmd_tx
                             .send(SessionCommand::SetCompactThreshold { pct });
@@ -1075,6 +1079,19 @@ impl InteractiveMode {
 
     pub fn current_model(&self) -> Option<&Model> {
         self.current_model.as_ref()
+    }
+
+    /// Push all locally-tracked state to the footer in one shot.
+    /// Call this after any slash command or key binding that changes settings,
+    /// instead of scattering individual set_* calls.
+    pub fn refresh_footer(&self, footer: &mut super::footer::FooterComponent) {
+        if let Some(m) = &self.current_model {
+            footer.set_model(m);
+        }
+        footer.set_thinking(self.current_thinking);
+        footer.set_effort(self.current_effort);
+        footer.set_plan_mode(self.plan_mode);
+        footer.set_compact_threshold(self.compact_threshold);
     }
 }
 

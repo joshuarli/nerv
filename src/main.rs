@@ -515,21 +515,20 @@ fn main() {
                             }
                             if keys::matches_key(seq, "shift+tab") {
                                 let enabled = interactive.toggle_plan_mode();
-                                layout.footer.set_plan_mode(enabled);
                                 let label = if enabled { "Plan mode on" } else { "Plan mode off" };
                                 push_status(&mut layout, label, false);
+                                interactive.refresh_footer(&mut layout.footer);
                                 tui.request_render(false); tui.maybe_render(&layout); continue;
                             }
                             if keys::matches_key(seq, "ctrl+t") {
                                 let next = interactive.cycle_thinking();
                                 let _ = interactive.cmd_tx().try_send(SessionCommand::SetThinkingLevel { level: next });
-                                layout.footer.set_thinking(next);
+                                interactive.refresh_footer(&mut layout.footer);
                                 tui.request_render(false); tui.maybe_render(&layout); continue;
                             }
                             if keys::matches_key(seq, "ctrl+e") {
                                 let next = interactive.cycle_effort();
                                 let _ = interactive.cmd_tx().try_send(SessionCommand::SetEffortLevel { level: next });
-                                layout.footer.set_effort(next);
                                 let label = match next {
                                     None => "Effort: off".into(),
                                     Some(e) => format!("Effort: {}", match e {
@@ -540,6 +539,7 @@ fn main() {
                                     }),
                                 };
                                 push_status(&mut layout, &label, false);
+                                interactive.refresh_footer(&mut layout.footer);
                                 tui.request_render(false); tui.maybe_render(&layout); continue;
                             }
                             if keys::matches_key(seq, "ctrl+g") {
@@ -564,8 +564,7 @@ fn main() {
                                         tui.request_render(true); tui.maybe_render(&layout); continue;
                                     }
                                     if interactive.quit_requested { tui.terminal_mut().stop(); should_quit = true; break; }
-                                    layout.footer.set_thinking(interactive.current_thinking());
-                                    if let Some(m) = interactive.current_model() { layout.footer.set_model(m); }
+                                    interactive.refresh_footer(&mut layout.footer);
                                     if let Some(msg) = interactive.status_message.take() {
                                         push_status(&mut layout, &msg, interactive.status_is_error);
                                     }
