@@ -6,6 +6,7 @@ use crate::tui::utils::{truncate_to_width, visible_width};
 pub struct FooterComponent {
     cwd: String,
     git_branch: Option<String>,
+    session_id: Option<String>,
     session_name: Option<String>,
     model_id: String,
     provider_name: String,
@@ -55,6 +56,7 @@ impl FooterComponent {
         Self {
             cwd: Self::abbrev_cwd(cwd),
             git_branch,
+            session_id: None,
             session_name: None,
             model_id: String::new(),
             provider_name: String::new(),
@@ -102,6 +104,10 @@ impl FooterComponent {
 
     pub fn set_plan_mode(&mut self, enabled: bool) {
         self.plan_mode = enabled;
+    }
+
+    pub fn set_session_id(&mut self, id: String) {
+        self.session_id = Some(id);
     }
 
     pub fn set_session_name(&mut self, name: Option<String>) {
@@ -281,9 +287,23 @@ impl Component for FooterComponent {
         };
 
         let info = format!("{}{}{} {}", counter, cost, api_info, model);
-        let info_width = visible_width(&info) as usize;
-        let pad = w.saturating_sub(info_width) / 2;
-        let line3 = format!("{}{}", " ".repeat(pad), info);
+
+        // Session label: use name if set, else the first 8 chars of the session id.
+        let session_label = if let Some(name) = &self.session_name {
+            format!("{}{}{}", theme::DIM, name, r)
+        } else if let Some(id) = &self.session_id {
+            format!("{}#{}{}", theme::DIM, &id[..id.len().min(8)], r)
+        } else {
+            String::new()
+        };
+
+        let line3 = if session_label.is_empty() {
+            let info_width = visible_width(&info) as usize;
+            let pad = w.saturating_sub(info_width) / 2;
+            format!("{}{}", " ".repeat(pad), info)
+        } else {
+            right_align(&session_label, &info, w)
+        };
 
         vec![line1, hex_bar, line3]
     }

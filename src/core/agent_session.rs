@@ -66,6 +66,8 @@ pub enum AgentSessionEvent {
     /// A session is now active (created or loaded).
     SessionStarted {
         id: String,
+        /// Existing name, if any (populated on resume; None for new sessions).
+        name: Option<String>,
     },
     /// Session loaded — clear UI and display history.
     SessionLoaded {
@@ -205,6 +207,7 @@ impl AgentSession {
                 .new_session(&self.cwd, self.worktree.as_deref());
             let _ = event_tx.send(AgentSessionEvent::SessionStarted {
                 id: self.session_manager.session_id().to_string(),
+                name: None,
             });
         }
 
@@ -421,23 +424,33 @@ impl AgentSession {
         }
 
         // Generate a session title after the first completed turn.
+        // session_naming_model: None = unset (use default), Some(None) = disabled, Some(Some(s)) = use s.
         if !self.session_named && self.session_manager.name().is_none() {
             let config = NervConfig::load(crate::nerv_dir());
-            if let Some((provider, model_id)) =
-                self.resolve_utility_provider(config.session_naming_model.as_deref())
-            {
-                // `text` is the original user message string (still in scope).
-                if !text.is_empty() {
-                    match generate_session_name(&text, provider, &model_id) {
-                        Ok(name) => {
-                            self.session_manager.set_name(&name);
-                            self.session_named = true;
-                            let _ = event_tx.send(AgentSessionEvent::SessionNamed {
-                                name,
-                            });
-                        }
-                        Err(e) => {
-                            crate::log::info(&format!("session naming failed: {e}"));
+            let naming_model_override: Option<Option<&str>> = config
+                .session_naming_model
+                .as_ref()
+                .map(|inner| inner.as_deref());
+            // Some(None) means the user explicitly set null → skip naming entirely.
+            let should_name = !matches!(naming_model_override, Some(None));
+            if should_name {
+                let model_hint = naming_model_override.flatten();
+                if let Some((provider, model_id)) =
+                    self.resolve_utility_provider(model_hint)
+                {
+                    // `text` is the original user message string (still in scope).
+                    if !text.is_empty() {
+                        match generate_session_name(&text, provider, &model_id) {
+                            Ok(name) => {
+                                self.session_manager.set_name(&name);
+                                self.session_named = true;
+                                let _ = event_tx.send(AgentSessionEvent::SessionNamed {
+                                    name,
+                                });
+                            }
+                            Err(e) => {
+                                crate::log::info(&format!("session naming failed: {e}"));
+                            }
                         }
                     }
                 }
@@ -789,6 +802,7 @@ impl AgentSession {
 
                 let _ = event_tx.send(AgentSessionEvent::SessionStarted {
                     id: self.session_manager.session_id().to_string(),
+                    name: self.session_manager.name().map(|s| s.to_string()),
                 });
                 let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
                     messages: self.agent.state.messages.clone(),

@@ -203,8 +203,14 @@ impl InteractiveMode {
                 layout.footer.set_cwd(&original_path.to_string_lossy());
                 self.status_message = Some(message);
             }
-            AgentSessionEvent::SessionStarted { id } => {
-                self.session_id = Some(id);
+            AgentSessionEvent::SessionStarted { id, name } => {
+                self.session_id = Some(id.clone());
+                layout.footer.set_session_id(id);
+                if let Some(n) = name {
+                    layout.footer.set_session_name(Some(n));
+                } else {
+                    layout.footer.set_session_name(None);
+                }
             }
             AgentSessionEvent::SessionLoaded { messages } => {
                 // Dump full history to terminal scrollback

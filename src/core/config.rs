@@ -1,6 +1,24 @@
 use crate::agent::types::EffortLevel;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::path::Path;
+
+/// Deserializes an `Option<Option<String>>` so that:
+///   - field absent  → `None`            (caller uses its own default)
+///   - field = null  → `Some(None)`      (caller treats as explicitly disabled)
+///   - field = "…"   → `Some(Some(s))`   (caller uses the provided model id)
+fn deser_nullable_string<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v: Option<String> = Option::deserialize(de)?;
+    // serde gives us Some(s) for a string value and None for a JSON null.
+    // We wrap it in an outer Some to mark "the field was present".
+    Ok(Some(v))
+}
+
+fn default_nullable_none() -> Option<Option<String>> {
+    None // field absent → outer None
+}
 
 /// Parse JSONC (JSON with `//` line comments). Strips comments before parsing.
 pub fn read_jsonc<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
@@ -22,8 +40,14 @@ pub struct NervConfig {
     pub compaction_model: Option<String>,
     /// Model used for automatic session title generation after the first turn.
     /// Accepts any model id recognised by the model registry (fuzzy match).
+    /// Set to `null` to disable automatic naming entirely.
     /// Defaults to "claude-haiku-4-5" on the anthropic provider when unset.
-    pub session_naming_model: Option<String>,
+    #[serde(
+        default = "default_nullable_none",
+        deserialize_with = "deser_nullable_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_naming_model: Option<Option<String>>,
     /// Extra HTTP headers per provider, e.g. {"anthropic": {"user-agent": "claude-cli/1.0.0"}}
     #[serde(default)]
     pub headers: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
