@@ -519,15 +519,9 @@ impl Editor {
             return false;
         }
 
-        // Open /dev/tty directly so the editor reads from the terminal
-        // device rather than competing with our stdin reader thread.
-        let tty_stdin = std::fs::File::open("/dev/tty")
-            .map(std::process::Stdio::from)
-            .unwrap_or_else(|_| std::process::Stdio::inherit());
-
         let status = std::process::Command::new(&editor_cmd)
             .arg(&tmp_path)
-            .stdin(tty_stdin)
+            .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
             .status();

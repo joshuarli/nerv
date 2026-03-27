@@ -265,12 +265,29 @@ fn main() {
         });
     }
 
-    // Stdin reader thread
+    // Stdin reader thread — uses poll() so it can be paused for $EDITOR
+    let stdin_paused = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stdin_paused2 = stdin_paused.clone();
     let (stdin_tx, stdin_rx) = crossbeam_channel::bounded::<Vec<u8>>(64);
     std::thread::spawn(move || {
         use std::io::Read;
         let mut buf = [0u8; 1024];
+        let mut pfd = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
         loop {
+            // When paused, spin-wait with a sleep instead of reading stdin
+            if stdin_paused2.load(std::sync::atomic::Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                continue;
+            }
+            // Poll with 100ms timeout so we can check the pause flag
+            let ready = unsafe { libc::poll(&mut pfd, 1, 100) };
+            if ready <= 0 {
+                continue; // timeout or error — recheck flags
+            }
             match std::io::stdin().read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
@@ -409,9 +426,12 @@ fn main() {
                                 tui.request_render(false); tui.maybe_render(&layout); continue;
                             }
                             if keys::matches_key(seq, "ctrl+g") {
+                                stdin_paused.store(true, std::sync::atomic::Ordering::SeqCst);
+                                std::thread::sleep(std::time::Duration::from_millis(60));
                                 tui.terminal_mut().stop();
                                 layout.editor.open_in_external_editor();
                                 tui.terminal_mut().restart();
+                                stdin_paused.store(false, std::sync::atomic::Ordering::SeqCst);
                                 tui.request_render(true); tui.maybe_render(&layout); continue;
                             }
                             if keys::matches_key(seq, "shift+enter") || keys::matches_key(seq, "ctrl+enter") {
