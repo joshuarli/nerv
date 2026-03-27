@@ -12,6 +12,19 @@ impl FindTool {
     pub fn new(cwd: PathBuf) -> Self {
         Self { cwd }
     }
+    fn resolve_path(&self, path: &str) -> String {
+        // Expand ~ at the start of the path
+        if let Some(rest) = path.strip_prefix('~') {
+            if let Some(home) = crate::home_dir() {
+                return home.join(rest.trim_start_matches('/')).to_string_lossy().to_string();
+            }
+        }
+        if path.starts_with('/') {
+            path.to_string()
+        } else {
+            self.cwd.join(path).to_string_lossy().to_string()
+        }
+    }
 }
 
 impl AgentTool for FindTool {
@@ -35,10 +48,11 @@ impl AgentTool for FindTool {
     fn execute(&self, input: serde_json::Value, _update: UpdateCallback) -> ToolResult {
         let pattern = input["pattern"].as_str().unwrap_or("");
         let path = input["path"].as_str().unwrap_or(".");
+        let resolved_path = self.resolve_path(path);
         match Command::new("fd")
             .arg("--glob")
             .arg(pattern)
-            .arg(path)
+            .arg(&resolved_path)
             .current_dir(&self.cwd)
             .output()
         {
