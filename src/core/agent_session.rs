@@ -99,6 +99,13 @@ pub enum AgentSessionEvent {
         reason: String,
         response_tx: crossbeam_channel::Sender<bool>,
     },
+    /// Context gate — agent blocks until user confirms or denies the large request.
+    ContextGateRequest {
+        estimated_tokens: usize,
+        prev_tokens: usize,
+        context_window: u32,
+        response_tx: crossbeam_channel::Sender<bool>,
+    },
 }
 
 pub enum SessionCommand {
@@ -289,6 +296,38 @@ impl AgentSession {
                 let _ = self.session_manager.append_entry(SessionEntry::PermissionAccept(entry));
             }
 
+        }
+
+        // Set up context gate (circuit breaker for context growth)
+        {
+            let gate_tx = event_tx.clone();
+            self.agent.state.context_gate_fn = Some(std::sync::Arc::new(
+                move |info: crate::agent::agent::ContextGateInfo| {
+                    // Skip gate for small contexts (< 10k tokens)
+                    if info.estimated_tokens < 10_000 {
+                        return true;
+                    }
+                    // Skip on first call (no previous baseline)
+                    if info.prev_tokens == 0 {
+                        return true;
+                    }
+                    // Trigger if context grew by > 10%
+                    let delta = info.estimated_tokens.saturating_sub(info.prev_tokens);
+                    let threshold = info.prev_tokens / 10;
+                    if delta <= threshold {
+                        return true;
+                    }
+                    // Ask user
+                    let (resp_tx, resp_rx) = crossbeam_channel::bounded(1);
+                    let _ = gate_tx.send(AgentSessionEvent::ContextGateRequest {
+                        estimated_tokens: info.estimated_tokens,
+                        prev_tokens: info.prev_tokens,
+                        context_window: info.context_window,
+                        response_tx: resp_tx,
+                    });
+                    resp_rx.recv().unwrap_or(false)
+                },
+            ));
         }
 
         let new_messages = self.run_agent_prompt(vec![user_msg], event_tx);

@@ -53,6 +53,19 @@ impl ToolResult {
 /// Callback that checks if a tool call is allowed. Returns true to proceed.
 pub type PermissionFn = Arc<dyn Fn(&str, &serde_json::Value) -> bool + Send + Sync>;
 
+/// Context gate — called before each API request with (estimated_tokens, context_window).
+/// Returns true to proceed, false to abort the turn. Used to implement circuit breakers
+/// when context grows unexpectedly.
+pub type ContextGateFn = Arc<dyn Fn(ContextGateInfo) -> bool + Send + Sync>;
+
+#[derive(Debug, Clone)]
+pub struct ContextGateInfo {
+    pub estimated_tokens: usize,
+    pub prev_tokens: usize,
+    pub context_window: u32,
+    pub tool_rounds: usize,
+}
+
 pub struct AgentState {
     pub messages: Vec<AgentMessage>,
     pub model: Option<Model>,
@@ -61,6 +74,7 @@ pub struct AgentState {
     pub tools: Vec<Arc<dyn AgentTool>>,
     pub is_streaming: bool,
     pub permission_fn: Option<PermissionFn>,
+    pub context_gate_fn: Option<ContextGateFn>,
 }
 
 pub struct Agent {
@@ -68,6 +82,8 @@ pub struct Agent {
     /// Shared cancel flag — set from main thread to interrupt streaming.
     pub cancel: CancelFlag,
     pub provider_registry: Arc<RwLock<ProviderRegistry>>,
+    /// Estimated token count from the previous API call (for circuit breaker delta).
+    prev_estimated_tokens: usize,
 }
 
 impl Agent {
@@ -81,9 +97,11 @@ impl Agent {
                 tools: Vec::new(),
                 is_streaming: false,
                 permission_fn: None,
+                context_gate_fn: None,
             },
             cancel: new_cancel_flag(),
             provider_registry,
+            prev_estimated_tokens: 0,
         }
     }
 
@@ -214,25 +232,35 @@ impl Agent {
         };
 
         let transformed = transform_context(self.state.messages.clone(), model.context_window);
-
-        // Estimate current context usage and inject budget note so the model
-        // can self-regulate (batch more aggressively when context is growing).
         let estimated_tokens: usize = transformed.iter().map(crate::compaction::estimate_tokens).sum();
-        let tool_rounds = transformed
-            .iter()
-            .filter(|m| matches!(m, AgentMessage::Assistant(_)))
-            .count();
-        let system_prompt = if tool_rounds > 1 {
-            format!(
-                "{}\n\n[Context: ~{}k/{}k tokens, {} tool rounds]",
-                self.state.system_prompt,
-                estimated_tokens / 1000,
-                model.context_window / 1000,
+
+        // Circuit breaker: if context grew by >10% since last call (and we're past 10k),
+        // ask user to confirm before sending a large request.
+        if let Some(ref gate_fn) = self.state.context_gate_fn {
+            let tool_rounds = transformed
+                .iter()
+                .filter(|m| matches!(m, AgentMessage::Assistant(_)))
+                .count();
+            let info = ContextGateInfo {
+                estimated_tokens,
+                prev_tokens: self.prev_estimated_tokens,
+                context_window: model.context_window,
                 tool_rounds,
-            )
-        } else {
-            self.state.system_prompt.clone()
-        };
+            };
+            if !gate_fn(info) {
+                let msg = AssistantMessage {
+                    content: vec![],
+                    stop_reason: StopReason::Aborted,
+                    usage: None,
+                    timestamp: now_millis(),
+                };
+                on_event(AgentEvent::MessageEnd {
+                    message: msg.clone(),
+                });
+                return msg;
+            }
+        }
+        self.prev_estimated_tokens = estimated_tokens;
 
         let llm_messages = convert_to_llm(&transformed);
 
@@ -257,7 +285,7 @@ impl Agent {
 
         let request = CompletionRequest {
             model_id: model.id.clone(),
-            system_prompt,
+            system_prompt: self.state.system_prompt.clone(),
             messages: llm_messages,
             tools: wire_tools,
             max_tokens,

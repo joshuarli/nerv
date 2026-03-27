@@ -91,12 +91,16 @@ a write/edit modifies the file (new mtime).
 
 **Savings**: 200-2k+ tokens per redundant re-read of an unmodified file.
 
-### 9. Context budget injection (`src/agent/agent.rs`)
+### 9. Context circuit breaker (`src/agent/agent.rs`)
 
-Before each API call, a `[Context: ~Nk/Mk tokens, T turns]` note is appended
-to the system prompt (after the first turn). This gives the model awareness of
-how much context it's consuming, encouraging it to batch operations when
-context is growing. Only shown after the first turn to avoid noise.
+Before each API call, the estimated token count is compared to the previous
+call. If context grew by more than 10% AND is above 10k tokens, the user is
+prompted to confirm before sending the request. This catches runaway context
+growth from large tool results (e.g., reading a huge file or verbose test
+output) before it becomes an expensive API call.
+
+The gate fires as a `ContextGateRequest` event with the same y/n UX as
+permission prompts. Pressing 'y' continues; 'n' or Escape aborts the turn.
 
 ## Compaction (`src/compaction/`)
 

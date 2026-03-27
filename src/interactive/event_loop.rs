@@ -154,6 +154,30 @@ impl InteractiveMode {
                 self.pending_permission = Some(response_tx);
                 self.pending_permission_details = Some((tool.clone(), args.clone()));
             }
+            AgentSessionEvent::ContextGateRequest {
+                estimated_tokens,
+                prev_tokens,
+                context_window,
+                response_tx,
+            } => {
+                let delta = estimated_tokens.saturating_sub(prev_tokens);
+                let pct = if prev_tokens > 0 {
+                    (delta as f64 / prev_tokens as f64 * 100.0) as u32
+                } else {
+                    0
+                };
+                self.status_message = Some(format!(
+                    "⚠ Context grew {}k → {}k (+{}%, {}/{}k window)\n  y = continue, n = abort",
+                    prev_tokens / 1000,
+                    estimated_tokens / 1000,
+                    pct,
+                    estimated_tokens / 1000,
+                    context_window / 1000,
+                ));
+                self.status_is_error = true;
+                self.pending_permission = Some(response_tx);
+                self.pending_permission_details = None;
+            }
             AgentSessionEvent::WorktreeCreated { path } => {
                 layout.footer.set_cwd(&path.to_string_lossy());
                 self.status_message =

@@ -38,7 +38,7 @@ Planned (implementation order):
 - [x] 5. Collapse edit cycles — strip bulky edit/write args (old_text, new_text) from stale turns
 - [x] 6. System prompt batch guidance — "read all files first, then edit, then verify"
 - [x] 7. Tool result caching — skip re-read if file mtime unchanged since last read
-- [x] 8. Context budget injection — append [Context: ~Nk/Mk tokens, T turns] to system prompt
+- [x] 8. Context circuit breaker — prompt user when context grows >10% between API calls (10k floor)
 
 ## Shell Hooks
 
