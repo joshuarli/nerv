@@ -247,6 +247,7 @@ impl InteractiveMode {
                     .iter()
                     .map(crate::compaction::estimate_tokens)
                     .sum();
+                layout.footer.reset_context();
                 layout.footer.set_context_used(context_tokens as u32);
 
                 self.status_message = Some(format!("Loaded ({} messages)", messages.len()));

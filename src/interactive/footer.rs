@@ -71,7 +71,15 @@ impl FooterComponent {
     }
 
     pub fn set_context_used(&mut self, tokens: u32) {
-        self.context_used = tokens;
+        // Only increase within a turn — prevents stale/partial provider
+        // updates from resetting the counter mid-session.
+        if tokens > self.context_used {
+            self.context_used = tokens;
+        }
+    }
+
+    pub fn reset_context(&mut self) {
+        self.context_used = 0;
     }
 
     pub fn add_cost(&mut self, usage: &Usage, pricing: &ModelPricing) {

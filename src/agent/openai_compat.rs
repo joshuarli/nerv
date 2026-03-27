@@ -228,6 +228,9 @@ impl Provider for OpenAICompatProvider {
             if let Some(u) = json.get("usage").filter(|u| u.is_object()) {
                 usage.input = u["prompt_tokens"].as_u64().unwrap_or(0) as u32;
                 usage.output = u["completion_tokens"].as_u64().unwrap_or(0) as u32;
+                if usage.input > 0 {
+                    on_event(ProviderEvent::UsageUpdate(usage.clone()));
+                }
             }
             let Some(choices) = json["choices"].as_array() else {
                 continue;
