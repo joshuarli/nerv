@@ -790,3 +790,77 @@ fn session_without_worktree_returns_none() {
     mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
     assert_eq!(mgr.session_worktree(), None);
 }
+
+#[test]
+fn worktree_merge_aborts_on_conflict() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git failed")
+    };
+    git(&repo, &["init"]);
+    std::fs::write(repo.join("file.txt"), "original\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+
+    let nerv_dir = tmp.path().join(".nerv");
+    std::fs::create_dir_all(&nerv_dir).unwrap();
+
+    let wt_path =
+        nerv::worktree::create_worktree(&repo, &nerv_dir, "conflict-test", "ccc11111").unwrap();
+
+    // Make conflicting changes on both sides
+    std::fs::write(repo.join("file.txt"), "main change\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "main diverges"]);
+
+    std::fs::write(wt_path.join("file.txt"), "worktree change\n").unwrap();
+    git(&wt_path, &["add", "."]);
+    git(&wt_path, &["commit", "-m", "worktree diverges"]);
+
+    // Merge should fail and abort
+    let result = nerv::worktree::merge_worktree(&wt_path);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("conflicts"), "error should mention conflicts: {}", err);
+    assert!(err.contains("cd "), "error should include manual merge instructions: {}", err);
+
+    // Main repo should be clean (merge was aborted)
+    let status = git(&repo, &["status", "--porcelain"]);
+    let status_str = String::from_utf8_lossy(&status.stdout);
+    assert!(status_str.trim().is_empty(), "main repo should be clean after abort");
+
+    // Worktree should still exist
+    assert!(wt_path.exists());
+
+    // Clean up
+    std::process::Command::new("git")
+        .args(["worktree", "remove", "--force", &wt_path.to_string_lossy()])
+        .current_dir(&repo)
+        .output()
+        .ok();
+}
+
+#[test]
+fn update_worktree_on_existing_session() {
+    let (tmp, mut mgr) = setup();
+    mgr.new_session(tmp.path(), None).unwrap();
+    assert_eq!(mgr.session_worktree(), None);
+
+    // Simulate /wt after /new: update the worktree on an empty session
+    let wt_path = tmp.path().join("new-worktree");
+    std::fs::create_dir_all(&wt_path).unwrap();
+    mgr.update_worktree(&wt_path, &wt_path);
+
+    assert_eq!(mgr.session_worktree(), Some(wt_path.clone()));
+
+    // Survives reload
+    let session_id = mgr.session_id().to_string();
+    mgr.load_session(&session_id).unwrap();
+    assert_eq!(mgr.session_worktree(), Some(wt_path));
+}

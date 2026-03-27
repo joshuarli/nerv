@@ -486,6 +486,21 @@ impl SessionManager {
         self.session_id.as_deref().unwrap_or("")
     }
 
+    /// Update the worktree and cwd for the current session.
+    pub fn update_worktree(&self, cwd: &Path, worktree: &Path) {
+        if let Some(ref sid) = self.session_id {
+            if let Ok(mut stmt) = self
+                .db
+                .prepare("UPDATE sessions SET cwd = ?, worktree = ? WHERE id = ?")
+            {
+                stmt.bind((1, cwd.to_string_lossy().as_ref())).ok();
+                stmt.bind((2, worktree.to_string_lossy().as_ref())).ok();
+                stmt.bind((3, sid.as_str())).ok();
+                stmt.next().ok();
+            }
+        }
+    }
+
     /// Clear the worktree association for the current session.
     pub fn clear_worktree(&self) {
         if let Some(ref sid) = self.session_id {

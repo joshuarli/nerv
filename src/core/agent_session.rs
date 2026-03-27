@@ -873,9 +873,10 @@ pub fn session_task(
                 branch_name,
                 nerv_dir,
             } => {
-                if session.session_manager.has_session() {
+                // Allow if no session, or session exists but has no entries yet (e.g. after /new)
+                if session.session_manager.entry_count() > 0 {
                     let _ = event_tx.send(AgentSessionEvent::Status {
-                        message: "/wt only works before the first prompt. Use --wt for new sessions.".into(),
+                        message: "/wt only works before the first prompt. Use /new first.".into(),
                         is_error: true,
                     });
                     continue;
@@ -900,6 +901,12 @@ pub fn session_task(
                 ) {
                     Ok(wt_path) => {
                         session.set_worktree(wt_path.clone());
+                        // Update existing session's DB record if one was already created
+                        if session.session_manager.has_session() {
+                            session
+                                .session_manager
+                                .update_worktree(&wt_path, &wt_path);
+                        }
                         let _ = event_tx.send(AgentSessionEvent::WorktreeCreated {
                             path: wt_path,
                         });

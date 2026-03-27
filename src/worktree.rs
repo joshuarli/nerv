@@ -92,8 +92,26 @@ pub fn merge_worktree(wt_path: &Path) -> anyhow::Result<PathBuf> {
         .current_dir(&main_wt)
         .output()?;
     if !merge_out.status.success() {
-        let stderr = String::from_utf8_lossy(&merge_out.stderr);
-        anyhow::bail!("merge failed: {}", stderr.trim());
+        // Abort the failed merge to restore clean state
+        std::process::Command::new("git")
+            .args(["merge", "--abort"])
+            .current_dir(&main_wt)
+            .output()
+            .ok();
+        anyhow::bail!(
+            "merge conflicts detected — aborted automatically.\n\
+             To resolve manually, run from {}:\n\n\
+             \x20 cd {} && git merge {}\n\n\
+             Or paste this prompt into a coding agent:\n\n\
+             \x20 Merge branch '{}' into '{}' in {}. \
+             Resolve all conflicts, keeping the intent of both sides, then commit.",
+            main_wt.display(),
+            main_wt.display(),
+            branch,
+            branch,
+            upstream,
+            main_wt.display(),
+        );
     }
 
     // Remove the worktree

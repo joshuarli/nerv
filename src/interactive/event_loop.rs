@@ -582,10 +582,6 @@ impl InteractiveMode {
                     let _ = self.cmd_tx.send(SessionCommand::MergeWorktree);
                 } else if args.is_empty() {
                     self.status_message = Some("Usage: /wt <branch-name> | /wt merge".into());
-                } else if self.session_id.is_some() {
-                    self.status_message =
-                        Some("/wt only works before the first prompt. Start a /new session first.".into());
-                    self.status_is_error = true;
                 } else {
                     let nerv_dir = crate::home_dir().unwrap_or_default().join(".nerv");
                     let _ = self.cmd_tx.send(SessionCommand::CreateWorktree {
