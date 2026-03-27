@@ -601,6 +601,8 @@ impl AgentSession {
                 api_key: None,
                 models: custom_models,
             });
+        // Persist as default for next startup
+        config.default_model = Some(first_model.to_string());
         let _ = config.save(&nerv_dir);
     }
 
