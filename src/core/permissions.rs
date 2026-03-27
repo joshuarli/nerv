@@ -153,6 +153,13 @@ fn extract_path_tokens(cmd: &str) -> Vec<String> {
             if t.contains(|c: char| matches!(c, '*' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | '|' | '^')) {
                 continue;
             }
+            // Skip tokens that don't have an alphanumeric path component after
+            // the leading slash(es) — e.g. bare `//` from a commit message or
+            // comment fragment is not a filesystem path.
+            let after_slashes = t.trim_start_matches('/');
+            if !after_slashes.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '.') {
+                continue;
+            }
             tokens.push(t.to_string());
         }
     }
@@ -356,6 +363,13 @@ mod tests {
     #[test]
     fn bash_rg_search_in_src_allowed() {
         let args = serde_json::json!({"command": r#"rg --color=never --no-heading -n "serde_json" src/ --type rust | sort | head -12"#});
+        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn bash_git_commit_with_double_slash_in_message_allowed() {
+        // `//` appearing in a -m commit message must not be treated as an outside-repo path.
+        let args = serde_json::json!({"command": r#"git commit -m "fix prompt for // patterns""#});
         assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
     }
 }
