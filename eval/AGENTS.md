@@ -98,6 +98,22 @@ seems simple; together they tightly constrain the implementation to one
 correct algorithm. This is the hardest task in the suite — getting all 17
 tests right in one shot requires understanding the full interaction model.
 
+### oracle-grid (Expert++)
+
+A grid simulation where **the rules are hidden in a compiled `.pyc` oracle**.
+Tests compare the model's implementation against the oracle — the model can
+see WHAT the correct output is for any input, but not HOW to compute it.
+The rules resemble Conway's Game of Life but with a twist (non-standard
+birth condition) that the model must discover by probing the oracle.
+
+**What this tests**: Scientific method — hypothesis, experiment, revision.
+The model can't pattern-match from tests because tests just say
+`assert step(g) == oracle.step(g)`. It must use bash to probe the oracle
+with custom inputs (`python3 -c "import oracle; print(oracle.step(...))"`)
+to discover the rules, then implement them. This requires genuine reasoning
+about input-output examples, not code comprehension. The first model to
+consistently pass this without the on_fail hint is genuinely capable.
+
 ## Task structure
 
 ```

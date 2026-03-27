@@ -1,0 +1,12 @@
+{
+  "prompt": "grid.py has stubs. Implement them to match the oracle in oracle.pyc. The tests compare your output against the oracle. You cannot read the oracle source — you'll need to probe it to figure out the rules.",
+  "verify": "python3 test_grid.py",
+  "max_turns": 25,
+  "on_fail": "Still failing. The rules are NOT standard Game of Life. Probe the oracle with simple grids to figure out the actual birth/survival rules. Try calling oracle.step() on test patterns from a bash tool.",
+  "goals": {
+    "max_edit_calls": 3,
+    "min_multi_edits": 0,
+    "max_turns": 12,
+    "description": "Must probe the oracle to discover rules, then implement. Multiple edit cycles expected."
+  }
+}
