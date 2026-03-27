@@ -387,6 +387,7 @@ fn main() {
                                     should_quit = true; break;
                                 }
                                 cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                                interactive.handle_abort();
                                 layout.statusbar.cancel_streaming();
                                 tui.request_render(false); tui.maybe_render(&layout);
                                 continue;
@@ -413,7 +414,7 @@ fn main() {
                                 tui.terminal_mut().restart();
                                 tui.request_render(true); tui.maybe_render(&layout); continue;
                             }
-                            if keys::matches_key(seq, "shift+enter") {
+                            if keys::matches_key(seq, "shift+enter") || keys::matches_key(seq, "ctrl+enter") {
                                 layout.editor.handle_input(b"\n");
                                 tui.request_render(false); continue;
                             }

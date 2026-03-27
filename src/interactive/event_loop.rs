@@ -612,7 +612,7 @@ impl InteractiveMode {
                         help.push_str(&format!("\n /{}  — {}", skill.name, skill.description));
                     }
                 }
-                help.push_str("\n\nKeys: Enter=send  Shift+Enter=newline  Esc/^C=quit  ^G=$EDITOR");
+                help.push_str("\n\nKeys: Enter=send  Shift/Ctrl+Enter=newline  Esc/^C=quit  ^G=$EDITOR");
                 self.status_message = Some(help);
             }
             _ => {
