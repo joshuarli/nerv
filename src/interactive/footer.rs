@@ -15,6 +15,10 @@ pub struct FooterComponent {
     total_cost: f64,
     provider_online: Option<bool>,
     plan_mode: bool,
+    /// Total input tokens sent across all API calls in this session.
+    total_input: u64,
+    /// Number of API calls made in this session.
+    api_calls: u32,
 }
 
 impl FooterComponent {
@@ -56,6 +60,8 @@ impl FooterComponent {
             total_cost: 0.0,
             provider_online: None,
             plan_mode: false,
+            total_input: 0,
+            api_calls: 0,
         }
     }
 
@@ -109,6 +115,14 @@ impl FooterComponent {
 
     pub fn reset_context(&mut self) {
         self.context_used = 0;
+        self.total_input = 0;
+        self.api_calls = 0;
+    }
+
+    /// Record an API call's input tokens (called on each UsageUpdate).
+    pub fn record_api_call(&mut self, input_tokens: u32) {
+        self.total_input += input_tokens as u64;
+        self.api_calls += 1;
     }
 
     pub fn add_cost(&mut self, usage: &Usage, pricing: &ModelPricing) {
@@ -207,6 +221,15 @@ impl Component for FooterComponent {
         } else {
             String::new()
         };
+        // Show cumulative API usage when the agentic loop made multiple calls,
+        // so the user understands why cost is higher than context_used suggests.
+        let api_info = if self.api_calls > 1 {
+            format!(
+                " {}({} calls, {} tok){}", dim, self.api_calls, fmt_tokens_u64(self.total_input), r,
+            )
+        } else {
+            String::new()
+        };
         let model = if self.model_id.is_empty() {
             format!("{}no model{}", theme::ERROR, r)
         } else {
@@ -217,7 +240,7 @@ impl Component for FooterComponent {
             }
         };
 
-        let info = format!("{}{} {}", counter, cost, model);
+        let info = format!("{}{}{} {}", counter, cost, api_info, model);
         let info_width = visible_width(&info) as usize;
         let pad = w.saturating_sub(info_width) / 2;
         let line3 = format!("{}{}", " ".repeat(pad), info);
@@ -240,6 +263,22 @@ fn right_align(left: &str, right: &str, width: usize) -> String {
         format!("{}{}{}", left, padding, trunc)
     } else {
         truncate_to_width(left, width as u16).to_string()
+    }
+}
+
+fn fmt_tokens_u64(count: u64) -> String {
+    if count == 0 {
+        "0".to_string()
+    } else if count < 1_000 {
+        count.to_string()
+    } else if count < 10_000 {
+        format!("{:.1}k", count as f64 / 1_000.0)
+    } else if count < 1_000_000 {
+        format!("{}k", count / 1_000)
+    } else if count < 10_000_000 {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
+    } else {
+        format!("{}M", count / 1_000_000)
     }
 }
 

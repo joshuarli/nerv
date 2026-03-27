@@ -356,6 +356,7 @@ impl InteractiveMode {
             AgentEvent::UsageUpdate { usage } => {
                 layout.statusbar.set_input_tokens(usage.input);
                 layout.footer.set_context_used(usage.input);
+                layout.footer.record_api_call(usage.input);
             }
             AgentEvent::MessageUpdate { delta } => {
                 match delta {

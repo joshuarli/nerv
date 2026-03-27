@@ -429,16 +429,11 @@ impl AgentSession {
         event_tx: &Sender<AgentSessionEvent>,
     ) -> Vec<AgentMessage> {
         let tx = event_tx.clone();
-        let input_tokens = std::sync::atomic::AtomicU32::new(0);
 
         let new_messages = self.agent.prompt(prompt_messages, &|event: AgentEvent| {
-            if let AgentEvent::UsageUpdate { ref usage } = event {
-                input_tokens.store(usage.input, std::sync::atomic::Ordering::Relaxed);
-            }
             let _ = tx.send(AgentSessionEvent::Agent(event));
         });
 
-        let input_tok = input_tokens.load(std::sync::atomic::Ordering::Relaxed);
         let context_window = self
             .agent
             .state
@@ -447,16 +442,21 @@ impl AgentSession {
             .map(|m| m.context_window)
             .unwrap_or(0);
 
-        // Persist new messages to SQLite with token metadata
-        let mut running_output: u32 = 0;
+        // Persist new messages to SQLite with token metadata.
+        // Each AssistantMessage carries its own Usage from its API call,
+        // so we use per-message input tokens (not a single value for the whole turn).
+        // context_used = input + output for that call; input already includes all prior
+        // conversation history, so no running accumulation needed.
+        let mut last_input: u32 = 0;
         for msg in &new_messages {
             let tokens = if let AgentMessage::Assistant(a) = msg {
+                let input = a.usage.as_ref().map(|u| u.input).unwrap_or(0);
                 let output = a.usage.as_ref().map(|u| u.output).unwrap_or(0);
-                running_output += output;
+                last_input = input;
                 Some(crate::session::types::TokenInfo {
-                    input: input_tok,
+                    input,
                     output,
-                    context_used: input_tok + running_output,
+                    context_used: input + output,
                     context_window,
                 })
             } else {
@@ -464,7 +464,7 @@ impl AgentSession {
             };
             let _ = self.session_manager.append_message(msg, tokens);
         }
-        self.last_input_tokens = input_tok;
+        self.last_input_tokens = last_input;
 
         // Update cost
         for msg in &new_messages {

@@ -37,6 +37,13 @@ Planned:
 - [ ] Semantic compression — tool chains → natural language outcome
 - [ ] Tool result caching — skip re-execution if file unchanged
 
+## Agentic Session Observability
+
+- [ ] Read tool: include context lines in grep output to reduce follow-up reads
+- [ ] Batch edit heuristic: when grep shows many call sites, read all files upfront before editing
+- [ ] Read tool: raise default limit for small files to avoid multi-chunk reading
+- [ ] Deduplicate reads — track which files/ranges already read, skip re-reads of same content
+
 ## Shell Hooks
 
 Executable scripts in `~/.nerv/hooks/`. Any language. Context via env vars + stdin JSON.
