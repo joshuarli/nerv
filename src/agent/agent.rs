@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use super::convert::{convert_to_llm, transform_context};
 use super::provider::*;
@@ -300,7 +301,17 @@ impl Agent {
         // value from the `message_start` SSE event. Local tiktoken estimates diverge from
         // Claude's tokenizer and don't account for message framing / tool schema overhead.
 
-        // Accumulate streamed events into an AssistantMessage.
+        // Retry loop for transient API errors (overloaded / rate-limited).
+        // Resets all accumulation state on each attempt so partial stream events
+        // from a failed attempt are discarded before the next try.
+        const MAX_RETRIES: u32 = 4;
+        // Base backoff delays in seconds: attempt 1 → 5s, 2 → 30s, 3 → 60s, 4 → 60s
+        const BACKOFF_SECS: [u64; MAX_RETRIES as usize] = [5, 30, 60, 60];
+
+        let mut attempt = 0u32;
+        let (content_blocks, stop_reason, usage) = loop {
+
+        // Reset accumulators at the top so a failed partial stream is discarded cleanly.
         let mut content_blocks: Vec<ContentBlock> = Vec::new();
         let mut current_text = String::new();
         let mut current_thinking = String::new();
@@ -374,6 +385,26 @@ impl Agent {
         });
 
         if let Err(e) = result {
+            // Retry on transient errors (overloaded / rate-limited) up to MAX_RETRIES times.
+            if e.is_retryable() && attempt < MAX_RETRIES {
+                let wait_secs = if let crate::errors::ProviderError::RateLimited {
+                    retry_after_ms: Some(ms),
+                } = &e
+                {
+                    // Anthropic told us exactly how long to wait; honour it.
+                    (*ms + 999) / 1000
+                } else {
+                    BACKOFF_SECS[attempt as usize]
+                };
+                attempt += 1;
+                on_event(AgentEvent::Retrying {
+                    attempt,
+                    wait_secs,
+                    reason: e.to_string(),
+                });
+                std::thread::sleep(Duration::from_secs(wait_secs));
+                continue;
+            }
             let msg = AssistantMessage {
                 content: vec![],
                 stop_reason: StopReason::Error {
@@ -405,6 +436,9 @@ impl Agent {
                 arguments,
             });
         }
+
+        break (content_blocks, stop_reason, usage);
+        }; // end retry loop
 
         let msg = AssistantMessage {
             content: content_blocks,

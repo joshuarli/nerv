@@ -252,13 +252,24 @@ impl Provider for AnthropicProvider {
 
         let status = response.status().as_u16();
         if status != 200 {
+            // Extract retry-after before consuming the body.
+            // Anthropic sends `retry-after` (seconds, float) on 429s and
+            // `anthropic-ratelimit-requests-reset` (ISO-8601 timestamp) on rate-limit
+            // headers — prefer the simpler `retry-after` value when present.
+            let retry_after_ms: Option<u64> = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<f64>().ok())
+                .map(|secs| (secs * 1000.0) as u64);
+
             let err_body = response.into_body().read_to_string().unwrap_or_default();
             crate::log::warn(&format!("anthropic HTTP {}: {}", status, err_body));
             let message = serde_json::from_str::<SseError>(&err_body)
                 .ok()
                 .map(|e| e.error.message)
                 .unwrap_or_else(|| format!("HTTP {}", status));
-            return Err(classify_status(status, &message));
+            return Err(classify_status(status, &message, retry_after_ms));
         }
 
         // Read SSE lines in a background thread so the main thread can check
@@ -428,13 +439,11 @@ fn parse_sse_event(event_type: &str, data: &str, state: &mut SseState) -> Vec<Pr
     }
 }
 
-fn classify_status(status: u16, message: &str) -> ProviderError {
+fn classify_status(status: u16, message: &str, retry_after_ms: Option<u64>) -> ProviderError {
     let message = message.to_string();
     match status {
         401 | 403 => ProviderError::Auth { message },
-        429 => ProviderError::RateLimited {
-            retry_after_ms: None,
-        },
+        429 => ProviderError::RateLimited { retry_after_ms },
         529 => ProviderError::Overloaded,
         500..=599 => ProviderError::Server { status, message },
         _ => ProviderError::Server { status, message },

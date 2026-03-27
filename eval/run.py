@@ -397,7 +397,13 @@ def main():
             json.dump([asdict(r) for r in results], f, indent=2)
 
     try:
-        for task_dir in task_dirs:
+        for i, task_dir in enumerate(task_dirs):
+            # Brief pause between tasks to avoid hammering the API when running
+            # multiple tasks in sequence (the agent handles per-request retries,
+            # but inter-task bursts can still trigger 529 overloaded responses).
+            if i > 0:
+                time.sleep(3)
+
             if not json_output:
                 print(f"  {task_dir.name} ... ", end="", flush=True, file=sys.stderr)
 

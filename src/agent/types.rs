@@ -267,6 +267,12 @@ pub enum AgentEvent {
     },
     TurnStart,
     TurnEnd,
+    /// Emitted when a retryable error (rate limit / overload) triggers a retry.
+    Retrying {
+        attempt: u32,
+        wait_secs: u64,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone)]

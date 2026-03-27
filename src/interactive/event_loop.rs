@@ -466,6 +466,13 @@ impl InteractiveMode {
                 tui.request_render(false);
             }
             AgentEvent::TurnStart | AgentEvent::TurnEnd => {}
+            AgentEvent::Retrying { attempt, wait_secs, reason: _ } => {
+                self.status_message = Some(format!(
+                    "Overloaded — retrying in {}s (attempt {}/3)…",
+                    wait_secs, attempt
+                ));
+                tui.request_render(false);
+            }
         }
     }
 
