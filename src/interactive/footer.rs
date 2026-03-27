@@ -24,6 +24,9 @@ pub struct FooterComponent {
     /// Total input/output tokens sent across all API calls in this session.
     total_input: u64,
     total_output: u64,
+    /// Cumulative cache read/write tokens across all API calls.
+    total_cache_read: u64,
+    total_cache_write: u64,
     /// Number of API calls made in this session.
     api_calls: u32,
 }
@@ -73,6 +76,8 @@ impl FooterComponent {
             compact_threshold_pct: 50,
             total_input: 0,
             total_output: 0,
+            total_cache_read: 0,
+            total_cache_write: 0,
             api_calls: 0,
         }
     }
@@ -141,6 +146,8 @@ impl FooterComponent {
         self.context_used = 0;
         self.total_input = 0;
         self.total_output = 0;
+        self.total_cache_read = 0;
+        self.total_cache_write = 0;
         self.api_calls = 0;
         self.cost_input = 0.0;
         self.cost_output = 0.0;
@@ -153,11 +160,17 @@ impl FooterComponent {
     }
 
     pub fn add_cost(&mut self, usage: &Usage, pricing: &ModelPricing) {
-        self.cost_input += (pricing.input / 1_000_000.0) * usage.input as f64;
+        // usage.input is the full context window (uncached + cache_read + cache_write).
+        // Only the uncached slice is billed at the regular input rate; cache tokens are
+        // billed separately at their own rates.
+        let uncached = usage.input.saturating_sub(usage.cache_read + usage.cache_write);
+        self.cost_input += (pricing.input / 1_000_000.0) * uncached as f64;
         self.cost_input += (pricing.cache_read / 1_000_000.0) * usage.cache_read as f64;
         self.cost_input += (pricing.cache_write / 1_000_000.0) * usage.cache_write as f64;
         self.cost_output += (pricing.output / 1_000_000.0) * usage.output as f64;
         self.total_output += usage.output as u64;
+        self.total_cache_read += usage.cache_read as u64;
+        self.total_cache_write += usage.cache_write as u64;
     }
 }
 
@@ -275,6 +288,16 @@ impl Component for FooterComponent {
             r,
             compact_tag,
         );
+        let cache_stats = {
+            let mut parts = String::new();
+            if self.total_cache_read > 0 {
+                parts.push_str(&format!(" {}R{}{}", dim, fmt_tokens_u64(self.total_cache_read), r));
+            }
+            if self.total_cache_write > 0 {
+                parts.push_str(&format!(" {}W{}{}", dim, fmt_tokens_u64(self.total_cache_write), r));
+            }
+            parts
+        };
         let total_cost = self.cost_input + self.cost_output;
         let cost = if total_cost > 0.001 {
             format!(" {}${:.3}{}", theme::COST, total_cost, r)
@@ -308,7 +331,7 @@ impl Component for FooterComponent {
             String::new()
         };
 
-        let info = format!("{}{}{}", counter, cost, api_info);
+        let info = format!("{}{}{}{}", counter, cache_stats, cost, api_info);
         let info_width = visible_width(&info) as usize;
         let pad = w.saturating_sub(info_width) / 2;
         let line4 = format!("{}{}", " ".repeat(pad), info);

@@ -227,10 +227,15 @@ function toggleTool(header) {
                         }
                     }
                     if let Some(ref tok) = me.tokens {
-                        html.push_str(&format!(
-                            "<div class='meta'>↑{} ↓{} · {}/{} context</div>",
-                            tok.input, tok.output, tok.context_used, tok.context_window,
-                        ));
+                        let mut meta = format!("↑{} ↓{}", tok.input, tok.output);
+                        if tok.cache_read > 0 {
+                            meta.push_str(&format!(" R{}", tok.cache_read));
+                        }
+                        if tok.cache_write > 0 {
+                            meta.push_str(&format!(" W{}", tok.cache_write));
+                        }
+                        meta.push_str(&format!(" · {}/{} context", tok.context_used, tok.context_window));
+                        html.push_str(&format!("<div class='meta'>{}</div>", meta));
                     }
                     html.push_str("</div>\n");
                 }

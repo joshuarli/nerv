@@ -75,6 +75,8 @@ pub struct MessageEntry {
 pub struct TokenInfo {
     pub input: u32,
     pub output: u32,
+    pub cache_read: u32,
+    pub cache_write: u32,
     pub context_used: u32,
     pub context_window: u32,
 }

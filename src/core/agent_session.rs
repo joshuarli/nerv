@@ -532,10 +532,14 @@ impl AgentSession {
             let tokens = if let AgentMessage::Assistant(a) = msg {
                 let input = a.usage.as_ref().map(|u| u.input).unwrap_or(0);
                 let output = a.usage.as_ref().map(|u| u.output).unwrap_or(0);
+                let cache_read = a.usage.as_ref().map(|u| u.cache_read).unwrap_or(0);
+                let cache_write = a.usage.as_ref().map(|u| u.cache_write).unwrap_or(0);
                 last_input = input;
                 Some(crate::session::types::TokenInfo {
                     input,
                     output,
+                    cache_read,
+                    cache_write,
                     context_used: input + output,
                     context_window,
                 })
