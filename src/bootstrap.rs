@@ -20,6 +20,8 @@ pub struct Bootstrap {
     pub model_registry: Arc<ModelRegistry>,
     pub resources: LoadedResources,
     pub cancel_flag: crate::agent::provider::CancelFlag,
+    /// Warnings from config validation (unknown model ids, etc.).
+    pub config_warnings: Vec<String>,
 }
 
 pub struct BootstrapOptions {
@@ -98,12 +100,17 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
         session.agent.state.effort_level = Some(effort);
     }
 
+    // Validate configured model ids against the known model list.
+    let known_ids: Vec<&str> = model_registry.all_models().iter().map(|m| m.id.as_str()).collect();
+    let config_warnings = config.validate_model_ids(&known_ids);
+
     Bootstrap {
         session,
         config,
         model_registry,
         resources,
         cancel_flag,
+        config_warnings,
     }
 }
 

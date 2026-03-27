@@ -195,6 +195,20 @@ impl Provider for AnthropicProvider {
         "anthropic"
     }
 
+    /// Probe `GET /v1/models` — no tokens consumed, just auth validation.
+    fn healthcheck(&self) -> bool {
+        let url = format!("{}/v1/models", self.base_url);
+        let mut req = crate::http::agent()
+            .get(&url)
+            .header("anthropic-version", "2023-06-01");
+        if self.use_bearer {
+            req = req.header("authorization", &format!("Bearer {}", self.api_key));
+        } else {
+            req = req.header("x-api-key", &self.api_key);
+        }
+        matches!(req.call().map(|r| r.status().as_u16()), Ok(200))
+    }
+
     fn stream_completion(
         &self,
         request: &CompletionRequest,

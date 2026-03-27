@@ -102,6 +102,13 @@ pub trait Provider: Send + Sync {
         cancel: &CancelFlag,
         on_event: &mut dyn FnMut(ProviderEvent),
     ) -> Result<(), crate::errors::ProviderError>;
+
+    /// Check if the provider endpoint is reachable and the credentials are valid.
+    /// Must not consume any tokens — use a cheap list/ping endpoint.
+    /// Default implementation returns `true` (used by providers without a dedicated check).
+    fn healthcheck(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Clone)]

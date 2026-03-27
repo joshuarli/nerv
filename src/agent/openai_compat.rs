@@ -182,6 +182,16 @@ impl Provider for OpenAICompatProvider {
         &self.name
     }
 
+    /// Probe `GET /models` — standard OpenAI-compat endpoint, no tokens consumed.
+    fn healthcheck(&self) -> bool {
+        let url = format!("{}/models", self.base_url);
+        let mut req = crate::http::agent().get(&url);
+        if let Some(ref key) = self.api_key {
+            req = req.header("authorization", &format!("Bearer {}", key));
+        }
+        matches!(req.call().map(|r| r.status().as_u16()), Ok(200))
+    }
+
     fn stream_completion(
         &self,
         request: &CompletionRequest,

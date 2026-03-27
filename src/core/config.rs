@@ -78,7 +78,8 @@ impl Default for NervConfig {
             default_effort_level: Some(EffortLevel::Medium),
             auto_compact: Some(true),
             compaction_model: Some("claude-haiku-4-5".to_string()),
-            session_naming_model: None,
+            // Explicit default so new config files document the option.
+            session_naming_model: Some(Some("claude-haiku-4-5".to_string())),
             headers: std::collections::HashMap::new(),
         }
     }
@@ -104,6 +105,38 @@ impl NervConfig {
         let path = nerv_dir.join("config.json");
         let value = serde_json::to_value(self)?;
         write_json(&path, &value)
+    }
+
+    /// Return a list of human-readable warnings for model fields that reference
+    /// a model id not present in the registry. Call after building the registry.
+    pub fn validate_model_ids(&self, known_ids: &[&str]) -> Vec<String> {
+        let mut warnings = Vec::new();
+        let check = |field: &str, id: &str| -> Option<String> {
+            if !known_ids.iter().any(|k| k.contains(id) || id.contains(k) || *k == id) {
+                Some(format!(
+                    "config: {} = {:?} does not match any known model id",
+                    field, id
+                ))
+            } else {
+                None
+            }
+        };
+        if let Some(ref id) = self.compaction_model {
+            if let Some(w) = check("compaction_model", id) {
+                warnings.push(w);
+            }
+        }
+        if let Some(Some(ref id)) = self.session_naming_model {
+            if let Some(w) = check("session_naming_model", id) {
+                warnings.push(w);
+            }
+        }
+        if let Some(ref id) = self.default_model {
+            if let Some(w) = check("default_model", id) {
+                warnings.push(w);
+            }
+        }
+        warnings
     }
 }
 

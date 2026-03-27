@@ -298,6 +298,11 @@ fn main() {
         "NERV console ready. Awaiting your command.",
     );
 
+    // Emit config warnings (unknown model ids, etc.)
+    for warning in &b.config_warnings {
+        layout.chat.push_styled(nerv::interactive::theme::WARN, &format!("⚠  {}", warning));
+    }
+
     tui.terminal_mut().start();
     tui.request_render(true); // initial render
     tui.maybe_render(&layout);
@@ -754,7 +759,6 @@ fn list_all_models() {
     let mut auth = nerv::core::auth::AuthStorage::load(nerv_dir);
     let registry = nerv::core::model_registry::ModelRegistry::new(&config, &mut auth);
 
-    let available = registry.available_models();
     let all = registry.all_models();
 
     if all.is_empty() {
@@ -762,14 +766,41 @@ fn list_all_models() {
         return;
     }
 
+    // Collect unique providers with a registered Arc<dyn Provider> and healthcheck each.
+    // This is intentionally blocking — `nerv models` / `nerv --list-models` is a CLI command.
+    use std::collections::HashMap;
+    let mut provider_health: HashMap<String, bool> = HashMap::new();
+    for m in &all {
+        if provider_health.contains_key(&m.provider_name) {
+            continue;
+        }
+        let online = if let Some(p) = registry.provider_registry.get(&m.provider_name) {
+            p.healthcheck()
+        } else {
+            false // provider not registered (no auth)
+        };
+        provider_health.insert(m.provider_name.clone(), online);
+    }
+
+    // Emit config warnings for unknown model ids
+    let known_ids: Vec<&str> = all.iter().map(|m| m.id.as_str()).collect();
+    for warning in config.validate_model_ids(&known_ids) {
+        eprintln!("⚠  {}", warning);
+    }
+
+    use nerv::interactive::theme;
     let mut last_provider = String::new();
     for m in &all {
         if m.provider_name != last_provider {
             println!("\n  [{}]", m.provider_name);
             last_provider = m.provider_name.clone();
         }
-        let online = available.iter().any(|a| a.id == m.id);
-        let marker = if online { "●" } else { "○" };
+        let online = *provider_health.get(&m.provider_name).unwrap_or(&false);
+        let marker = if online {
+            format!("{}●{}", theme::SUCCESS, theme::RESET)
+        } else {
+            format!("{}○{}", theme::FOOTER_DIM, theme::RESET)
+        };
         println!(
             "    {} {:<30} ctx:{}  {}",
             marker, m.id, m.context_window, m.name
@@ -993,6 +1024,9 @@ fn print_mode(args: &[String]) {
             permissions: false,
         },
     );
+    for warning in &b.config_warnings {
+        eprintln!("warning: {}", warning);
+    }
     let mut agent = b.session.agent;
 
     // Select model
