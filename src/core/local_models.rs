@@ -244,25 +244,37 @@ pub fn download_gguf(hf_repo: &str, quant: &str, cache_dir: &Path) -> anyhow::Re
 
     // Find the GGUF filename matching the quant pattern
     let api_url = format!("https://huggingface.co/api/models/{}/tree/main", hf_repo);
+    eprintln!("Fetching file list from {}", api_url);
     let http_resp = agent.get(&api_url).call().map_err(|e| {
-        anyhow::anyhow!("HF API request failed for '{}': {}", hf_repo, e)
+        anyhow::anyhow!("GET {} failed: {}", api_url, e)
     })?;
     let status = http_resp.status();
+    if status != 200 {
+        let body = http_resp
+            .into_body()
+            .read_to_string()
+            .unwrap_or_default();
+        let detail = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("error")?.as_str().map(String::from))
+            .unwrap_or(body);
+        anyhow::bail!(
+            "GET {} returned {}: {}\n\
+             hint: repo should be 'owner/name' (e.g. 'Qwen/Qwen3-30B-A3B-GGUF')",
+            api_url,
+            status,
+            detail,
+        );
+    }
     let resp: serde_json::Value = http_resp.into_body().read_json().map_err(|e| {
-        anyhow::anyhow!("HF API returned non-JSON (status {}): {}", status, e)
+        anyhow::anyhow!("GET {} returned non-JSON: {}", api_url, e)
     })?;
 
     let files = resp.as_array().ok_or_else(|| {
-        // Show what we actually got — typically an error object like {"error": "..."}
-        let detail = resp
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or_else(|| "unknown");
         anyhow::anyhow!(
-            "HF API error for '{}' (status {}): {}",
-            hf_repo,
-            status,
-            detail,
+            "GET {} returned unexpected JSON: {}",
+            api_url,
+            serde_json::to_string_pretty(&resp).unwrap_or_default(),
         )
     })?;
 
