@@ -150,25 +150,27 @@ impl AgentTool for EditTool {
                 }
             };
             let content = String::from_utf8_lossy(&bytes);
-            let line_ending = if content.contains("\r\n") {
+            let (bom, content_no_bom) = strip_bom(&content);
+            let line_ending = if content_no_bom.contains("\r\n") {
                 "\r\n"
             } else {
                 "\n"
             };
-            let normalized = content.replace("\r\n", "\n");
+            let normalized = content_no_bom.replace("\r\n", "\n");
 
             if edits.len() == 1 {
                 return apply_single_edit(
                     &edits[0],
                     &content,
                     &normalized,
+                    bom,
                     line_ending,
                     &abs_path,
                     path_str,
                 );
             }
 
-            apply_multi_edit(&edits, &content, &normalized, line_ending, &abs_path, path_str)
+            apply_multi_edit(&edits, &content, &normalized, bom, line_ending, &abs_path, path_str)
         })
     }
 }
@@ -178,6 +180,7 @@ fn apply_single_edit(
     edit: &Edit,
     content: &str,
     normalized: &str,
+    bom: &str,
     line_ending: &str,
     abs_path: &Path,
     path_str: &str,
@@ -218,7 +221,7 @@ fn apply_single_edit(
                     edit.new_text.replace("\r\n", "\n"),
                     &normalized[orig_end.min(normalized.len())..]
                 );
-                let final_content = restore_line_endings(&new_content, line_ending);
+                let final_content = format!("{}{}", bom, restore_line_endings(&new_content, line_ending));
                 if let Err(e) = std::fs::write(abs_path, &final_content) {
                     return ToolResult {
                         content: format!("Error writing {}: {}", path_str, e),
@@ -261,7 +264,14 @@ fn apply_single_edit(
     }
 
     let new_content = normalized.replacen(&normalized_old, &edit.new_text.replace("\r\n", "\n"), 1);
-    let final_content = restore_line_endings(&new_content, line_ending);
+    if new_content == normalized {
+        return ToolResult {
+            content: format!("No changes: old_text and new_text are identical in {}", path_str),
+            details: None,
+            is_error: true,
+        };
+    }
+    let final_content = format!("{}{}", bom, restore_line_endings(&new_content, line_ending));
     if let Err(e) = std::fs::write(abs_path, &final_content) {
         return ToolResult {
             content: format!("Error writing {}: {}", path_str, e),
@@ -287,6 +297,7 @@ fn apply_multi_edit(
     edits: &[Edit],
     content: &str,
     normalized: &str,
+    bom: &str,
     line_ending: &str,
     abs_path: &Path,
     path_str: &str,
@@ -354,7 +365,15 @@ fn apply_multi_edit(
         result.replace_range(*pos..*pos + norm_old.len(), &norm_new);
     }
 
-    let final_content = restore_line_endings(&result, line_ending);
+    if result == normalized {
+        return ToolResult {
+            content: format!("No changes: all edits produced identical content in {}", path_str),
+            details: None,
+            is_error: true,
+        };
+    }
+
+    let final_content = format!("{}{}", bom, restore_line_endings(&result, line_ending));
     if let Err(e) = std::fs::write(abs_path, &final_content) {
         return ToolResult {
             content: format!("Error writing {}: {}", path_str, e),
@@ -373,6 +392,14 @@ fn apply_multi_edit(
         content: format!("Applied {} edits.\n{}", edits.len(), diff_str),
         details: Some(serde_json::json!({"diff": diff_str, "path": path_str, "edits": edits.len()})),
         is_error: false,
+    }
+}
+
+fn strip_bom(content: &str) -> (&str, &str) {
+    if let Some(rest) = content.strip_prefix('\u{FEFF}') {
+        ("\u{FEFF}", rest)
+    } else {
+        ("", content)
     }
 }
 
