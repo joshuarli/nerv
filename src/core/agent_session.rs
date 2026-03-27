@@ -900,10 +900,12 @@ body{font-family:-apple-system,system-ui,'Segoe UI',sans-serif;max-width:720px;m
 .assistant pre code{background:none;padding:0}
 .assistant blockquote{border-left:3px solid #ddd;padding-left:1rem;color:#555;margin:0.75rem 0}
 .assistant ul,.assistant ol{padding-left:1.5rem}
-.tool-wrapper{margin:1rem 0}
-.tool-header{display:flex;align-items:center;justify-content:space-between;background:#2d3748;padding:0.5rem 0.75rem;border:1px solid #1a202c;border-radius:6px 6px 0 0;cursor:pointer;user-select:none;color:#e2e8f0;font-weight:500}
+.tool-wrapper{margin:1rem 0;width:80vw;position:relative;left:50%;transform:translateX(-50%)}
+.tool-header{display:flex;align-items:center;gap:0.75rem;background:#2d3748;padding:0.5rem 0.75rem;border:1px solid #1a202c;border-radius:6px 6px 0 0;cursor:pointer;user-select:none;color:#e2e8f0;font-family:'SF Mono',Menlo,monospace;font-size:0.8rem}
 .tool-header.collapsed{border-radius:6px}
 .tool-header:hover{background:#374151}
+.tool-name{color:#60a5fa;font-weight:600}
+.tool-args{color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
 .tool-output{border:1px solid #1a202c;border-top:none;border-radius:0 0 6px 6px;padding:1rem;font-family:'SF Mono',Menlo,monospace;font-size:0.8rem;white-space:pre-wrap;overflow-y:auto;background:#1a202c;color:#e2e8f0}
 .tool-output.hidden{display:none}
 .hl-keyword{color:#c084fc}
@@ -974,6 +976,23 @@ function toggleTool(header) {
         entries
     };
 
+    // Map tool_call_id → (name, args_summary) so ToolResult headers can show
+    // what command was run.
+    let mut tool_calls: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
+    for entry in entries.iter() {
+        if let crate::session::types::SessionEntry::Message(me) = entry {
+            if let AgentMessage::Assistant(a) = &me.message {
+                for block in &a.content {
+                    if let ContentBlock::ToolCall { id, name, arguments } = block {
+                        let args_summary = args_to_summary(arguments);
+                        tool_calls.insert(id.clone(), (name.clone(), args_summary));
+                    }
+                }
+            }
+        }
+    }
+
     for entry in entries {
         if let crate::session::types::SessionEntry::SystemPrompt(sp) = entry {
             html.push_str(&format!(
@@ -1006,8 +1025,18 @@ function toggleTool(header) {
                     }
                     html.push_str("</div>\n");
                 }
-                AgentMessage::ToolResult { content, .. } => {
-                    html.push_str(&format!("<div class='tool-wrapper'><div class='tool-header' onclick=\"toggleTool(this)\"><span>Tool Output</span></div>"));
+                AgentMessage::ToolResult { tool_call_id, content, .. } => {
+                    let (name, args) = tool_calls
+                        .get(tool_call_id)
+                        .map(|(n, a)| (n.as_str(), a.as_str()))
+                        .unwrap_or(("tool", ""));
+                    html.push_str("<div class='tool-wrapper'>");
+                    html.push_str("<div class='tool-header' onclick=\"toggleTool(this)\">");
+                    html.push_str(&format!("<span class='tool-name'>{}</span>", html_escape(name)));
+                    if !args.is_empty() {
+                        html.push_str(&format!("<span class='tool-args'>{}</span>", html_escape(args)));
+                    }
+                    html.push_str("</div>\n");
                     html.push_str("<div class='tool-output'>\n");
                     for item in content {
                         if let ContentItem::Text { text } = item {
@@ -1024,6 +1053,35 @@ function toggleTool(header) {
     html.push_str("</body>\n</html>\n");
     std::fs::write(path, &html).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
+}
+
+// Produce a compact single-line summary of tool arguments for the header.
+// JSON objects are shown as key=value pairs; other values are truncated strings.
+fn args_to_summary(args: &serde_json::Value) -> String {
+    match args {
+        serde_json::Value::Object(map) => map
+            .iter()
+            .map(|(k, v)| {
+                let val = match v {
+                    serde_json::Value::String(s) => {
+                        let s = s.replace('\n', "↵");
+                        if s.len() > 60 { format!("{}…", &s[..60]) } else { s }
+                    }
+                    other => {
+                        let s = other.to_string();
+                        if s.len() > 60 { format!("{}…", &s[..60]) } else { s }
+                    }
+                };
+                format!("{}={}", k, val)
+            })
+            .collect::<Vec<_>>()
+            .join("  "),
+        serde_json::Value::String(s) => {
+            let s = s.replace('\n', "↵");
+            if s.len() > 80 { format!("{}…", &s[..80]) } else { s }
+        }
+        other => other.to_string(),
+    }
 }
 
 fn markdown_to_html(markdown: &str) -> String {
