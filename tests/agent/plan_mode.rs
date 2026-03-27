@@ -1,8 +1,6 @@
 //! Plan mode tests — tool restriction and system prompt injection.
 
-mod helpers;
-
-use helpers::*;
+use crate::helpers::*;
 use nerv::core::agent_session::AgentSessionEvent;
 use nerv::core::tool_registry::{ToolDefinition, ToolRegistry};
 use std::sync::Arc;
