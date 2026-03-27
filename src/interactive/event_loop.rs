@@ -102,10 +102,11 @@ impl InteractiveMode {
                 self.status_is_error = is_error;
             }
             AgentSessionEvent::SessionList { sessions } => {
-                if sessions.is_empty() {
-                    self.status_message = Some("No previous sessions found.".into());
-                } else {
-                    self.session_picker = Some(SessionPicker::new(sessions));
+                self.session_picker = Some(SessionPicker::new(sessions));
+            }
+            AgentSessionEvent::SearchResults { results } => {
+                if let Some(ref mut picker) = self.session_picker {
+                    picker.update_results(results);
                 }
             }
             AgentSessionEvent::TreeData { tree, current_leaf } => {

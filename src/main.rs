@@ -421,6 +421,25 @@ fn main() {
                                     }
                                 } else if keys::matches_key(seq, "escape") || keys::matches_key(seq, "ctrl+c") {
                                     pop_picker(&mut interactive, &mut layout);
+                                } else if keys::matches_key(seq, "backspace") {
+                                    let picker = interactive.session_picker.as_mut().unwrap();
+                                    picker.pop_char();
+                                    if picker.has_query() {
+                                        let q = picker.query.clone();
+                                        let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::SearchSessions { query: q });
+                                    }
+                                } else if keys::matches_key(seq, "ctrl+u") {
+                                    interactive.session_picker.as_mut().unwrap().clear_query();
+                                } else if seq.len() >= 1 && seq[0] >= 0x20 && seq[0] != 0x7F && !seq.starts_with(b"\x1b") {
+                                    // Printable character (including multi-byte UTF-8)
+                                    if let Ok(ch_str) = std::str::from_utf8(seq) {
+                                        let picker = interactive.session_picker.as_mut().unwrap();
+                                        for ch in ch_str.chars() {
+                                            picker.push_char(ch);
+                                        }
+                                        let q = picker.query.clone();
+                                        let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::SearchSessions { query: q });
+                                    }
                                 }
                                 // Re-render picker if still active
                                 render_picker(&mut interactive, &mut layout);

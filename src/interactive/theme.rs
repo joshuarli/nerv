@@ -9,7 +9,9 @@ pub const THINKING: &str = "\x1b[38;5;141m";
 pub const THINKING_LOW: &str = "\x1b[38;5;98m";
 pub const THINKING_HIGH: &str = "\x1b[1;38;5;141m";
 pub const BOLD: &str = "\x1b[1m";
+pub const RESET_BOLD: &str = "\x1b[22m";
 pub const REVERSE: &str = "\x1b[7m";
+pub const MATCH_HL: &str = "\x1b[1;33m";
 
 // Semantic colors
 pub const ERROR: &str = "\x1b[38;5;203m";

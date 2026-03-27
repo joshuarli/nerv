@@ -52,6 +52,19 @@ impl SessionManager {
         db.execute("CREATE INDEX IF NOT EXISTS idx_entries_session ON entries(session_id, seq)")
             .ok();
 
+        db.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
+                text,
+                session_id UNINDEXED,
+                entry_id UNINDEXED,
+                role UNINDEXED,
+                tokenize = 'porter unicode61'
+            )",
+        )
+        .expect("failed to create search_index FTS5 table");
+
+        backfill_search_index(&db);
+
         Self {
             db,
             session_id: None,
@@ -144,18 +157,59 @@ impl SessionManager {
         let entry_id = entry.id().to_string();
         let parent_id = entry.parent_id().map(|s| s.to_string());
 
+        self.db.execute("BEGIN")?;
+
+        let result = self.append_entry_inner(&session_id, &entry_id, parent_id.as_deref(), &data, &entry);
+        if result.is_err() {
+            self.db.execute("ROLLBACK").ok();
+            return result;
+        }
+
+        self.db.execute("COMMIT")?;
+
+        let idx = self.entries.len();
+        self.by_id.insert(entry.id().to_string(), idx);
+        self.leaf_id = Some(entry.id().to_string());
+        self.next_seq += 1;
+        self.entries.push(entry);
+
+        Ok(())
+    }
+
+    fn append_entry_inner(
+        &self,
+        session_id: &str,
+        entry_id: &str,
+        parent_id: Option<&str>,
+        data: &str,
+        entry: &SessionEntry,
+    ) -> anyhow::Result<()> {
         let mut stmt = self.db.prepare(
             "INSERT INTO entries (id, session_id, parent_id, seq, data) VALUES (?, ?, ?, ?, ?)",
         )?;
-        stmt.bind((1, entry_id.as_str()))?;
-        stmt.bind((2, session_id.as_str()))?;
-        match parent_id.as_deref() {
+        stmt.bind((1, entry_id))?;
+        stmt.bind((2, session_id))?;
+        match parent_id {
             Some(p) => stmt.bind((3, p))?,
             None => stmt.bind((3, sqlite::Value::Null))?,
         };
         stmt.bind((4, self.next_seq))?;
-        stmt.bind((5, data.as_str()))?;
+        stmt.bind((5, data))?;
         stmt.next()?;
+
+        // Index searchable text in FTS5
+        if let Some((text, role)) = extract_searchable_text(entry) {
+            if !text.is_empty() {
+                let mut fts_stmt = self.db.prepare(
+                    "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?, ?, ?, ?)",
+                )?;
+                fts_stmt.bind((1, text.as_str()))?;
+                fts_stmt.bind((2, session_id))?;
+                fts_stmt.bind((3, entry_id))?;
+                fts_stmt.bind((4, role))?;
+                fts_stmt.next()?;
+            }
+        }
 
         // Update session timestamp
         let now = now_iso();
@@ -163,13 +217,13 @@ impl SessionManager {
             .db
             .prepare("UPDATE sessions SET updated_at = ? WHERE id = ?")?;
         stmt.bind((1, now.as_str()))?;
-        stmt.bind((2, session_id.as_str()))?;
+        stmt.bind((2, session_id))?;
         stmt.next()?;
 
         // Update preview from first user message
         if self.entries.is_empty()
-            && let SessionEntry::Message(ref me) = entry
-            && let AgentMessage::User { ref content, .. } = me.message
+            && let SessionEntry::Message(me) = entry
+            && let AgentMessage::User { content, .. } = &me.message
         {
             let preview: String = content
                 .iter()
@@ -186,15 +240,9 @@ impl SessionManager {
                 .db
                 .prepare("UPDATE sessions SET preview = ? WHERE id = ?")?;
             stmt.bind((1, preview.as_str()))?;
-            stmt.bind((2, session_id.as_str()))?;
+            stmt.bind((2, session_id))?;
             stmt.next()?;
         }
-
-        let idx = self.entries.len();
-        self.by_id.insert(entry.id().to_string(), idx);
-        self.leaf_id = Some(entry.id().to_string());
-        self.next_seq += 1;
-        self.entries.push(entry);
 
         Ok(())
     }
@@ -249,8 +297,17 @@ impl SessionManager {
             }
         };
 
-        // Delete entries before the cut point
+        // Delete entries before the cut point (and their FTS index rows)
         {
+            let mut stmt = self.db.prepare(
+                "DELETE FROM search_index WHERE entry_id IN (
+                    SELECT id FROM entries WHERE session_id = ? AND seq < ?
+                )",
+            )?;
+            stmt.bind((1, session_id.as_str()))?;
+            stmt.bind((2, kept_seq))?;
+            stmt.next()?;
+
             let mut stmt = self
                 .db
                 .prepare("DELETE FROM entries WHERE session_id = ? AND seq < ?")?;
@@ -572,6 +629,97 @@ impl SessionManager {
         sessions
     }
 
+    pub fn search_sessions(&self, query: &str) -> Vec<SearchResult> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Vec::new();
+        }
+
+        // Sanitize for FTS5: quote each token to avoid syntax errors from special chars
+        let fts_query: String = query
+            .split_whitespace()
+            .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let mut stmt = match self.db.prepare(
+            "SELECT
+                snippet(search_index, 0, '<<HL>>', '<</HL>>', '…', 20) as excerpt,
+                session_id,
+                role,
+                rank
+            FROM search_index
+            WHERE text MATCH ?
+            ORDER BY rank
+            LIMIT 100",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        if stmt.bind((1, fts_query.as_str())).is_err() {
+            return Vec::new();
+        }
+
+        // Collect raw hits, dedup by session_id keeping best rank
+        let mut best: std::collections::HashMap<String, (String, String, f64)> =
+            std::collections::HashMap::new();
+        while stmt.next().unwrap_or(sqlite::State::Done) == sqlite::State::Row {
+            let excerpt: String = stmt.read("excerpt").unwrap_or_default();
+            let session_id: String = stmt.read("session_id").unwrap_or_default();
+            let role: String = stmt.read("role").unwrap_or_default();
+            let rank: f64 = stmt.read("rank").unwrap_or(0.0);
+            best.entry(session_id)
+                .and_modify(|existing| {
+                    if rank < existing.2 {
+                        *existing = (excerpt.clone(), role.clone(), rank);
+                    }
+                })
+                .or_insert((excerpt, role, rank));
+        }
+
+        // Join with sessions table for metadata
+        let mut results: Vec<SearchResult> = Vec::new();
+        for (sid, (excerpt, role, rank)) in &best {
+            let mut s = match self
+                .db
+                .prepare("SELECT id, cwd, updated_at FROM sessions WHERE id = ?")
+            {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if s.bind((1, sid.as_str())).is_err() {
+                continue;
+            }
+            if s.next().unwrap_or(sqlite::State::Done) != sqlite::State::Row {
+                continue;
+            }
+            let id: String = s.read("id").unwrap_or_default();
+            let cwd: String = s.read("cwd").unwrap_or_default();
+            let updated_at: String = s.read("updated_at").unwrap_or_default();
+            let id_short = if id.len() >= 8 {
+                id[..8].to_string()
+            } else {
+                id.clone()
+            };
+            let message_count = self.count_entries(&id);
+            let modified = parse_iso_to_system_time(&updated_at);
+            results.push(SearchResult {
+                session_id: id,
+                id_short,
+                excerpt: excerpt.clone(),
+                role: role.clone(),
+                cwd,
+                modified,
+                message_count,
+                rank: *rank,
+            });
+        }
+
+        results.sort_by(|a, b| a.rank.partial_cmp(&b.rank).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(20);
+        results
+    }
+
     fn count_entries(&self, session_id: &str) -> u32 {
         let mut stmt = match self
             .db
@@ -744,4 +892,83 @@ pub struct SessionSummary {
     pub preview: String,
     pub message_count: u32,
     pub modified: std::time::SystemTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    pub session_id: String,
+    pub id_short: String,
+    pub excerpt: String,
+    pub role: String,
+    pub cwd: String,
+    pub modified: std::time::SystemTime,
+    pub message_count: u32,
+    rank: f64,
+}
+
+fn extract_searchable_text(entry: &SessionEntry) -> Option<(String, &'static str)> {
+    match entry {
+        SessionEntry::Message(e) => match &e.message {
+            AgentMessage::User { content, .. } => Some((content_text(content), "user")),
+            AgentMessage::Assistant(a) => Some((a.text_content(), "assistant")),
+            AgentMessage::ToolResult { content, .. } => {
+                let text = content_text(content);
+                if text.len() < 2000 {
+                    Some((text, "tool_result"))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn backfill_search_index(db: &sqlite::Connection) {
+    let has_fts: i64 = db
+        .prepare("SELECT COUNT(*) as c FROM search_index")
+        .and_then(|mut s| {
+            s.next()?;
+            s.read::<i64, _>("c")
+        })
+        .unwrap_or(0);
+    let has_entries: i64 = db
+        .prepare("SELECT COUNT(*) as c FROM entries")
+        .and_then(|mut s| {
+            s.next()?;
+            s.read::<i64, _>("c")
+        })
+        .unwrap_or(0);
+
+    if has_fts > 0 || has_entries == 0 {
+        return;
+    }
+
+    db.execute("BEGIN").ok();
+    let mut stmt = match db.prepare("SELECT id, session_id, data FROM entries ORDER BY session_id, seq") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    while stmt.next().unwrap_or(sqlite::State::Done) == sqlite::State::Row {
+        let entry_id: String = stmt.read("id").unwrap_or_default();
+        let session_id: String = stmt.read("session_id").unwrap_or_default();
+        let data: String = stmt.read("data").unwrap_or_default();
+        if let Ok(entry) = serde_json::from_str::<SessionEntry>(&data) {
+            if let Some((text, role)) = extract_searchable_text(&entry) {
+                if !text.is_empty() {
+                    if let Ok(mut fts_stmt) = db.prepare(
+                        "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?, ?, ?, ?)",
+                    ) {
+                        fts_stmt.bind((1, text.as_str())).ok();
+                        fts_stmt.bind((2, session_id.as_str())).ok();
+                        fts_stmt.bind((3, entry_id.as_str())).ok();
+                        fts_stmt.bind((4, role)).ok();
+                        fts_stmt.next().ok();
+                    }
+                }
+            }
+        }
+    }
+    db.execute("COMMIT").ok();
 }

@@ -440,6 +440,191 @@ fn branch_walk_from_leaf() {
 }
 
 #[test]
+// ── FTS5 search tests ────────────────────────────────────────────────
+
+#[test]
+fn search_finds_user_message() {
+    let (tmp, mut mgr) = setup();
+    mgr.new_session(tmp.path()).unwrap();
+    mgr.append_message(&user_msg("implement the zorkblatt algorithm"), None)
+        .unwrap();
+    mgr.append_message(&assistant_msg("sure, here it is"), None)
+        .unwrap();
+
+    let results = mgr.search_sessions("zorkblatt");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].excerpt.contains("zorkblatt"));
+}
+
+#[test]
+fn search_finds_assistant_message() {
+    let (tmp, mut mgr) = setup();
+    mgr.new_session(tmp.path()).unwrap();
+    mgr.append_message(&user_msg("hello"), None).unwrap();
+    mgr.append_message(&assistant_msg("the frobnitz value is 42"), None)
+        .unwrap();
+
+    let results = mgr.search_sessions("frobnitz");
+    assert_eq!(results.len(), 1);
+    assert!(results[0].excerpt.contains("frobnitz"));
+}
+
+#[test]
+fn search_finds_tool_result() {
+    let (tmp, mut mgr) = setup();
+    mgr.new_session(tmp.path()).unwrap();
+    mgr.append_message(&user_msg("read the file"), None)
+        .unwrap();
+    mgr.append_message(&tool_result_msg("tc1", "fn quuxinator() {}"), None)
+        .unwrap();
+
+    let results = mgr.search_sessions("quuxinator");
+    assert_eq!(results.len(), 1);
+}
+
+#[test]
+fn search_deduplicates_across_sessions() {
+    let (tmp, mut mgr) = setup();
+
+    mgr.new_session(tmp.path()).unwrap();
+    mgr.append_message(&user_msg("flamingo analysis part one"), None)
+        .unwrap();
+    mgr.append_message(&user_msg("flamingo analysis part two"), None)
+        .unwrap();
+
+    mgr.new_session(tmp.path()).unwrap();
+    mgr.append_message(&user_msg("unrelated flamingo topic"), None)
+        .unwrap();
+
+    let results = mgr.search_sessions("flamingo");
+    // Two sessions, not three hits
+    assert_eq!(results.len(), 2);
+}
+
+#[test]
+fn search_empty_query_returns_nothing() {
+    let (tmp, mut mgr) = setup();
+    mgr.new_session(tmp.path()).unwrap();
+    mgr.append_message(&user_msg("hello"), None).unwrap();
+
+    assert!(mgr.search_sessions("").is_empty());
+    assert!(mgr.search_sessions("   ").is_empty());
+}
+
+#[test]
+fn search_no_match_returns_empty() {
+    let (tmp, mut mgr) = setup();
+    mgr.new_session(tmp.path()).unwrap();
+    mgr.append_message(&user_msg("hello world"), None).unwrap();
+
+    assert!(mgr.search_sessions("xyznonexistent").is_empty());
+}
+
+#[test]
+fn search_excerpt_contains_highlight_markers() {
+    let (tmp, mut mgr) = setup();
+    mgr.new_session(tmp.path()).unwrap();
+    mgr.append_message(&user_msg("debug the sprongle handler"), None)
+        .unwrap();
+
+    let results = mgr.search_sessions("sprongle");
+    assert_eq!(results.len(), 1);
+    // FTS5 snippet uses <<HL>> / <</HL>> as markers
+    assert!(results[0].excerpt.contains("<<HL>>"));
+    assert!(results[0].excerpt.contains("<</HL>>"));
+}
+
+#[test]
+fn search_with_special_characters() {
+    let (tmp, mut mgr) = setup();
+    mgr.new_session(tmp.path()).unwrap();
+    mgr.append_message(&user_msg("fix the \"quoted\" bug"), None)
+        .unwrap();
+
+    // Should not crash on special FTS characters
+    let results = mgr.search_sessions("\"quoted\"");
+    assert_eq!(results.len(), 1);
+}
+
+#[test]
+fn search_stemming_works() {
+    let (tmp, mut mgr) = setup();
+    mgr.new_session(tmp.path()).unwrap();
+    mgr.append_message(&user_msg("implementing the parser"), None)
+        .unwrap();
+
+    // porter stemmer should match "implement" against "implementing"
+    let results = mgr.search_sessions("implement");
+    assert_eq!(results.len(), 1);
+}
+
+#[test]
+fn backfill_indexes_preexisting_entries() {
+    let tmp = TempDir::new().unwrap();
+    let nerv_dir = tmp.path().join(".nerv");
+    std::fs::create_dir_all(&nerv_dir).unwrap();
+
+    // Create a session manager, add data, then drop it
+    {
+        let mut mgr = SessionManager::new(&nerv_dir);
+        mgr.new_session(tmp.path()).unwrap();
+        mgr.append_message(&user_msg("backfill canary xylophone"), None)
+            .unwrap();
+    }
+
+    // Wipe the FTS index to simulate a pre-FTS database
+    let db = sqlite::open(nerv_dir.join("sessions.db")).unwrap();
+    db.execute("DELETE FROM search_index").unwrap();
+
+    // Reopen — backfill should repopulate
+    let mgr = SessionManager::new(&nerv_dir);
+    let results = mgr.search_sessions("xylophone");
+    assert_eq!(results.len(), 1);
+}
+
+#[test]
+fn compaction_removes_fts_entries() {
+    let (tmp, mut mgr) = setup();
+    mgr.new_session(tmp.path()).unwrap();
+
+    mgr.append_message(&user_msg("ephemeral garblotz message"), None)
+        .unwrap();
+    for i in 0..5 {
+        mgr.append_message(&user_msg(&format!("msg {}", i)), None)
+            .unwrap();
+    }
+
+    // Compact away the first message (entry 0), keeping from entry 1
+    let kept_id = mgr.entries()[1].id().to_string();
+    mgr.append_compaction("summary".into(), kept_id, 1000)
+        .unwrap();
+
+    // The compacted message's text should be gone from search
+    let results = mgr.search_sessions("garblotz");
+    assert!(results.is_empty());
+}
+
+#[test]
+fn search_returns_session_metadata() {
+    let (tmp, mut mgr) = setup();
+    mgr.new_session(tmp.path()).unwrap();
+    let session_id = mgr.session_id().to_string();
+    mgr.append_message(&user_msg("metadata test wibblefish"), None)
+        .unwrap();
+    mgr.append_message(&assistant_msg("response"), None)
+        .unwrap();
+
+    let results = mgr.search_sessions("wibblefish");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].session_id, session_id);
+    assert_eq!(results[0].id_short, &session_id[..8]);
+    assert_eq!(results[0].cwd, tmp.path().to_string_lossy());
+    assert!(results[0].message_count >= 2);
+}
+
+// ── Branching tests (continued) ─────────────────────────────────────
+
+#[test]
 fn load_session_finds_latest_leaf() {
     let (_tmp, mut mgr) = setup();
     mgr.new_session(std::path::Path::new("/tmp")).unwrap();
