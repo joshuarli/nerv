@@ -33,13 +33,15 @@ impl AgentTool for WriteTool {
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("path").and_then(|v| v.as_str()).is_none() {
+            let keys: Vec<&str> = input.as_object().map(|m| m.keys().map(|s| s.as_str()).collect()).unwrap_or_default();
             return Err(ToolError::InvalidArguments {
-                message: "path is required".into(),
+                message: format!("path (string) is required (got keys: {})", keys.join(", ")),
             });
         }
         if input.get("content").and_then(|v| v.as_str()).is_none() {
+            let keys: Vec<&str> = input.as_object().map(|m| m.keys().map(|s| s.as_str()).collect()).unwrap_or_default();
             return Err(ToolError::InvalidArguments {
-                message: "content is required".into(),
+                message: format!("content (string) is required (got keys: {})", keys.join(", ")),
             });
         }
         Ok(())

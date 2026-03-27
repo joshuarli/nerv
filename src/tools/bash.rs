@@ -32,8 +32,9 @@ impl AgentTool for BashTool {
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("command").and_then(|v| v.as_str()).is_none() {
+            let keys: Vec<&str> = input.as_object().map(|m| m.keys().map(|s| s.as_str()).collect()).unwrap_or_default();
             return Err(ToolError::InvalidArguments {
-                message: "command is required".into(),
+                message: format!("command (string) is required (got keys: {})", keys.join(", ")),
             });
         }
         Ok(())

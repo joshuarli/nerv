@@ -64,7 +64,10 @@ impl AgentTool for MemoryTool {
         let action = input["action"].as_str().unwrap_or("");
         if !["list", "add", "remove"].contains(&action) {
             return Err(ToolError::InvalidArguments {
-                message: "action must be list, add, or remove".into(),
+                message: format!(
+                    "action must be \"list\", \"add\", or \"remove\" (got {:?})",
+                    input["action"]
+                ),
             });
         }
         if action == "add"
@@ -73,12 +76,12 @@ impl AgentTool for MemoryTool {
                 .is_none_or(|s| s.trim().is_empty())
         {
             return Err(ToolError::InvalidArguments {
-                message: "content is required for add".into(),
+                message: "content (string) is required for action=\"add\"".into(),
             });
         }
         if action == "remove" && input["content"].as_str().is_none() {
             return Err(ToolError::InvalidArguments {
-                message: "content (index number) is required for remove".into(),
+                message: "content (index number as string) is required for action=\"remove\"".into(),
             });
         }
         Ok(())

@@ -55,8 +55,9 @@ impl AgentTool for GrepTool {
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("pattern").and_then(|v| v.as_str()).is_none() {
+            let keys: Vec<&str> = input.as_object().map(|m| m.keys().map(|s| s.as_str()).collect()).unwrap_or_default();
             return Err(ToolError::InvalidArguments {
-                message: "pattern is required".into(),
+                message: format!("pattern (string) is required (got keys: {})", keys.join(", ")),
             });
         }
         Ok(())
