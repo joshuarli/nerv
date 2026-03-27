@@ -1,2 +1,3 @@
 target/
 eval/reports/
+eval/**/__pycache__/

@@ -24,9 +24,14 @@ install-skills:
 	@cp -n skills/*.md ~/.nerv/skills/ 2>/dev/null || true
 	@echo "Skills installed to ~/.nerv/skills/"
 
+install-prompts:
+	@mkdir -p ~/.nerv/prompts
+	@cp prompts/*.md ~/.nerv/prompts/ 2>/dev/null || true
+	@echo "Prompts installed to ~/.nerv/prompts/"
+
 bench:
 	cargo bench --bench startup
 
-install: release
+install: release install-skills install-prompts
 	cp target/$(TARGET)/release/$(NAME) ~/usr/bin/$(NAME)
 	codesign -fs - ~/usr/bin/$(NAME)

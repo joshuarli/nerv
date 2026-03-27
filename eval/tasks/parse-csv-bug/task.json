@@ -1,0 +1,5 @@
+{
+  "prompt": "test_parse_sales.py is failing. Find and fix the bug.",
+  "verify": "python3 test_parse_sales.py",
+  "max_turns": 10
+}

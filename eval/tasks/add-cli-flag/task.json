@@ -1,0 +1,5 @@
+{
+  "prompt": "Add -l (lines only) and -w (words only) flags to wordcount.py. When a flag is given, only that column should be printed. test_wordcount.py has the tests.",
+  "verify": "python3 test_wordcount.py",
+  "max_turns": 15
+}
