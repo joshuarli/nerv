@@ -38,10 +38,18 @@ impl AgentTool for ReadTool {
         "read"
     }
     fn description(&self) -> &str {
-        "Read an entire file with line numbers. Use bash + sed for specific line ranges."
+        "Read a file with line numbers. Use offset/limit to read specific sections of large files."
     }
     fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "offset": {"type": "integer", "description": "Start line (1-based). Default: 1"},
+                "limit": {"type": "integer", "description": "Max lines to return. Default: all"}
+            },
+            "required": ["path"]
+        })
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("path").and_then(|v| v.as_str()).is_none() {
@@ -54,21 +62,26 @@ impl AgentTool for ReadTool {
     fn execute(&self, input: serde_json::Value, _update: UpdateCallback) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");
         let abs_path = self.resolve_path(path_str);
+        let offset = input.get("offset").and_then(|v| v.as_u64()).map(|v| v as usize);
+        let limit = input.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize);
+        let has_range = offset.is_some() || limit.is_some();
 
-        // Mtime cache: if file unchanged since last read, return short marker.
-        if let Ok(meta) = std::fs::metadata(&abs_path) {
-            if let Ok(mtime) = meta.modified() {
-                if let Ok(cache) = self.cache.lock() {
-                    if let Some(entry) = cache.get(&abs_path) {
-                        if entry.mtime == mtime {
-                            let msg = format!(
-                                "[unchanged since last read: {} ({} lines)]",
-                                path_str, entry.line_count
-                            );
-                            return ToolResult::ok_with_details(
-                                msg,
-                                serde_json::json!({"display": format!("{} (unchanged)", path_str)}),
-                            );
+        // Mtime cache: if file unchanged since last read AND no range specified, return short marker.
+        if !has_range {
+            if let Ok(meta) = std::fs::metadata(&abs_path) {
+                if let Ok(mtime) = meta.modified() {
+                    if let Ok(cache) = self.cache.lock() {
+                        if let Some(entry) = cache.get(&abs_path) {
+                            if entry.mtime == mtime {
+                                let msg = format!(
+                                    "[unchanged since last read: {} ({} lines)]",
+                                    path_str, entry.line_count
+                                );
+                                return ToolResult::ok_with_details(
+                                    msg,
+                                    serde_json::json!({"display": format!("{} (unchanged)", path_str)}),
+                                );
+                            }
                         }
                     }
                 }
@@ -78,33 +91,56 @@ impl AgentTool for ReadTool {
         match std::fs::read(&abs_path) {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
-                let line_count = text.lines().count();
+                let total_lines = text.lines().count();
 
-                let width = digit_width(line_count);
-                let mut content = String::with_capacity(line_count * 40);
+                let start = offset.unwrap_or(1).max(1) - 1; // convert 1-based to 0-based
+                let end = if let Some(lim) = limit {
+                    (start + lim).min(total_lines)
+                } else {
+                    total_lines
+                };
+
+                let width = digit_width(total_lines);
+                let shown = end.saturating_sub(start);
+                let mut content = String::with_capacity(shown * 40);
                 for (i, line) in text.lines().enumerate() {
+                    if i < start {
+                        continue;
+                    }
+                    if i >= end {
+                        break;
+                    }
                     use std::fmt::Write;
-                    if i > 0 {
+                    if !content.is_empty() {
                         content.push('\n');
                     }
                     let _ = write!(content, "{:>w$}\t{}", i + 1, line, w = width);
                 }
-                let (content, truncated) = truncate_head(&content, DEFAULT_MAX_LINES);
-                let display = if line_count == 0 {
-                    format!("{} (empty)", path_str)
-                } else if truncated {
-                    format!("{} ({} lines, truncated)", path_str, line_count)
+
+                // Apply truncation only when no explicit range was given
+                let (content, truncated) = if has_range {
+                    (content, false)
                 } else {
-                    format!("{} ({} lines)", path_str, line_count)
+                    truncate_head(&content, DEFAULT_MAX_LINES)
                 };
 
-                // Update cache
+                let display = if total_lines == 0 {
+                    format!("{} (empty)", path_str)
+                } else if has_range {
+                    format!("{} (lines {}-{} of {})", path_str, start + 1, start + shown, total_lines)
+                } else if truncated {
+                    format!("{} ({} lines, truncated)", path_str, total_lines)
+                } else {
+                    format!("{} ({} lines)", path_str, total_lines)
+                };
+
+                // Update cache with total line count
                 if let Ok(meta) = std::fs::metadata(&abs_path) {
                     if let Ok(mtime) = meta.modified() {
                         if let Ok(mut cache) = self.cache.lock() {
                             cache.insert(
                                 abs_path,
-                                ReadCacheEntry { mtime, line_count },
+                                ReadCacheEntry { mtime, line_count: total_lines },
                             );
                         }
                     }
@@ -144,6 +180,18 @@ mod tests {
         tool.execute(serde_json::json!({"path": path}), cb)
     }
 
+    fn read_range(tool: &dyn AgentTool, path: &str, offset: Option<u64>, limit: Option<u64>) -> ToolResult {
+        let cb: UpdateCallback = Arc::new(|_| {});
+        let mut args = serde_json::json!({"path": path});
+        if let Some(o) = offset {
+            args["offset"] = serde_json::json!(o);
+        }
+        if let Some(l) = limit {
+            args["limit"] = serde_json::json!(l);
+        }
+        tool.execute(args, cb)
+    }
+
     #[test]
     fn reads_full_file_with_line_numbers() {
         let dir = tempfile::tempdir().unwrap();
@@ -153,6 +201,77 @@ mod tests {
         assert!(!r.is_error);
         assert!(r.content.contains("  1\taaa"));
         assert!(r.content.contains("  3\tccc"));
+    }
+
+    #[test]
+    fn offset_and_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: String = (1..=20).map(|i| format!("line {}\n", i)).collect();
+        std::fs::write(dir.path().join("f.txt"), &content).unwrap();
+        let tool = make_tool(dir.path());
+
+        let r = read_range(tool.as_ref(), "f.txt", Some(5), Some(3));
+        assert!(!r.is_error);
+        assert!(r.content.contains("line 5"), "should start at line 5: {}", r.content);
+        assert!(r.content.contains("line 7"), "should include line 7: {}", r.content);
+        assert!(!r.content.contains("line 4"), "should not include line 4");
+        assert!(!r.content.contains("line 8"), "should not include line 8");
+    }
+
+    #[test]
+    fn offset_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: String = (1..=10).map(|i| format!("line {}\n", i)).collect();
+        std::fs::write(dir.path().join("f.txt"), &content).unwrap();
+        let tool = make_tool(dir.path());
+
+        let r = read_range(tool.as_ref(), "f.txt", Some(8), None);
+        assert!(!r.is_error);
+        assert!(r.content.contains("line 8"));
+        assert!(r.content.contains("line 10"));
+        assert!(!r.content.contains("line 7"));
+    }
+
+    #[test]
+    fn limit_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: String = (1..=10).map(|i| format!("line {}\n", i)).collect();
+        std::fs::write(dir.path().join("f.txt"), &content).unwrap();
+        let tool = make_tool(dir.path());
+
+        let r = read_range(tool.as_ref(), "f.txt", None, Some(3));
+        assert!(!r.is_error);
+        assert!(r.content.contains("line 1"));
+        assert!(r.content.contains("line 3"));
+        assert!(!r.content.contains("line 4"));
+    }
+
+    #[test]
+    fn offset_beyond_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f.txt"), "a\nb\n").unwrap();
+        let tool = make_tool(dir.path());
+
+        let r = read_range(tool.as_ref(), "f.txt", Some(100), Some(5));
+        assert!(!r.is_error);
+        assert!(r.content.is_empty() || r.content.trim().is_empty());
+    }
+
+    #[test]
+    fn range_read_bypasses_mtime_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f.txt"), "hello\nworld\n").unwrap();
+        let tool = make_tool(dir.path());
+
+        // First full read populates cache
+        let _ = read(tool.as_ref(), "f.txt");
+        // Second full read should hit cache
+        let r2 = read(tool.as_ref(), "f.txt");
+        assert!(r2.content.contains("unchanged"));
+        // Range read should NOT hit cache
+        let r3 = read_range(tool.as_ref(), "f.txt", Some(1), Some(1));
+        assert!(!r3.content.contains("unchanged"));
+        assert!(r3.content.contains("hello"));
     }
 
     #[test]
@@ -201,15 +320,5 @@ mod tests {
         let r = read(tool.as_ref(), "nope.txt");
         assert!(r.is_error);
         assert!(r.content.contains("not found"));
-    }
-
-    #[test]
-    fn no_offset_or_limit_params() {
-        // The schema should not expose offset or limit
-        let tool = ReadTool::new(PathBuf::from("."));
-        let schema = tool.parameters_schema();
-        let props = schema.get("properties").unwrap();
-        assert!(props.get("offset").is_none(), "offset should not be in schema");
-        assert!(props.get("limit").is_none(), "limit should not be in schema");
     }
 }
