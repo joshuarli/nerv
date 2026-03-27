@@ -94,6 +94,7 @@ src/
 
 ## Deep dives
 
+- [Design](docs/design.md) — core principles, eval-driven insights, what actually saves tokens
 - [Tools](docs/tools.md) — tool design, content vs display, multi-edit algorithm, allocation tracking
 - [Cancellation](docs/cancellation.md) — ^C flow, reader threads, should_quit flag
 - [Permissions](docs/permissions.md) — classification, path resolution, cross-thread y/n prompt

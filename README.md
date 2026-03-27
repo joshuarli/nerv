@@ -96,6 +96,7 @@ Credentials stored in macOS Keychain (not on disk).
 
 ## Documentation
 
+- [Design](docs/design.md) — core principles, eval-driven insights, what actually saves tokens
 - [Tools](docs/tools.md) — built-in tool design, content vs display, multi-edit algorithm
 - [Permissions](docs/permissions.md) — auto-approve in repo, prompt outside
 - [Context](docs/context.md) — transform_context, compaction, token savings
