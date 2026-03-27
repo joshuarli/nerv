@@ -76,6 +76,11 @@ impl AgentTool for EchoTool {
 
 pub fn simple_response(text: &str) -> Vec<ProviderEvent> {
     vec![
+        ProviderEvent::UsageUpdate(Usage {
+            input: 100,
+            output: 20,
+            ..Default::default()
+        }),
         ProviderEvent::TextDelta(text.to_string()),
         ProviderEvent::MessageStop {
             stop_reason: StopReason::EndTurn,
