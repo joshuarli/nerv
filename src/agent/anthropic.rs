@@ -202,7 +202,10 @@ impl Provider for AnthropicProvider {
             .get(&url)
             .header("anthropic-version", "2023-06-01");
         if self.use_bearer {
-            req = req.header("authorization", &format!("Bearer {}", self.api_key));
+            // OAuth requires the same beta headers as regular requests
+            req = req
+                .header("authorization", &format!("Bearer {}", self.api_key))
+                .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20");
         } else {
             req = req.header("x-api-key", &self.api_key);
         }
