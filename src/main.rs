@@ -646,22 +646,23 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
 
     match cmd {
         "models" => {
+            list_all_models();
             let models = load_models(nerv_dir);
-            if models.is_empty() {
-                println!("No models configured. Use `nerv add <hf-repo> [quant]` to add one.");
-                return;
-            }
-            for m in &models {
-                use nerv::interactive::theme;
-                let status = if is_healthy(m.port) {
-                    format!("{}●{}", theme::SUCCESS, theme::RESET)
-                } else {
-                    format!("{}○{}", theme::FOOTER_DIM, theme::RESET)
-                };
-                println!(
-                    "  {} {:<20} ctx:{:<6} gpu:{:<3} port:{}  {}",
-                    status, m.alias, m.context_length, m.gpu_layers, m.port, m.path,
-                );
+            if !models.is_empty() {
+                println!("  [local gguf]");
+                for m in &models {
+                    use nerv::interactive::theme;
+                    let status = if is_healthy(m.port) {
+                        format!("{}●{}", theme::SUCCESS, theme::RESET)
+                    } else {
+                        format!("{}○{}", theme::FOOTER_DIM, theme::RESET)
+                    };
+                    println!(
+                        "    {} {:<20} ctx:{:<6} gpu:{:<3} port:{}  {}",
+                        status, m.alias, m.context_length, m.gpu_layers, m.port, m.path,
+                    );
+                }
+                println!();
             }
         }
         "add" => {
