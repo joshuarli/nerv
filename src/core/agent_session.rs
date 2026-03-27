@@ -889,7 +889,7 @@ fn export_html(session: &AgentSession, path: &std::path::Path) -> Result<String,
 <style>
 *{box-sizing:border-box}
 body{font-family:-apple-system,system-ui,'Segoe UI',sans-serif;max-width:720px;margin:0 auto;padding:2rem 1rem;color:#1a1a1a;line-height:1.7;background:#fff}
-.user{background:#f5f5f5;border-radius:8px;padding:0.75rem 1rem;margin:1.5rem 0;font-weight:500}
+.user{background:#fef3c7;border-radius:8px;padding:0.75rem 1rem;margin:1.5rem 0;font-weight:500;border-left:3px solid #f59e0b}
 .assistant{margin:1.5rem 0}
 .assistant h1,.assistant h2,.assistant h3{margin:1rem 0 0.5rem;font-weight:600}
 .assistant h1{font-size:1.4rem}
