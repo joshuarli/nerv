@@ -4,6 +4,21 @@ Nerv provides 8 tools to the LLM. All execute synchronously in the session
 thread. File-mutating tools (`edit`, `write`) serialize through a per-file
 mutex to prevent concurrent writes to the same path.
 
+## Design principle: separate LLM content from display
+
+Every tool result has two channels:
+
+- **`content`** (string) — sent to the LLM as the tool result. Must be
+  minimal. The LLM already knows what it asked for; it doesn't need
+  verbose confirmation. Every token here costs money and consumes context.
+- **`details`** (JSON, optional) — used by the TUI for rich display to the
+  user. Diffs, syntax-highlighted output, metadata. Never sent to the LLM.
+
+Example: the edit tool returns `content: "Edited sum.py"` to the LLM but
+puts the full unified diff in `details.diff` for the TUI to render.
+This saves hundreds of tokens per edit while still showing the user
+exactly what changed.
+
 ## read
 
 Read file contents with line numbers.
@@ -62,12 +77,12 @@ top-level `old_text`/`new_text`.
 
 **Algorithm**:
 1. All `old_text` values are matched against the **original** file content
-   (not incrementally after each edit).
+   (not incrementally after each edit). Each must match exactly once.
 2. Matches are sorted by position (top-to-bottom).
 3. Overlap detection: if any two matches overlap, the edit is rejected.
-4. A forward-cursor preflight verifies all matches are findable in sequence.
-5. Replacements are applied in reverse position order to preserve byte offsets.
-6. A single unified diff is generated for the whole file.
+4. Replacements are applied in reverse position order to preserve byte offsets.
+5. A unified diff is generated for the whole file (stored in `details.diff`
+   for TUI display, not sent to the LLM).
 
 Multi-edit requires exact matches — no fuzzy fallback. This is intentional:
 fuzzy normalization is lossy and applying it across multiple edits on the
@@ -81,8 +96,11 @@ same file content risks position drift.
   matching, and restored on write.
 - **No-change detection**: if old_text and new_text produce identical
   content, the edit is rejected with an error.
-- **Diff output**: all successful edits return a unified diff (Myers
-  algorithm, 3 lines of context).
+- **File size guard**: files over 10MB are rejected.
+- **LLM result**: terse confirmation (`"Edited {path}"`). The LLM wrote
+  the edit — it doesn't need the diff back.
+- **TUI display**: full unified diff (Myers algorithm, 3 lines context)
+  stored in `details.diff` for interactive display to the user.
 - **Mutation queue**: edits to the same file are serialized.
 
 ## bash
