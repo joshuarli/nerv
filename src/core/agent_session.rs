@@ -343,31 +343,44 @@ impl AgentSession {
                 reason: CompactionReason::Overflow,
             });
 
-            if let Some(result) = self.run_compaction(None) {
-                let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
-                    summary: Some(result.summary),
-                    will_retry: true,
-                });
+            match self.run_compaction(None) {
+                Ok(Some(result)) => {
+                    let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                        summary: Some(result.summary),
+                        will_retry: true,
+                    });
 
-                // Reload agent context from compacted session
-                self.reload_agent_context();
+                    // Reload agent context from compacted session
+                    self.reload_agent_context();
 
-                // Retry the original prompt
-                let retry_msg = AgentMessage::User {
-                    content: vec![ContentItem::Text { text }],
-                    timestamp: now_millis(),
-                };
-                self.prepare_system_prompt();
-                let _retry_messages = self.run_agent_prompt(vec![retry_msg], event_tx);
-            } else {
-                let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
-                    summary: None,
-                    will_retry: false,
-                });
-                let _ = event_tx.send(AgentSessionEvent::Status {
-                    message: "Context overflow: auto-compact failed. Try /compact manually or reduce context.".into(),
-                    is_error: true,
-                });
+                    // Retry the original prompt
+                    let retry_msg = AgentMessage::User {
+                        content: vec![ContentItem::Text { text }],
+                        timestamp: now_millis(),
+                    };
+                    self.prepare_system_prompt();
+                    let _retry_messages = self.run_agent_prompt(vec![retry_msg], event_tx);
+                }
+                Ok(None) => {
+                    let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                        summary: None,
+                        will_retry: false,
+                    });
+                    let _ = event_tx.send(AgentSessionEvent::Status {
+                        message: "Context overflow: nothing to compact. Try /new to start a fresh session.".into(),
+                        is_error: true,
+                    });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                        summary: None,
+                        will_retry: false,
+                    });
+                    let _ = event_tx.send(AgentSessionEvent::Status {
+                        message: format!("Context overflow: {e}"),
+                        is_error: true,
+                    });
+                }
             }
             return;
         }
@@ -388,14 +401,22 @@ impl AgentSession {
                 let _ = event_tx.send(AgentSessionEvent::AutoCompactionStart {
                     reason: CompactionReason::Threshold,
                 });
-                let result = self.run_compaction(None);
-                if result.is_some() {
-                    self.reload_agent_context();
+                match self.run_compaction(None) {
+                    Ok(Some(result)) => {
+                        self.reload_agent_context();
+                        let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                            summary: Some(result.summary),
+                            will_retry: false,
+                        });
+                    }
+                    Ok(None) | Err(_) => {
+                        // Threshold auto-compact: silently skip on failure (will retry next turn)
+                        let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                            summary: None,
+                            will_retry: false,
+                        });
+                    }
                 }
-                let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
-                    summary: result.map(|r| r.summary),
-                    will_retry: false,
-                });
             }
         }
 
@@ -580,17 +601,26 @@ impl AgentSession {
         Some((provider, model.id.clone()))
     }
 
+    /// Run compaction. Returns `Ok(Some(result))` on success, `Ok(None)` when there is
+    /// nothing to compact (context too small / no messages before the cut point), and
+    /// `Err(msg)` when compaction cannot proceed (no suitable provider, summarization
+    /// API call failed, etc.).
     pub fn run_compaction(
         &mut self,
         _custom_instructions: Option<String>,
-    ) -> Option<CompactionResult> {
+    ) -> Result<Option<CompactionResult>, String> {
         let config = NervConfig::load(crate::nerv_dir());
         let (provider, model_id) =
-            self.resolve_utility_provider(config.compaction_model.as_deref())?;
+            self.resolve_utility_provider(config.compaction_model.as_deref())
+                .ok_or_else(|| {
+                    "No provider available for compaction. \
+                     Set compaction_model in ~/.nerv/config.json or log in to Anthropic (/login)."
+                        .to_string()
+                })?;
 
         let entries = self.session_manager.entries();
         if entries.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         // Find cut point using token-budget-aware algorithm
@@ -615,7 +645,7 @@ impl AgentSession {
             .collect();
 
         if to_summarize.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         let tokens_before = to_summarize
@@ -630,15 +660,16 @@ impl AgentSession {
                     first_kept_id.clone(),
                     tokens_before,
                 );
-                Some(CompactionResult {
+                Ok(Some(CompactionResult {
                     summary,
                     first_kept_entry_id: first_kept_id,
                     tokens_before,
-                })
+                }))
             }
             Err(e) => {
-                crate::log::error(&format!("compaction failed: {}", e));
-                None
+                let msg = format!("Compaction failed: {e}");
+                crate::log::error(&msg);
+                Err(msg)
             }
         }
     }
@@ -965,14 +996,35 @@ pub fn session_task(
                 let _ = event_tx.send(AgentSessionEvent::AutoCompactionStart {
                     reason: CompactionReason::Manual,
                 });
-                let result = session.run_compaction(custom_instructions);
-                if result.is_some() {
-                    session.reload_agent_context();
+                match session.run_compaction(custom_instructions) {
+                    Ok(Some(result)) => {
+                        session.reload_agent_context();
+                        let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                            summary: Some(result.summary),
+                            will_retry: false,
+                        });
+                    }
+                    Ok(None) => {
+                        let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                            summary: None,
+                            will_retry: false,
+                        });
+                        let _ = event_tx.send(AgentSessionEvent::Status {
+                            message: "Nothing to compact — context is already short enough.".into(),
+                            is_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                            summary: None,
+                            will_retry: false,
+                        });
+                        let _ = event_tx.send(AgentSessionEvent::Status {
+                            message: e,
+                            is_error: true,
+                        });
+                    }
                 }
-                let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
-                    summary: result.map(|r| r.summary),
-                    will_retry: false,
-                });
             }
             SessionCommand::ExportJsonl => {
                 let sid = session.session_manager.session_id().to_string();
