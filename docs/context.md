@@ -7,7 +7,9 @@ transforms reduce token usage without losing information the model needs.
 
 ```
 AgentMessage[]
-  → transform_context()    strip thinking, denied args, orphans, truncate stale
+  → transform_context()    7 optimizations: strip thinking/orphans/denied args,
+                           truncate stale, supersede reads, compress bash, strip edit args
+  → context gate           circuit breaker for unexpected context growth
   → convert_to_llm()       AgentMessage → LlmMessage (merge consecutive same-role)
   → build_request_body()   LlmMessage → provider-specific JSON
   → serialize              JSON → bytes for HTTP
@@ -15,7 +17,7 @@ AgentMessage[]
 
 ## transform_context (`src/agent/convert.rs`)
 
-Applied before every LLM request. Four optimizations:
+Applied before every LLM request. Seven optimizations (all zero-LLM-cost):
 
 ### 1. Strip thinking blocks
 
@@ -67,8 +69,11 @@ with 8 redundant reads, saves ~4-8k tokens.
 
 Successful bash tool results matching known patterns are compressed to a
 single summary line regardless of age:
-- `cargo check` with no errors → the `Finished ...` line only
+- `cargo check/build` with no errors → the `Finished ...` line only
 - `cargo test` with 0 failures → the `test result: ok. ...` line only
+- Python `unittest` with OK → the `Ran N tests ...` line only
+- `pytest` with no failures → the summary line only
+- `make` with nothing to do → the `Nothing to be done` line
 
 **Savings**: 100-2k tokens per successful build/test output.
 
@@ -81,6 +86,10 @@ the model doesn't need the full payload to understand what was changed.
 
 **Savings**: 100-5k tokens per stale edit (depends on payload size).
 
+## Tool-level optimizations
+
+These are applied at tool execution time, not in `transform_context`.
+
 ### 8. Read tool mtime caching (`src/tools/read.rs`)
 
 The `ReadTool` maintains an in-memory cache of `path → (mtime, line_count)`.
@@ -89,18 +98,36 @@ changed, the tool returns `[unchanged since last read: path (N lines)]`
 instead of the full content. The cache is invalidated automatically when
 a write/edit modifies the file (new mtime).
 
-**Savings**: 200-2k+ tokens per redundant re-read of an unmodified file.
+**Savings**: 200-12k+ tokens per redundant re-read of an unmodified file.
 
-### 9. Context circuit breaker (`src/agent/agent.rs`)
+### 9. Read auto-size for small files
 
-Before each API call, the estimated token count is compared to the previous
-call. If context grew by more than 10% AND is above 10k tokens, the user is
-prompted to confirm before sending the request. This catches runaway context
-growth from large tool results (e.g., reading a huge file or verbose test
-output) before it becomes an expensive API call.
+Files under 300 lines are returned in full regardless of the model's
+requested `limit`. Prevents multi-chunk reads where the model asks for
+`limit=120` then `offset=120 limit=50` etc.
 
-The gate fires as a `ContextGateRequest` event with the same y/n UX as
-permission prompts. Pressing 'y' continues; 'n' or Escape aborts the turn.
+### 10. Compact line numbers
+
+Line number prefix width adapts to file size: 3 digits for <1000 lines,
+4 for <10000, 6 for larger. Was always 6-digit padded. Saves ~2 chars/line.
+
+### 11. Grep context lines (`src/tools/grep.rs`)
+
+The grep tool passes `--context=3` to ripgrep, so the model gets surrounding
+lines with each match. Reduces follow-up read calls for understanding call
+sites.
+
+## Circuit breaker (`src/agent/agent.rs`)
+
+Before each API call in the agentic loop, the estimated token count is
+compared to the previous call. If **all** of these hold, the user is prompted:
+- At least 4 tool rounds have completed (warmup — early reads are expected)
+- Absolute delta exceeds 20k tokens
+- Relative growth exceeds 30%
+
+This catches runaway context growth (e.g., reading a massive file, verbose
+test output) before it becomes an expensive API call. Uses the same y/n
+TUI prompt as permission requests.
 
 ## Compaction (`src/compaction/`)
 

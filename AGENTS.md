@@ -26,17 +26,17 @@ src/
 ├── errors.rs                  # ProviderError, ToolError
 ├── agent/
 │   ├── types.rs               # AgentMessage, Model, Usage, AgentEvent, ToolResultData
-│   ├── convert.rs             # AgentMessage → LlmMessage, transform_context
+│   ├── convert.rs             # AgentMessage → LlmMessage, transform_context (9 optimizations)
 │   ├── provider.rs            # Provider trait, ProviderRegistry, CancelFlag
 │   ├── anthropic.rs           # Anthropic Messages API + SSE + OAuth headers
 │   ├── openai_compat.rs       # OpenAI-compatible (llama-server, Ollama)
-│   └── agent.rs               # Agentic loop: stream → tool calls → permissions → loop
+│   └── agent.rs               # Agentic loop: stream → tool calls → permissions → context gate → loop
 ├── tools/
-│   ├── read.rs                # File read with offset/limit, line numbers
+│   ├── read.rs                # File read with offset/limit, line numbers, mtime cache
 │   ├── edit.rs                # Single + multi-edit, fuzzy match, BOM/CRLF
 │   ├── write.rs               # File write with mkdir -p
 │   ├── bash.rs                # /bin/bash -c, stderr on background thread
-│   ├── grep.rs                # ripgrep wrapper
+│   ├── grep.rs                # ripgrep wrapper (--context=3 for fewer follow-up reads)
 │   ├── find.rs                # fd wrapper
 │   ├── ls.rs                  # eza tree wrapper
 │   ├── memory.rs              # Persistent memory read/add/remove
@@ -65,7 +65,7 @@ src/
 │   ├── chat_writer.rs         # Block-cached chat output (streaming, tools, status)
 │   ├── event_loop.rs          # Slash commands, permission prompts, session picker
 │   ├── layout.rs              # AppLayout: editor + statusbar + footer + chat
-│   ├── footer.rs              # Hexagon context bar, model, cost, thinking level, plan mode
+│   ├── footer.rs              # Hexagon context bar, model, cost, API call counter, plan mode
 │   ├── statusbar.rs           # Spinner, per-turn token delta, tok/s, queue
 │   ├── session_picker.rs      # /resume session list
 │   ├── tree_selector.rs       # /tree session branch navigator
@@ -90,7 +90,9 @@ src/
 - **In-process diff**: Myers algorithm, ~170 lines, replaces `similar` crate (51KB binary savings)
 - **Per-turn token deltas**: statusbar shows marginal cost (↑800 ↓110), footer shows cumulative context
 - **SQLite sessions**: WAL mode, entries table with parent_id chain, 12µs listing
-- **Context optimization**: strip thinking, denied args, orphans; truncate stale results
+- **Context optimization**: 9 zero-LLM-cost transforms in `transform_context` (strip thinking, denied args, orphans; truncate stale results; superseded read dedup; bash success compression; stale edit arg stripping) plus tool-level optimizations (read mtime cache, auto-size small files, grep context lines) and a circuit breaker for unexpected context growth. See [docs/context.md](docs/context.md).
+- **Per-API-call token tracking**: each `AssistantMessage` carries its own `Usage` from its API call. Footer shows cumulative API usage `(N calls, Mk tok)` when multiple calls occur in one turn.
+- **Context circuit breaker**: `ContextGateFn` callback in `stream_response` — prompts user to confirm when context grows >20k tokens AND >30% between consecutive API calls (skips first 4 rounds for warmup)
 - **Plan mode**: `/plan`, Shift+Tab, or bare "plan" toggles read-only research mode. Removes edit/write from the tool set and injects a planning-focused system prompt section. `ToolRegistry::set_active` handles the filtering.
 - **Git worktrees**: `/wt <branch>` creates an isolated worktree for the session; `/wt merge` merges back and cleans up. Session DB tracks worktree path for `/resume` restoration.
 - **macOS Keychain**: credentials via `security` CLI, not on disk
