@@ -372,3 +372,101 @@ fn html_export_excludes_thinking() {
     assert!(html.contains("visible answer"));
     assert!(!html.contains("SECRET_THINKING_CONTENT"));
 }
+
+// ── Session tree / branching ──
+
+#[test]
+fn branch_creates_fork() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp")).unwrap();
+
+    mgr.append_message(&user_msg("first"), None).unwrap();
+    let branch_point = mgr.leaf_id().unwrap().to_string();
+    mgr.append_message(&assistant_msg("response A"), None).unwrap();
+
+    // Branch back to the user message
+    mgr.branch(&branch_point);
+    mgr.append_message(&assistant_msg("response B"), None).unwrap();
+
+    // Tree should have branches
+    assert!(mgr.has_branches());
+
+    // Current branch should have response B, not A
+    let branch = mgr.get_branch();
+    let texts: Vec<String> = branch
+        .iter()
+        .filter_map(|e| {
+            if let nerv::session::SessionEntry::Message(me) = e {
+                if let AgentMessage::Assistant(a) = &me.message {
+                    return Some(a.text_content());
+                }
+            }
+            None
+        })
+        .collect();
+    assert!(texts.contains(&"response B".to_string()));
+    assert!(!texts.contains(&"response A".to_string()));
+}
+
+#[test]
+fn get_tree_shows_both_branches() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp")).unwrap();
+
+    mgr.append_message(&user_msg("root"), None).unwrap();
+    let branch_point = mgr.leaf_id().unwrap().to_string();
+
+    mgr.append_message(&assistant_msg("branch A"), None).unwrap();
+    mgr.branch(&branch_point);
+    mgr.append_message(&assistant_msg("branch B"), None).unwrap();
+
+    let tree = mgr.get_tree();
+    // Root node should have 2 children
+    assert_eq!(tree.len(), 1, "should have one root");
+    assert_eq!(tree[0].children.len(), 2, "root should have 2 children (fork)");
+}
+
+#[test]
+fn branch_walk_from_leaf() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp")).unwrap();
+
+    mgr.append_message(&user_msg("a"), None).unwrap();
+    mgr.append_message(&assistant_msg("b"), None).unwrap();
+    mgr.append_message(&user_msg("c"), None).unwrap();
+
+    let branch = mgr.get_branch();
+    assert_eq!(branch.len(), 3);
+}
+
+#[test]
+fn load_session_finds_latest_leaf() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp")).unwrap();
+
+    mgr.append_message(&user_msg("root"), None).unwrap();
+    let branch_point = mgr.leaf_id().unwrap().to_string();
+    mgr.append_message(&assistant_msg("old branch"), None).unwrap();
+
+    // Fork and add newer messages
+    mgr.branch(&branch_point);
+    mgr.append_message(&assistant_msg("new branch 1"), None).unwrap();
+    mgr.append_message(&user_msg("new branch 2"), None).unwrap();
+
+    // Reload the session — should land on the latest leaf (new branch 2)
+    let session_id = mgr.session_id().to_string();
+    let ctx = mgr.load_session(&session_id).unwrap();
+
+    // The context should contain "new branch" messages, not "old branch"
+    let has_new = ctx.messages.iter().any(|m| {
+        if let AgentMessage::User { content, .. } = m {
+            content.iter().any(|c| match c {
+                ContentItem::Text { text } => text.contains("new branch 2"),
+                _ => false,
+            })
+        } else {
+            false
+        }
+    });
+    assert!(has_new, "load_session should land on the latest leaf");
+}

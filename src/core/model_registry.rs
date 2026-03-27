@@ -13,6 +13,14 @@ pub struct ModelRegistry {
 }
 
 impl ModelRegistry {
+    pub fn empty() -> Self {
+        Self {
+            built_in: Vec::new(),
+            custom: Vec::new(),
+            provider_registry: ProviderRegistry::new(),
+        }
+    }
+
     pub fn new(config: &NervConfig, auth: &mut AuthStorage) -> Self {
         let mut registry = ProviderRegistry::new();
 
