@@ -955,13 +955,17 @@ fn print_mode(args: &[String]) {
                 }
             }
             AgentEvent::ToolExecutionStart { name, .. } => {
+                eprint!("  turn {} › {} ... ", m.turns, name);
                 m.current_tool = Some((name.clone(), std::time::Instant::now()));
             }
             AgentEvent::ToolExecutionEnd { result, .. } => {
                 if let Some((name, start)) = m.current_tool.take() {
+                    let ms = start.elapsed().as_millis();
+                    let status = if result.is_error { "err" } else { "ok" };
+                    eprintln!("{} ({}ms)", status, ms);
                     m.tool_calls.push(serde_json::json!({
                         "name": name,
-                        "duration_ms": start.elapsed().as_millis() as u64,
+                        "duration_ms": ms as u64,
                         "is_error": result.is_error,
                     }));
                 }

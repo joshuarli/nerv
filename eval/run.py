@@ -81,11 +81,43 @@ def run_nerv(
     max_turns: int = 20,
     timeout: int = 120,
     model: str | None = None,
+    stream: bool = False,
 ) -> tuple[dict, str, str]:
     """Run nerv in print mode. Returns (parsed_json, stdout, stderr)."""
     cmd = [str(binary), "--print", "--max-turns", str(max_turns)]
     if model:
         cmd.extend(["--model", model])
+
+    if stream:
+        # Stream stderr to terminal in real time, capture stdout for JSON
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=None,  # inherit — streams to terminal
+                text=True,
+                cwd=work_dir,
+            )
+            stdout, _ = proc.communicate(input=prompt, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, _ = proc.communicate()
+            return {"error": f"timeout after {timeout}s"}, stdout or "", ""
+        except KeyboardInterrupt:
+            proc.kill()
+            proc.wait()
+            return {"error": "interrupted"}, "", ""
+
+        stderr = ""
+        if proc.returncode != 0 and not stdout.strip():
+            return {"error": f"exit code {proc.returncode}"}, stdout, stderr
+
+        try:
+            return json.loads(stdout), stdout, stderr
+        except json.JSONDecodeError:
+            return {"error": f"invalid JSON output: {stdout[:200]}"}, stdout, stderr
+
     try:
         result = subprocess.run(
             cmd,
@@ -172,7 +204,7 @@ def extract_metrics(nerv_output: dict) -> tuple[list[ToolCall], dict]:
 
 
 def run_task(task_dir: Path, binary: Path, report_dir: Path,
-             model: str | None = None) -> EvalResult:
+             model: str | None = None, stream: bool = False) -> EvalResult:
     task_name = task_dir.name
     config = load_task(task_dir)
     on_fail_hints = config.get("on_fail", [])
@@ -204,6 +236,7 @@ def run_task(task_dir: Path, binary: Path, report_dir: Path,
                 work_dir,
                 max_turns=config.get("max_turns", 20),
                 model=model,
+                stream=stream,
             )
 
             all_outputs.append(nerv_output)
@@ -323,6 +356,7 @@ def main():
     if "--model" in args:
         idx = args.index("--model")
         model = args[idx + 1]
+    stream = "--stream" in args
 
     if not binary.exists():
         print(f"nerv binary not found at {binary}", file=sys.stderr)
@@ -367,7 +401,7 @@ def main():
             if not json_output:
                 print(f"  {task_dir.name} ... ", end="", flush=True, file=sys.stderr)
 
-            result = run_task(task_dir, binary, report_dir, model=model)
+            result = run_task(task_dir, binary, report_dir, model=model, stream=stream)
 
             if not json_output:
                 if result.passed:
