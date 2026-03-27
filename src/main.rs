@@ -251,6 +251,9 @@ fn main() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::bounded::<SessionCommand>(32);
     let (event_tx, event_rx) = crossbeam_channel::bounded::<AgentSessionEvent>(256);
 
+    // Capture initial state before session is moved to its thread
+    let initial_thinking_level = session.agent.state.thinking_level;
+
     // Session thread
     let evt_tx = event_tx.clone();
     std::thread::spawn(move || session_task(cmd_rx, evt_tx, session));
@@ -264,6 +267,7 @@ fn main() {
     if let Some(m) = model_registry.default_model(&config) {
         footer.set_model(m);
     }
+    footer.set_thinking(initial_thinking_level);
 
     let mut layout = AppLayout::new(Editor::new(), StatusBar::new(), footer);
     tui.fixed_bottom = 8; // editor + statusbar + footer — never flushed to scrollback
