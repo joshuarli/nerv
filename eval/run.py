@@ -46,6 +46,7 @@ class EvalResult:
     cost: float = 0.0
     wall_time_s: float = 0.0
     error: str | None = None
+    goal_results: list[str] = field(default_factory=list)
 
 
 EVAL_DIR = Path(__file__).parent / "tasks"
@@ -257,12 +258,52 @@ def run_task(task_dir: Path, binary: Path, report_dir: Path,
             wall_time_s=round(wall_time, 2),
         )
 
+        # Analyze goals
+        goals = config.get("goals")
+        if goals and passed:
+            result.goal_results = check_goals(goals, all_outputs, result)
+
         write_report(report_dir, task_name, config,
                      {"attempts": all_outputs},
                      "\n".join(all_stderr), "",
                      passed, verify_output, result)
 
         return result
+
+
+def check_goals(goals: dict, all_outputs: list[dict], result: EvalResult) -> list[str]:
+    """Check efficiency goals against the trace. Returns list of pass/fail strings."""
+    results = []
+
+    # Count edit calls and multi-edits from traces
+    edit_calls = 0
+    multi_edits = 0
+    for output in all_outputs:
+        for msg in output.get("trace", []):
+            if msg.get("role") != "assistant":
+                continue
+            for tc in msg.get("tool_calls", []):
+                if tc.get("tool") == "edit":
+                    edit_calls += 1
+                    if "edits" in tc.get("args", {}):
+                        multi_edits += 1
+
+    if "max_edit_calls" in goals:
+        limit = goals["max_edit_calls"]
+        ok = edit_calls <= limit
+        results.append(f"{'GOAL' if ok else 'MISS'} edit calls: {edit_calls} (goal: <={limit})")
+
+    if "min_multi_edits" in goals:
+        minimum = goals["min_multi_edits"]
+        ok = multi_edits >= minimum
+        results.append(f"{'GOAL' if ok else 'MISS'} multi-edits: {multi_edits} (goal: >={minimum})")
+
+    if "max_turns" in goals:
+        limit = goals["max_turns"]
+        ok = result.turns <= limit
+        results.append(f"{'GOAL' if ok else 'MISS'} turns: {result.turns} (goal: <={limit})")
+
+    return results
 
 
 def main():
@@ -328,6 +369,8 @@ def main():
                     f"${result.cost:.4f}, {result.wall_time_s}s)",
                     file=sys.stderr,
                 )
+                for g in result.goal_results:
+                    print(f"    {g}", file=sys.stderr)
             else:
                 err = result.error or "verification failed"
                 att = f" after {result.attempts} attempts" if result.attempts > 1 else ""

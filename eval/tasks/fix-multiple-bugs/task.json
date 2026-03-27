@@ -2,5 +2,11 @@
   "prompt": "Several tests in test_scheduler.py are failing. There are multiple bugs in scheduler.py. Find and fix all of them.",
   "verify": "python3 test_scheduler.py",
   "max_turns": 15,
-  "on_fail": "Some tests are still failing. Run them again and read each traceback — there are 4 distinct bugs."
+  "on_fail": "Some tests are still failing. Run them again and read each traceback — there are 4 distinct bugs.",
+  "goals": {
+    "max_edit_calls": 1,
+    "min_multi_edits": 1,
+    "max_turns": 5,
+    "description": "4 bugs should be fixed in a single multi-edit call"
+  }
 }
