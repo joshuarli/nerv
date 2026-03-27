@@ -134,6 +134,7 @@ impl InteractiveMode {
                 layout.footer.set_session_name(Some(name));
             }
             AgentSessionEvent::CompactThresholdChanged { pct } => {
+                self.compact_threshold = pct;
                 layout.footer.set_compact_threshold(pct);
             }
             AgentSessionEvent::Status { message, is_error } => {
