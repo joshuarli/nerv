@@ -1,0 +1,712 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use nerv::agent::agent::Agent;
+use nerv::core::*;
+use nerv::home_dir;
+use nerv::interactive::event_loop::InteractiveMode;
+use nerv::interactive::footer::FooterComponent;
+use nerv::interactive::layout::AppLayout;
+use nerv::interactive::statusbar::StatusBar;
+use nerv::session::SessionManager;
+use nerv::tools::*;
+use nerv::tui::components::editor::Editor;
+use nerv::tui::*;
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+
+    // Subcommands (run before TUI setup)
+    if let Some(cmd) = args.get(1).map(|s| s.as_str()) {
+        match cmd {
+            "-h" | "--help" => {
+                println!("nerv — coding agent for the terminal");
+                println!();
+                println!("Usage: nerv [options]");
+                println!("       nerv <command> [args]");
+                println!();
+                println!("Options:");
+                println!("  --resume           Open session picker immediately");
+                println!("  --resume <id>      Resume a specific session");
+                println!("  --log-level <lvl>  Set log level (debug, info, warn, error)");
+                println!("  -h, --help         Show this help");
+                println!("  --version          Show version");
+                println!();
+                println!("Environment:");
+                println!("  NERV_LOG=<level>   Set log level (default: warn)");
+                println!();
+                println!("Commands:");
+                println!("  add <repo> <quant>   Download GGUF from HuggingFace");
+                println!("  load [alias]         Run llama-server for a model");
+                println!("  models               List configured local models");
+                println!("  unload               Kill running llama-server");
+                return;
+            }
+            "--version" => {
+                println!("nerv {}", env!("CARGO_PKG_VERSION"));
+                return;
+            }
+            "add" | "load" | "models" | "unload" => {
+                let nerv_dir = home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".nerv");
+                std::fs::create_dir_all(&nerv_dir).ok();
+                handle_subcommand(cmd, &args[2..], &nerv_dir);
+                return;
+            }
+            _ => {}
+        }
+    }
+    if args.iter().any(|a| a == "--version") {
+        println!("nerv {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
+    let nerv_dir = home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".nerv");
+    std::fs::create_dir_all(&nerv_dir).ok();
+
+    nerv::log::init(&nerv_dir.join("debug.log"));
+    if let Some(pos) = args.iter().position(|a| a == "--log-level") {
+        if let Ok(level) = args.get(pos + 1).map(|s| s.parse()).unwrap_or(Err(())) {
+            nerv::log::set_level(level);
+        }
+    } else if let Ok(level) = std::env::var("NERV_LOG").unwrap_or_default().parse() {
+        nerv::log::set_level(level);
+    }
+    nerv::log::info("nerv starting");
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let config = NervConfig::load(&nerv_dir);
+    let mut auth = nerv::core::auth::AuthStorage::load(&nerv_dir);
+    let model_registry = Arc::new(ModelRegistry::new(&config, &mut auth));
+    let resources = nerv::core::resource_loader::load_resources(&cwd, &nerv_dir);
+    let skills = resources.skills.clone();
+    let loaded_files: Vec<(String, usize)> = resources
+        .context_files
+        .iter()
+        .map(|cf| {
+            let tokens = nerv::compaction::count_tokens(&cf.content);
+            (cf.path.display().to_string(), tokens)
+        })
+        .collect();
+    let system_prompt_tokens = resources
+        .system_prompt
+        .as_ref()
+        .map(|sp| nerv::compaction::count_tokens(sp));
+    let memory_tokens = resources
+        .memory
+        .as_ref()
+        .map(|m| nerv::compaction::count_tokens(m))
+        .filter(|&t| t > 0);
+    let append_prompt_tokens: Vec<usize> = resources
+        .append_prompts
+        .iter()
+        .map(|ap| nerv::compaction::count_tokens(ap))
+        .collect();
+
+    let mutation_queue = Arc::new(FileMutationQueue::new());
+    let mut tool_registry = ToolRegistry::new();
+    for tool in [
+        Arc::new(ReadTool::new(cwd.clone())) as Arc<dyn nerv::agent::agent::AgentTool>,
+        Arc::new(BashTool::new(cwd.clone())),
+        Arc::new(EditTool::new(cwd.clone(), mutation_queue.clone())),
+        Arc::new(WriteTool::new(cwd.clone())),
+        Arc::new(GrepTool::new(cwd.clone())),
+        Arc::new(FindTool::new(cwd.clone())),
+        Arc::new(LsTool::new(cwd.clone())),
+        Arc::new(MemoryTool::new(nerv_dir.clone())),
+    ] {
+        tool_registry.register(ToolDefinition { tool });
+    }
+
+    let provider_registry = Arc::new(std::sync::RwLock::new(
+        model_registry.provider_registry.clone(),
+    ));
+    let agent = Agent::new(provider_registry);
+    let cancel_flag = agent.cancel.clone();
+
+    // Compute per-component token costs before resources/tools are moved
+    let base_prompt_tokens =
+        nerv::compaction::count_tokens(nerv::core::system_prompt::DEFAULT_SYSTEM_PROMPT);
+    let tools_tokens = {
+        let tools = tool_registry.active_tools();
+        let mut tool_text = String::new();
+        for t in &tools {
+            tool_text.push_str(t.name());
+            tool_text.push(' ');
+            tool_text.push_str(t.description());
+            tool_text.push_str(&t.parameters_schema().to_string());
+        }
+        nerv::compaction::count_tokens(&tool_text)
+    };
+
+    let session_manager = SessionManager::new(&nerv_dir);
+
+    let mut session = AgentSession::new(
+        agent,
+        session_manager,
+        tool_registry,
+        model_registry.clone(),
+        resources,
+        cwd.clone(),
+    );
+    session.permissions_enabled = true;
+
+    // Channels (crossbeam)
+    let (cmd_tx, cmd_rx) = crossbeam_channel::bounded::<SessionCommand>(32);
+    let (event_tx, event_rx) = crossbeam_channel::bounded::<AgentSessionEvent>(256);
+
+    // Session thread
+    let evt_tx = event_tx.clone();
+    std::thread::spawn(move || session_task(cmd_rx, evt_tx, session));
+
+    // Build layout + TUI
+    let terminal = ProcessTerminal::new();
+    let mut tui = TUI::new(Box::new(terminal));
+
+    let cwd_str = cwd.to_string_lossy().to_string();
+    let mut footer = FooterComponent::new(&cwd_str);
+    if let Some(m) = model_registry.default_model(&config) {
+        footer.set_model(m);
+    }
+
+    let mut layout = AppLayout::new(Editor::new(), StatusBar::new(), footer);
+    tui.fixed_bottom = 8; // editor + statusbar + footer — never flushed to scrollback
+
+    let dim = nerv::interactive::theme::DIM;
+    let load = |chat: &mut nerv::interactive::chat_writer::ChatWriter, name: &str, tok: usize| {
+        chat.push_styled(dim, &format!("› Loading: {} ({} tok)", name, tok));
+    };
+    load(&mut layout.chat, "base prompt", base_prompt_tokens);
+    load(&mut layout.chat, "tools", tools_tokens);
+    for (path, tokens) in &loaded_files {
+        load(&mut layout.chat, path, *tokens);
+    }
+    if let Some(tok) = system_prompt_tokens {
+        load(&mut layout.chat, "system-prompt.md", tok);
+    }
+    if let Some(tok) = memory_tokens {
+        load(&mut layout.chat, "memory.md", tok);
+    }
+    for (i, tok) in append_prompt_tokens.iter().enumerate() {
+        load(&mut layout.chat, &format!("append prompt {}", i + 1), *tok);
+    }
+
+    layout.chat.push_styled(
+        nerv::interactive::theme::WARN,
+        "NERV console ready. Awaiting your command.",
+    );
+
+    tui.terminal_mut().start();
+    tui.request_render(true); // initial render
+    tui.maybe_render(&layout);
+
+    let repo_root = nerv::find_repo_root(&cwd).map(|p| p.to_string_lossy().to_string());
+    let mut interactive = InteractiveMode::new(
+        cmd_tx,
+        model_registry.clone(),
+        model_registry.default_model(&config).cloned(),
+        skills,
+        repo_root,
+    );
+
+    layout
+        .editor
+        .set_completions(interactive.slash_completions());
+
+    // Set default model on the agent via command
+    if let Some(m) = model_registry.default_model(&config) {
+        let _ = interactive.cmd_tx().try_send(SessionCommand::SetModel {
+            provider: m.provider_name.clone(),
+            model_id: m.id.clone(),
+        });
+    }
+
+    // Handle --resume CLI flag
+    let resume_pos = args.iter().position(|a| a == "--resume");
+    if let Some(pos) = resume_pos {
+        if let Some(id) = args.get(pos + 1) {
+            // --resume <id> — load directly
+            let _ = interactive
+                .cmd_tx()
+                .send(SessionCommand::LoadSession { id: id.clone() });
+        } else {
+            // --resume — open picker
+            let _ = interactive.cmd_tx().send(SessionCommand::ListSessions {
+                repo_root: interactive.repo_root(),
+            });
+        }
+    }
+
+    // Health check custom providers (non-blocking, retries until online)
+    for provider_cfg in &config.custom_providers {
+        let name = provider_cfg.name.clone();
+        let url = format!("{}/models", provider_cfg.base_url);
+        let tx = event_tx.clone();
+        std::thread::spawn(move || {
+            let agent = ureq::Agent::config_builder()
+                .timeout_global(Some(std::time::Duration::from_secs(2)))
+                .build()
+                .new_agent();
+            loop {
+                let online = agent.get(&url).call().is_ok();
+                let _ = tx.send(AgentSessionEvent::ProviderHealth {
+                    provider: name.clone(),
+                    online,
+                });
+                if online {
+                    break;
+                }
+                std::thread::sleep(Duration::from_secs(3));
+            }
+        });
+    }
+
+    // Stdin reader thread
+    let (stdin_tx, stdin_rx) = crossbeam_channel::bounded::<Vec<u8>>(64);
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = [0u8; 1024];
+        loop {
+            match std::io::stdin().read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if stdin_tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // Register signals
+    let sigint_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let _ = signal_hook::flag::register(signal_hook::consts::SIGINT, sigint_flag.clone());
+    let sigwinch_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let _ = signal_hook::flag::register(signal_hook::consts::SIGWINCH, sigwinch_flag.clone());
+
+    let mut stdin_buf = StdinBuffer::new();
+    let tick_interval = Duration::from_millis(100);
+
+    let mut should_quit = false;
+
+    // Main event loop — polling with crossbeam select + timeout
+    loop {
+        // Check SIGINT — second ^C while already cancelling force-quits
+        if sigint_flag.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) || !interactive.is_streaming {
+                tui.terminal_mut().stop();
+                break;
+            }
+            cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        if should_quit {
+            break;
+        }
+
+        // Poll all sources with a short timeout
+        crossbeam_channel::select! {
+            recv(stdin_rx) -> msg => {
+                let Ok(bytes) = msg else { break };
+
+                let events = stdin_buf.process(&bytes);
+                for event in events {
+                    match event {
+                        StdinEvent::Sequence(ref seq) => {
+                            // Session picker input
+                            if interactive.session_picker.is_some() {
+                                if keys::matches_key(seq, "up") {
+                                    interactive.session_picker.as_mut().unwrap().move_up();
+                                } else if keys::matches_key(seq, "down") {
+                                    interactive.session_picker.as_mut().unwrap().move_down();
+                                } else if keys::matches_key(seq, "enter") {
+                                    if let Some(id) = interactive.session_picker.as_ref().unwrap().selected_id().map(|s| s.to_string()) {
+                                        pop_picker(&mut interactive, &mut layout);
+                                        let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::LoadSession { id });
+                                    }
+                                } else if keys::matches_key(seq, "escape") || keys::matches_key(seq, "ctrl+c") {
+                                    pop_picker(&mut interactive, &mut layout);
+                                }
+                                // Re-render picker if still active
+                                render_picker(&mut interactive, &mut layout);
+                                tui.request_render(false); tui.maybe_render(&layout);
+                                continue;
+                            }
+
+                            // Permission prompt input (y/n)
+                            if interactive.pending_permission.is_some() {
+                                let approved = if seq == b"y" || seq == b"Y" {
+                                    Some(true)
+                                } else if seq == b"n" || seq == b"N"
+                                    || keys::matches_key(seq, "escape")
+                                    || keys::matches_key(seq, "ctrl+c")
+                                    || keys::matches_key(seq, "enter")
+                                {
+                                    Some(false)
+                                } else {
+                                    None
+                                };
+                                if let Some(approved) = approved {
+                                    if let Some(tx) = interactive.pending_permission.take() {
+                                        let _ = tx.send(approved);
+                                    }
+                                    interactive.status_message = None;
+                                    interactive.status_is_error = false;
+                                    tui.request_render(false); tui.maybe_render(&layout);
+                                }
+                                continue;
+                            }
+
+                            if keys::matches_key(seq, "ctrl+c") {
+                                if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) || !interactive.is_streaming {
+                                    tui.terminal_mut().stop();
+                                    should_quit = true; break;
+                                }
+                                cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                                layout.statusbar.cancel_streaming();
+                                tui.request_render(false); tui.maybe_render(&layout);
+                                continue;
+                            }
+                            if keys::matches_key(seq, "escape") || keys::matches_key(seq, "ctrl+d") {
+                                cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                                tui.terminal_mut().stop();
+                                should_quit = true; break;
+                            }
+                            if keys::matches_key(seq, "ctrl+z") {
+                                tui.suspend();
+                                unsafe { libc::raise(libc::SIGSTOP) };
+                                tui.resume(); tui.maybe_render(&layout); continue;
+                            }
+                            if keys::matches_key(seq, "ctrl+t") {
+                                let next = interactive.cycle_thinking();
+                                let _ = interactive.cmd_tx().try_send(SessionCommand::SetThinkingLevel { level: next });
+                                layout.footer.set_thinking(next);
+                                tui.request_render(false); tui.maybe_render(&layout); continue;
+                            }
+                            if keys::matches_key(seq, "ctrl+g") {
+                                tui.terminal_mut().stop();
+                                layout.editor.open_in_external_editor();
+                                tui.terminal_mut().restart();
+                                tui.request_render(true); tui.maybe_render(&layout); continue;
+                            }
+                            if keys::matches_key(seq, "shift+enter") {
+                                layout.editor.handle_input(b"\n");
+                                tui.request_render(false); continue;
+                            }
+                            if keys::matches_key(seq, "enter") {
+                                let text = layout.editor.take_text();
+                                if !text.is_empty() {
+                                    interactive.handle_submit(text);
+                                    if interactive.quit_requested { tui.terminal_mut().stop(); should_quit = true; break; }
+                                    layout.footer.set_thinking(interactive.current_thinking());
+                                    if let Some(m) = interactive.current_model() { layout.footer.set_model(m); }
+                                    if let Some(msg) = interactive.status_message.take() {
+                                        push_status(&mut layout, &msg, interactive.status_is_error);
+                                    }
+                                    layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
+                                }
+                                tui.request_render(false); continue;
+                            }
+                            // Queue navigation
+                            if keys::matches_key(seq, "up") && interactive.is_streaming && !interactive.pending_messages.is_empty() {
+                                if let Some(idx) = interactive.editing_queue_idx {
+                                    let current = layout.editor.text().to_string();
+                                    if !current.is_empty() { interactive.pending_messages[idx] = current; }
+                                }
+                                if let Some(text) = interactive.edit_queue_up() {
+                                    layout.editor.set_text(&text); tui.request_render(false); tui.maybe_render(&layout); continue;
+                                }
+                            }
+                            if keys::matches_key(seq, "down") && interactive.editing_queue_idx.is_some() {
+                                if let Some(idx) = interactive.editing_queue_idx {
+                                    let current = layout.editor.text().to_string();
+                                    if !current.is_empty() { interactive.pending_messages[idx] = current; }
+                                }
+                                if let Some(text) = interactive.edit_queue_down() {
+                                    layout.editor.set_text(&text); tui.request_render(false); tui.maybe_render(&layout); continue;
+                                }
+                            }
+                            if keys::matches_key(seq, "backspace") && interactive.editing_queue_idx.is_some()
+                                && layout.editor.is_empty()
+                            {
+                                interactive.remove_editing_queue_item();
+                                layout.editor.clear();
+                                layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
+                                tui.request_render(false); tui.maybe_render(&layout); continue;
+                            }
+                            // History navigation: up/down when not streaming and editor is empty
+                            if keys::matches_key(seq, "up") && !interactive.is_streaming
+                                && layout.editor.is_empty()
+                            {
+                                let current = layout.editor.text();
+                                if let Some(text) = interactive.history_up(&current) {
+                                    layout.editor.set_text(&text);
+                                    tui.request_render(false); tui.maybe_render(&layout); continue;
+                                }
+                            }
+                            if keys::matches_key(seq, "down") && !interactive.is_streaming
+                                && interactive.history_index.is_some()
+                                && let Some(text) = interactive.history_down()
+                            {
+                                layout.editor.set_text(&text);
+                                tui.request_render(false); tui.maybe_render(&layout); continue;
+                            }
+
+                            layout.editor.handle_input(seq);
+                        }
+                        StdinEvent::Paste(text) => {
+                            layout.editor.insert_paste(&text);
+                        }
+                    }
+                }
+                tui.request_render(false); tui.maybe_render(&layout);
+            }
+            recv(event_rx) -> msg => {
+                let Ok(event) = msg else { break };
+                // Clear cancel flag when streaming ends so next ^C works normally
+                if matches!(event, nerv::core::AgentSessionEvent::Agent(nerv::agent::types::AgentEvent::AgentEnd { .. })) {
+                    cancel_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+                process_event(event, &mut interactive, &mut layout, &mut tui);
+                tui.maybe_render(&layout);
+            }
+            default(tick_interval) => {
+                // SIGWINCH — terminal resized
+                if sigwinch_flag.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                    tui.request_render(true); // full redraw on resize
+                }
+                if interactive.is_streaming {
+                    layout.statusbar.tick();
+                    tui.request_render(false);
+                }
+                tui.maybe_render(&layout);
+            }
+        }
+    }
+
+    // Grace period for session flush
+    std::thread::sleep(Duration::from_millis(200));
+
+    if let Some(id) = &interactive.session_id {
+        let short = if id.len() > 8 { &id[..8] } else { id };
+        // Print below the shell prompt line — println scrolls the terminal
+        println!("To resume this session: nerv --resume {}", short);
+    }
+}
+
+fn process_event(
+    event: nerv::core::AgentSessionEvent,
+    interactive: &mut InteractiveMode,
+    layout: &mut AppLayout,
+    tui: &mut TUI,
+) {
+    interactive.handle_event(event, layout, tui);
+    if let Some(msg) = interactive.status_message.take() {
+        push_status(layout, &msg, interactive.status_is_error);
+        tui.request_render(false);
+    }
+    if interactive.session_picker.is_some() {
+        render_picker(interactive, layout);
+        tui.request_render(false);
+    }
+}
+
+fn pop_picker(interactive: &mut InteractiveMode, layout: &mut AppLayout) {
+    interactive.session_picker = None;
+    layout.chat.clear_picker();
+}
+
+fn render_picker(interactive: &mut InteractiveMode, layout: &mut AppLayout) {
+    let Some(ref picker) = interactive.session_picker else {
+        return;
+    };
+    let repo = interactive.repo_root();
+    let lines = picker.render_lines(repo.as_deref());
+    layout.chat.set_picker(lines);
+}
+
+fn push_status(layout: &mut AppLayout, msg: &str, is_error: bool) {
+    let style = if is_error {
+        nerv::interactive::theme::ERROR
+    } else {
+        nerv::interactive::theme::MUTED
+    };
+    layout.chat.push_styled(style, msg);
+}
+
+fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
+    use nerv::core::local_models::*;
+
+    match cmd {
+        "models" => {
+            let models = load_models(nerv_dir);
+            if models.is_empty() {
+                println!("No models configured. Use `nerv add <hf-repo> [quant]` to add one.");
+                return;
+            }
+            for m in &models {
+                use nerv::interactive::theme;
+                let status = if is_healthy(m.port) {
+                    format!("{}●{}", theme::SUCCESS, theme::RESET)
+                } else {
+                    format!("{}○{}", theme::FOOTER_DIM, theme::RESET)
+                };
+                println!(
+                    "  {} {:<20} ctx:{:<6} gpu:{:<3} port:{}  {}",
+                    status, m.alias, m.context_length, m.gpu_layers, m.port, m.path,
+                );
+            }
+        }
+        "add" => {
+            if args.len() < 2 {
+                eprintln!("Usage: nerv add <hf-repo> <quant>");
+                eprintln!(
+                    "Example: nerv add Jackrong/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF Q4_K_M"
+                );
+                std::process::exit(1);
+            }
+            let hf_repo = &args[0];
+            let quant = &args[1];
+
+            let cache_dir = nerv_dir.join("models");
+            match download_gguf(hf_repo, quant, &cache_dir) {
+                Ok(local_path) => {
+                    let mut models = load_models(nerv_dir);
+
+                    // Derive alias from repo name
+                    let alias = hf_repo
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(hf_repo)
+                        .to_lowercase()
+                        .replace("-gguf", "")
+                        .chars()
+                        .take(30)
+                        .collect::<String>();
+
+                    if models.iter().any(|m| m.alias == alias) {
+                        println!("Model '{}' already in models.json", alias);
+                        return;
+                    }
+
+                    // Auto-detect hardware and compute defaults
+                    let mut model = recommended_defaults(&local_path);
+                    model.alias = alias.clone();
+                    model.hf_repo = Some(hf_repo.to_string());
+
+                    println!(
+                        "Hardware: {:.0}GB RAM, {} cores",
+                        sysctl_mem_gb(),
+                        sysctl_cores(),
+                    );
+                    println!(
+                        "Defaults: ctx:{} gpu:{} batch:{} threads:{}",
+                        model.context_length,
+                        model.gpu_layers,
+                        model
+                            .extra_args
+                            .iter()
+                            .position(|a| a == "-b")
+                            .and_then(|i| model.extra_args.get(i + 1))
+                            .map(|s| s.as_str())
+                            .unwrap_or("?"),
+                        model
+                            .extra_args
+                            .iter()
+                            .position(|a| a == "-t")
+                            .and_then(|i| model.extra_args.get(i + 1))
+                            .map(|s| s.as_str())
+                            .unwrap_or("?"),
+                    );
+
+                    models.push(model);
+
+                    if let Err(e) = save_models(nerv_dir, &models) {
+                        eprintln!("Failed to save models.json: {}", e);
+                    } else {
+                        println!("Added '{}' to ~/.nerv/models.json", alias);
+                        println!("Run: nerv load {}", alias);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Download failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        "load" => {
+            let models = load_models(nerv_dir);
+            if models.is_empty() {
+                eprintln!("No models configured. Use `nerv add <hf-repo> [quant]` first.");
+                std::process::exit(1);
+            }
+
+            let model = if let Some(alias) = args.first() {
+                models.iter().find(|m| m.alias == *alias).cloned()
+            } else if models.len() == 1 {
+                Some(models[0].clone())
+            } else {
+                println!("Available models:");
+                for (i, m) in models.iter().enumerate() {
+                    println!("  [{}] {}", i + 1, m.alias);
+                }
+                print!("Select: ");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                let mut input = String::new();
+                let _ = std::io::stdin().read_line(&mut input);
+                let idx: usize = input.trim().parse().unwrap_or(0);
+                if idx >= 1 && idx <= models.len() {
+                    Some(models[idx - 1].clone())
+                } else {
+                    None
+                }
+            };
+
+            let Some(model) = model else {
+                eprintln!("Model not found");
+                std::process::exit(1);
+            };
+
+            if !model.resolved_path().exists() {
+                eprintln!("Model file not found: {}", model.resolved_path().display());
+                std::process::exit(1);
+            }
+
+            let server = find_llama_server().unwrap_or_else(|| {
+                eprintln!("llama-server not found on PATH. Install: brew install llama.cpp");
+                std::process::exit(1);
+            });
+
+            let server_args = model.server_args();
+            eprintln!("  {} {}", server.display(), server_args.join(" "));
+
+            // exec — replaces this process with llama-server
+            use std::ffi::CString;
+            let c_prog = CString::new(server.to_string_lossy().as_bytes()).unwrap();
+            let mut c_args: Vec<CString> = vec![c_prog.clone()];
+            for a in &server_args {
+                c_args.push(CString::new(a.as_bytes()).unwrap());
+            }
+            let c_ptrs: Vec<*const libc::c_char> = c_args
+                .iter()
+                .map(|a| a.as_ptr())
+                .chain(std::iter::once(std::ptr::null()))
+                .collect();
+            unsafe { libc::execvp(c_prog.as_ptr(), c_ptrs.as_ptr()) };
+            eprintln!("exec failed");
+            std::process::exit(1);
+        }
+        "unload" => {
+            println!("With exec mode, just Ctrl+C the llama-server process.");
+        }
+        _ => {
+            eprintln!("Unknown command: {}", cmd);
+            std::process::exit(1);
+        }
+    }
+}

@@ -1,0 +1,73 @@
+use std::path::{Path, PathBuf};
+
+use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::errors::ToolError;
+
+pub struct WriteTool {
+    cwd: PathBuf,
+}
+
+impl WriteTool {
+    pub fn new(cwd: PathBuf) -> Self {
+        Self { cwd }
+    }
+    fn resolve_path(&self, path: &str) -> PathBuf {
+        let p = Path::new(path);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            self.cwd.join(p)
+        }
+    }
+}
+
+impl AgentTool for WriteTool {
+    fn name(&self) -> &str {
+        "write"
+    }
+    fn description(&self) -> &str {
+        "Write content to a file. Creates parent directories if needed."
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})
+    }
+    fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
+        if input.get("path").and_then(|v| v.as_str()).is_none() {
+            return Err(ToolError::InvalidArguments {
+                message: "path is required".into(),
+            });
+        }
+        if input.get("content").and_then(|v| v.as_str()).is_none() {
+            return Err(ToolError::InvalidArguments {
+                message: "content is required".into(),
+            });
+        }
+        Ok(())
+    }
+    fn execute(&self, input: serde_json::Value, _update: UpdateCallback) -> ToolResult {
+        let path_str = input["path"].as_str().unwrap_or("");
+        let content = input["content"].as_str().unwrap_or("");
+        let abs_path = self.resolve_path(path_str);
+        if let Some(parent) = abs_path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            return ToolResult {
+                content: format!("Error creating directories: {}", e),
+                details: None,
+                is_error: true,
+            };
+        }
+        match std::fs::write(&abs_path, content) {
+            Ok(()) => ToolResult {
+                content: format!("Wrote {} bytes to {}", content.len(), path_str),
+                details: None,
+                is_error: false,
+            },
+            Err(e) => ToolResult {
+                content: format!("Error writing {}: {}", path_str, e),
+                details: None,
+                is_error: true,
+            },
+        }
+    }
+}

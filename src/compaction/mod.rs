@@ -1,0 +1,225 @@
+pub mod summarize;
+
+use crate::agent::types::{AgentMessage, ContentBlock, ContentItem, Usage};
+use crate::session::types::SessionEntry;
+
+pub struct CompactionSettings {
+    pub enabled: bool,
+    pub reserve_tokens: usize,
+    pub keep_recent_tokens: usize,
+}
+
+impl Default for CompactionSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            reserve_tokens: 16_384,
+            keep_recent_tokens: 20_000,
+        }
+    }
+}
+
+/// Count tokens using tiktoken (cl100k_base, used by Claude and GPT-4).
+pub fn count_tokens(text: &str) -> usize {
+    let enc = tiktoken::get_encoding("cl100k_base").unwrap();
+    enc.encode(text).len()
+}
+
+/// Estimate tokens for an AgentMessage.
+pub fn estimate_tokens(msg: &AgentMessage) -> usize {
+    match msg {
+        AgentMessage::User { content, .. } => {
+            content_tokens(content) + 4 // role overhead
+        }
+        AgentMessage::Assistant(a) => {
+            let mut tokens = 4; // role overhead
+            for block in &a.content {
+                match block {
+                    ContentBlock::Text { text } => tokens += count_tokens(text),
+                    ContentBlock::Thinking { thinking } => tokens += count_tokens(thinking),
+                    ContentBlock::ToolCall {
+                        name, arguments, ..
+                    } => {
+                        tokens += count_tokens(name) + count_tokens(&arguments.to_string()) + 10;
+                    }
+                }
+            }
+            tokens
+        }
+        AgentMessage::ToolResult { content, .. } => content_tokens(content) + 4,
+        AgentMessage::Custom { content, .. } => content_tokens(content) + 4,
+        AgentMessage::BashExecution {
+            command, output, ..
+        } => count_tokens(command) + count_tokens(output) + 4,
+        AgentMessage::CompactionSummary { summary, .. } => count_tokens(summary) + 4,
+        AgentMessage::BranchSummary { summary, .. } => count_tokens(summary) + 4,
+    }
+}
+
+fn content_tokens(content: &[ContentItem]) -> usize {
+    content
+        .iter()
+        .map(|item| match item {
+            ContentItem::Text { text } => count_tokens(text),
+            ContentItem::Image { .. } => 1200, // image token estimate
+        })
+        .sum()
+}
+
+/// Calculate context tokens from the last API usage response.
+pub fn calculate_context_tokens(usage: &Usage) -> u32 {
+    usage.input + usage.output + usage.cache_read + usage.cache_write
+}
+
+pub fn should_compact(tokens: usize, context_window: u32, settings: &CompactionSettings) -> bool {
+    if !settings.enabled {
+        return false;
+    }
+    tokens > (context_window as usize).saturating_sub(settings.reserve_tokens)
+}
+
+pub struct CompactionResult {
+    pub summary: String,
+    pub first_kept_entry_id: String,
+    pub tokens_before: u32,
+}
+
+/// Result of finding a cut point for compaction.
+pub struct CutPointResult {
+    /// Index of first entry to keep.
+    pub first_kept_entry_index: usize,
+    /// Index of user message that starts the turn being split, or None.
+    pub turn_start_index: Option<usize>,
+    /// Whether this cut splits a turn (cut point is not a user message).
+    pub is_split_turn: bool,
+}
+
+/// Find valid cut points: indices of entries that can be cut at.
+/// Never cut at tool results (they must follow their tool call).
+fn find_valid_cut_points(entries: &[SessionEntry], start: usize, end: usize) -> Vec<usize> {
+    let mut points = Vec::new();
+    for (i, entry) in entries.iter().enumerate().take(end).skip(start) {
+        match entry {
+            SessionEntry::Message(me) => {
+                match &me.message {
+                    AgentMessage::User { .. }
+                    | AgentMessage::Assistant(_)
+                    | AgentMessage::Custom { .. }
+                    | AgentMessage::BashExecution { .. }
+                    | AgentMessage::CompactionSummary { .. }
+                    | AgentMessage::BranchSummary { .. } => {
+                        points.push(i);
+                    }
+                    AgentMessage::ToolResult { .. } => {} // never cut at tool results
+                }
+            }
+            SessionEntry::BranchSummary(_) | SessionEntry::CustomMessage(_) => {
+                points.push(i);
+            }
+            _ => {} // metadata entries: skip
+        }
+    }
+    points
+}
+
+/// Find the user message that starts the turn containing `entry_index`.
+fn find_turn_start(entries: &[SessionEntry], entry_index: usize, start: usize) -> Option<usize> {
+    for i in (start..=entry_index).rev() {
+        if let SessionEntry::Message(me) = &entries[i]
+            && matches!(
+                me.message,
+                AgentMessage::User { .. } | AgentMessage::BashExecution { .. }
+            )
+        {
+            return Some(i);
+        }
+        if matches!(
+            entries[i],
+            SessionEntry::BranchSummary(_) | SessionEntry::CustomMessage(_)
+        ) {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Get message from a session entry (if it has one).
+fn entry_message(entry: &SessionEntry) -> Option<&AgentMessage> {
+    match entry {
+        SessionEntry::Message(me) => Some(&me.message),
+        SessionEntry::CustomMessage(me) => Some(&me.message),
+        _ => None,
+    }
+}
+
+/// Find the cut point that keeps approximately `keep_recent_tokens`.
+///
+/// Algorithm: Walk backwards from newest, accumulating token counts.
+/// Stop when we exceed the budget. Cut at the closest valid cut point.
+pub fn find_cut_point(
+    entries: &[SessionEntry],
+    start: usize,
+    end: usize,
+    keep_recent_tokens: usize,
+) -> CutPointResult {
+    let cut_points = find_valid_cut_points(entries, start, end);
+
+    if cut_points.is_empty() {
+        return CutPointResult {
+            first_kept_entry_index: start,
+            turn_start_index: None,
+            is_split_turn: false,
+        };
+    }
+
+    let mut accumulated = 0usize;
+    let mut cut_index = cut_points[0];
+
+    // Walk backwards from newest, accumulating token estimates
+    for i in (start..end).rev() {
+        let Some(msg) = entry_message(&entries[i]) else {
+            continue;
+        };
+        accumulated += estimate_tokens(msg);
+
+        if accumulated >= keep_recent_tokens {
+            // Find the closest valid cut point at or after this entry
+            for &cp in &cut_points {
+                if cp >= i {
+                    cut_index = cp;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    // Include preceding non-message entries (settings changes, etc.)
+    while cut_index > start {
+        let prev = &entries[cut_index - 1];
+        if matches!(prev, SessionEntry::Compaction(_)) {
+            break;
+        }
+        if matches!(prev, SessionEntry::Message(_)) {
+            break;
+        }
+        cut_index -= 1;
+    }
+
+    // Determine if this is a split turn
+    let is_user_message = matches!(
+        &entries[cut_index],
+        SessionEntry::Message(me) if matches!(me.message, AgentMessage::User { .. })
+    );
+    let turn_start = if is_user_message {
+        None
+    } else {
+        find_turn_start(entries, cut_index, start)
+    };
+
+    CutPointResult {
+        first_kept_entry_index: cut_index,
+        turn_start_index: turn_start,
+        is_split_turn: turn_start.is_some(),
+    }
+}
