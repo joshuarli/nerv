@@ -876,11 +876,46 @@ body{font-family:-apple-system,system-ui,'Segoe UI',sans-serif;max-width:720px;m
 .assistant blockquote{border-left:3px solid #ddd;padding-left:1rem;color:#555;margin:0.75rem 0}
 .assistant ul,.assistant ol{padding-left:1.5rem}
 .tool{background:#f9f9f9;border:1px solid #eee;border-radius:6px;padding:0.75rem;margin:0.5rem 0;font-family:'SF Mono',Menlo,monospace;font-size:0.8rem;white-space:pre-wrap;color:#555;max-height:300px;overflow-y:auto}
+.tool-wrapper{margin:0.5rem 0}
+.tool-header{display:flex;align-items:center;justify-content:space-between;background:#f9f9f9;padding:0.5rem 0.75rem;border:1px solid #eee;border-radius:6px 6px 0 0;cursor:pointer;user-select:none}
+.tool-header.collapsed{border-radius:6px}
+.tool-header:hover{background:#f5f5f5}
+.tool-output{border:1px solid #eee;border-top:none;border-radius:0 0 6px 6px;padding:0.75rem;font-family:'SF Mono',Menlo,monospace;font-size:0.8rem;white-space:pre-wrap;color:#555;max-height:300px;overflow-y:auto}
+.tool-output.hidden{display:none}
+.toggle-btn{padding:0.25rem 0.5rem;background:#e5e5e5;border:1px solid #ccc;border-radius:3px;cursor:pointer;font-size:0.75rem;color:#666;transition:background 0.2s}
+.toggle-btn:hover{background:#d5d5d5}
 .meta{font-size:0.75rem;color:#999;margin-top:0.25rem}
+.controls{margin-bottom:1.5rem;padding:1rem;background:#fafafa;border-radius:6px;border:1px solid #eee}
+.controls button{padding:0.5rem 1rem;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:500;transition:background 0.2s}
+.controls button:hover{background:#1d4ed8}
 hr{border:none;border-top:1px solid #eee;margin:2rem 0}
 </style>
 </head>
 <body>
+<div class="controls">
+<button onclick="toggleAllTools()">Collapse/Expand All Tool Outputs</button>
+</div>
+<script>
+function toggleAllTools() {
+  const outputs = document.querySelectorAll('.tool-output');
+  const firstHidden = Array.from(outputs).some(el => el.classList.contains('hidden'));
+  outputs.forEach(el => {
+    if (firstHidden) {
+      el.classList.remove('hidden');
+      el.previousElementSibling.classList.remove('collapsed');
+    } else {
+      el.classList.add('hidden');
+      el.previousElementSibling.classList.add('collapsed');
+    }
+  });
+}
+function toggleTool(btn, outputId) {
+  const output = document.getElementById(outputId);
+  const header = btn.parentElement;
+  output.classList.toggle('hidden');
+  header.classList.toggle('collapsed');
+}
+</script>
 "#,
     );
 
@@ -908,6 +943,7 @@ hr{border:none;border-top:1px solid #eee;margin:2rem 0}
         entries
     };
 
+    let mut tool_counter = 0;
     for entry in entries {
         if let crate::session::types::SessionEntry::SystemPrompt(sp) = entry {
             html.push_str(&format!(
@@ -941,13 +977,16 @@ hr{border:none;border-top:1px solid #eee;margin:2rem 0}
                     html.push_str("</div>\n");
                 }
                 AgentMessage::ToolResult { content, .. } => {
-                    html.push_str("<div class='tool'>");
+                    let tool_id = format!("tool-{}", tool_counter);
+                    tool_counter += 1;
+                    html.push_str(&format!("<div class='tool-wrapper'><div class='tool-header' onclick=\"toggleTool(this.querySelector('.toggle-btn'), '{}')\"><span>Tool Output</span><button class='toggle-btn' onclick='event.stopPropagation()'>Hide</button></div>", tool_id));
+                    html.push_str(&format!("<div class='tool-output' id='{}'>\n", tool_id));
                     for item in content {
                         if let ContentItem::Text { text } = item {
                             html.push_str(&html_escape(text));
                         }
                     }
-                    html.push_str("</div>\n");
+                    html.push_str("</div></div>\n");
                 }
                 _ => {}
             }
