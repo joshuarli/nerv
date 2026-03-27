@@ -1,4 +1,7 @@
 /// Minimal line-level unified diff (replaces `similar` crate).
+/// Implements Myers diff algorithm for line sequences.
+
+use std::fmt::Write;
 
 pub fn unified_diff(old: &str, new: &str, old_label: &str, new_label: &str) -> String {
     let old_lines: Vec<&str> = old.lines().collect();
@@ -15,6 +18,7 @@ enum Edit<'a> {
 }
 
 /// O(ND) Myers diff producing a minimal edit script.
+/// Uses a single flat buffer for trace storage to minimize allocations.
 fn diff_lines<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
     let n = old.len();
     let m = new.len();
@@ -27,67 +31,65 @@ fn diff_lines<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
     }
 
     let max_d = n + m;
-    let offset = max_d; // v index offset so negative diagonals work
     let vsize = 2 * max_d + 1;
+    let offset = max_d;
+
+    // Single flat buffer: trace[step * vsize .. (step+1) * vsize]
+    let mut trace: Vec<usize> = Vec::new();
     let mut v = vec![0usize; vsize];
-    let mut trace: Vec<Vec<usize>> = Vec::new();
 
     let mut found_d = 0;
-    #[allow(unused_assignments)]
     'search: for d in 0..=max_d {
-        trace.push(v.clone());
-        let mut new_v = v.clone();
+        trace.extend_from_slice(&v);
+
         let lo = -(d as isize);
         let hi = d as isize;
         let mut k = lo;
         while k <= hi {
             let ki = (k + offset as isize) as usize;
             let mut x = if k == lo || (k != hi && v[ki - 1] < v[ki + 1]) {
-                v[ki + 1] // move down (insert)
+                v[ki + 1]
             } else {
-                v[ki - 1] + 1 // move right (delete)
+                v[ki - 1] + 1
             };
             let mut y = (x as isize - k) as usize;
 
-            // Follow diagonal (equal lines)
             while x < n && y < m && old[x] == new[y] {
                 x += 1;
                 y += 1;
             }
 
-            new_v[ki] = x;
+            v[ki] = x;
             if x >= n && y >= m {
                 found_d = d;
                 break 'search;
             }
             k += 2;
         }
-        v = new_v;
     }
 
     // Backtrack from (n, m) to (0, 0)
     let mut x = n;
     let mut y = m;
-    let mut edits: Vec<Edit<'a>> = Vec::new();
+    let mut edits: Vec<Edit<'a>> = Vec::with_capacity(n + m);
 
     for d in (1..=found_d).rev() {
-        let prev_v = &trace[d];
+        let prev_v = &trace[d * vsize..(d + 1) * vsize];
         let k = x as isize - y as isize;
         let ki = (k + offset as isize) as usize;
 
         let prev_k = if k == -(d as isize)
             || (k != d as isize && prev_v[ki - 1] < prev_v[ki + 1])
         {
-            k + 1 // came from above (insert)
+            k + 1
         } else {
-            k - 1 // came from left (delete)
+            k - 1
         };
 
         let pki = (prev_k + offset as isize) as usize;
         let prev_x = prev_v[pki];
         let prev_y = (prev_x as isize - prev_k) as usize;
 
-        // Diagonal portion (equal lines)
         while x > prev_x + if prev_k < k { 1 } else { 0 }
             && y > prev_y + if prev_k > k { 1 } else { 0 }
         {
@@ -97,17 +99,14 @@ fn diff_lines<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
         }
 
         if prev_k < k {
-            // Delete (moved right)
             x -= 1;
             edits.push(Edit::Delete(old[x]));
         } else {
-            // Insert (moved down)
             y -= 1;
             edits.push(Edit::Insert(new[y]));
         }
     }
 
-    // Remaining diagonal at d=0
     while x > 0 && y > 0 {
         x -= 1;
         y -= 1;
@@ -123,9 +122,10 @@ fn format_unified(edits: &[Edit], old_label: &str, new_label: &str, context: usi
         return format!("--- {}\n+++ {}\n", old_label, new_label);
     }
 
-    let mut out = format!("--- {}\n+++ {}\n", old_label, new_label);
+    let mut out = String::with_capacity(256);
+    let _ = write!(out, "--- {}\n+++ {}\n", old_label, new_label);
 
-    // Find hunk boundaries: ranges of changes with context lines
+    // Find hunk boundaries
     let mut change_ranges: Vec<(usize, usize)> = Vec::new();
     let mut i = 0;
     while i < edits.len() {
@@ -137,15 +137,13 @@ fn format_unified(edits: &[Edit], old_label: &str, new_label: &str, context: usi
                     end += 1;
                     continue;
                 }
-                // Check if there's another change within context*2 gap
                 let gap_start = end;
                 while end < edits.len() && matches!(edits[end], Edit::Equal(_)) {
                     end += 1;
                 }
                 if end < edits.len() && (end - gap_start) <= context * 2 {
-                    continue; // merge hunks
+                    continue;
                 }
-                // Gap too large — end hunk at gap_start + context
                 end = (gap_start + context).min(edits.len());
                 break;
             }
@@ -157,7 +155,6 @@ fn format_unified(edits: &[Edit], old_label: &str, new_label: &str, context: usi
     }
 
     for (start, end) in change_ranges {
-        // Compute old/new line numbers
         let mut old_start = 1;
         let mut new_start = 1;
         for e in &edits[..start] {
@@ -180,29 +177,21 @@ fn format_unified(edits: &[Edit], old_label: &str, new_label: &str, context: usi
             .filter(|e| matches!(e, Edit::Equal(_) | Edit::Insert(_)))
             .count();
 
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "@@ -{},{} +{},{} @@\n",
-            old_start, old_count, new_start, new_count
-        ));
+            old_start, old_count, new_start, new_count,
+        );
 
         for e in &edits[start..end] {
-            match e {
-                Edit::Equal(l) => {
-                    out.push(' ');
-                    out.push_str(l);
-                    out.push('\n');
-                }
-                Edit::Delete(l) => {
-                    out.push('-');
-                    out.push_str(l);
-                    out.push('\n');
-                }
-                Edit::Insert(l) => {
-                    out.push('+');
-                    out.push_str(l);
-                    out.push('\n');
-                }
-            }
+            let (prefix, text) = match e {
+                Edit::Equal(l) => (' ', *l),
+                Edit::Delete(l) => ('-', *l),
+                Edit::Insert(l) => ('+', *l),
+            };
+            out.push(prefix);
+            out.push_str(text);
+            out.push('\n');
         }
     }
 
@@ -262,7 +251,6 @@ mod tests {
         let old = (0..20).map(|i| format!("line{}", i)).collect::<Vec<_>>().join("\n");
         let new = old.replace("line3", "LINE3").replace("line17", "LINE17");
         let diff = unified_diff(&old, &new, "a/f", "b/f");
-        // Should produce two separate hunks
         let hunk_count = diff.matches("@@").count();
         assert!(hunk_count >= 4, "expected 2+ hunks (4+ @@), got {}: {}", hunk_count / 2, diff);
     }

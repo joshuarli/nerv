@@ -236,7 +236,7 @@ fn apply_single_edit(
                     normalize_crlf(&edit.new_text),
                     &normalized[orig_end.min(normalized.len())..]
                 );
-                let final_content = format!("{}{}", bom, restore_line_endings(&new_content, line_ending));
+                let final_content = finalize_content(bom, new_content, line_ending);
                 if let Err(e) = std::fs::write(abs_path, &final_content) {
                     return ToolResult {
                         content: format!("Error writing {}: {}", path_str, e),
@@ -287,7 +287,7 @@ fn apply_single_edit(
             is_error: true,
         };
     }
-    let final_content = format!("{}{}", bom, restore_line_endings(&new_content, line_ending));
+    let final_content = finalize_content(bom, new_content, line_ending);
     if let Err(e) = std::fs::write(abs_path, &final_content) {
         return ToolResult {
             content: format!("Error writing {}: {}", path_str, e),
@@ -388,7 +388,7 @@ fn apply_multi_edit(
         };
     }
 
-    let final_content = format!("{}{}", bom, restore_line_endings(&result, line_ending));
+    let final_content = finalize_content(bom, result, line_ending);
     if let Err(e) = std::fs::write(abs_path, &final_content) {
         return ToolResult {
             content: format!("Error writing {}: {}", path_str, e),
@@ -418,11 +418,27 @@ fn strip_bom(content: &str) -> (&str, &str) {
     }
 }
 
-fn restore_line_endings<'a>(content: &'a str, line_ending: &str) -> Cow<'a, str> {
+/// Restore line endings and prepend BOM if present.
+/// Takes ownership of content to avoid cloning when bom is empty and file is LF.
+fn finalize_content(bom: &str, content: String, line_ending: &str) -> String {
     if line_ending == "\r\n" {
-        Cow::Owned(content.replace('\n', "\r\n"))
+        let mut out = String::with_capacity(bom.len() + content.len() + content.len() / 40);
+        out.push_str(bom);
+        for ch in content.chars() {
+            if ch == '\n' {
+                out.push_str("\r\n");
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    } else if bom.is_empty() {
+        content
     } else {
-        Cow::Borrowed(content)
+        let mut out = String::with_capacity(bom.len() + content.len());
+        out.push_str(bom);
+        out.push_str(&content);
+        out
     }
 }
 

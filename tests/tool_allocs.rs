@@ -79,12 +79,12 @@ fn read_100_lines_allocs() {
         stats.count, stats.bytes
     );
     assert!(
-        stats.count < 500,
+        stats.count < 50,
         "read 100 lines: too many allocs ({})",
         stats.count
     );
     assert!(
-        stats.bytes < 100_000,
+        stats.bytes < 30_000,
         "read 100 lines: too many bytes ({})",
         stats.bytes
     );
@@ -118,7 +118,7 @@ fn edit_single_500_lines_allocs() {
         stats.count, stats.bytes
     );
     assert!(
-        stats.count < 300,
+        stats.count < 100,
         "edit single: too many allocs ({})",
         stats.count
     );
@@ -163,7 +163,7 @@ fn edit_multi_5x_500_lines_allocs() {
         stats.count, stats.bytes
     );
     assert!(
-        stats.count < 500,
+        stats.count < 150,
         "edit multi: too many allocs ({})",
         stats.count
     );
@@ -194,7 +194,7 @@ fn diff_2000_lines_allocs() {
         stats.count, stats.bytes
     );
     assert!(
-        stats.count < 200,
+        stats.count < 50,
         "diff: too many allocs ({})",
         stats.count
     );

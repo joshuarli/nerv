@@ -48,15 +48,19 @@ impl AgentTool for ReadTool {
         match std::fs::read(&abs_path) {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
-                let lines: Vec<&str> = text.lines().collect();
-                let start = offset.min(lines.len());
-                let end = (start + limit).min(lines.len());
-                let numbered: Vec<String> = lines[start..end]
-                    .iter()
-                    .enumerate()
-                    .map(|(i, line)| format!("{:>6}\t{}", start + i + 1, line))
-                    .collect();
-                let content = numbered.join("\n");
+                let line_count = text.lines().count();
+                let start = offset.min(line_count);
+                let end = (start + limit).min(line_count);
+                let n = end - start;
+                // Build numbered output in one allocation
+                let mut content = String::with_capacity(n * 40);
+                for (i, line) in text.lines().skip(start).take(n).enumerate() {
+                    use std::fmt::Write;
+                    if i > 0 {
+                        content.push('\n');
+                    }
+                    let _ = write!(content, "{:>6}\t{}", start + i + 1, line);
+                }
                 let (content, _) = truncate_head(&content, DEFAULT_MAX_LINES);
                 ToolResult {
                     content,
