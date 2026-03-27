@@ -878,7 +878,42 @@ fn highlight_for_html(text: &str) -> String {
     out
 }
 
+pub fn export_session_html(session_id: &str, path: &std::path::Path, nerv_dir: &std::path::Path) -> Result<String, String> {
+    use crate::session::manager::SessionManager;
+
+    let mut session_manager = SessionManager::new(nerv_dir);
+    session_manager.load_session(session_id).map_err(|e| e.to_string())?;
+    let entries = session_manager.entries().to_vec();
+    render_html_to_file(&entries, path)
+}
+
 fn export_html(session: &AgentSession, path: &std::path::Path) -> Result<String, String> {
+    let entries = session.session_manager.entries();
+    let from_agent: Vec<_>;
+    let entries: &[_] = if entries.is_empty() {
+        from_agent = session
+            .agent
+            .state
+            .messages
+            .iter()
+            .map(|msg| {
+                crate::session::types::SessionEntry::Message(crate::session::types::MessageEntry {
+                    id: String::new(),
+                    parent_id: None,
+                    timestamp: String::new(),
+                    message: msg.clone(),
+                    tokens: None,
+                })
+            })
+            .collect();
+        &from_agent
+    } else {
+        entries
+    };
+    render_html_to_file(entries, path)
+}
+
+fn render_html_to_file(entries: &[crate::session::types::SessionEntry], path: &std::path::Path) -> Result<String, String> {
     let mut html = String::from(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -951,30 +986,6 @@ function toggleTool(header) {
 </script>
 "#,
     );
-
-    // Get entries — prefer session DB, fall back to agent state
-    let entries = session.session_manager.entries();
-    let from_agent;
-    let entries = if entries.is_empty() {
-        from_agent = session
-            .agent
-            .state
-            .messages
-            .iter()
-            .map(|msg| {
-                crate::session::types::SessionEntry::Message(crate::session::types::MessageEntry {
-                    id: String::new(),
-                    parent_id: None,
-                    timestamp: String::new(),
-                    message: msg.clone(),
-                    tokens: None,
-                })
-            })
-            .collect::<Vec<_>>();
-        &from_agent
-    } else {
-        entries
-    };
 
     // Map tool_call_id → (name, args_summary) so ToolResult headers can show
     // what command was run.

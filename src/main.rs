@@ -35,6 +35,7 @@ fn main() {
                 println!("  --json             JSON output in print mode (default)");
                 println!("  --list-models      List all configured models");
                 println!("  --log-level <lvl>  Set log level (debug, info, warn, error)");
+                println!("  --export-html <id> Export session to HTML (optional: output path)");
                 println!("  -h, --help         Show this help");
                 println!("  --version          Show version");
                 println!();
@@ -79,7 +80,7 @@ fn main() {
     // Reject unknown flags early
     {
         let known = [
-            "--resume", "--model", "--log-level", "--version",
+            "--resume", "--model", "--log-level", "--version", "--export-html",
         ];
         let mut i = 1;
         while i < args.len() {
@@ -89,7 +90,7 @@ fn main() {
                 std::process::exit(1);
             }
             // Skip the value for flags that take one
-            if matches!(arg.as_str(), "--resume" | "--model" | "--log-level") {
+            if matches!(arg.as_str(), "--resume" | "--model" | "--log-level" | "--export-html") {
                 i += 1;
             }
             i += 1;
@@ -110,6 +111,28 @@ fn main() {
         nerv::log::set_level(level);
     }
     nerv::log::info("nerv starting");
+
+    if let Some(pos) = args.iter().position(|a| a == "--export-html") {
+        let session_id = args.get(pos + 1).unwrap_or_else(|| {
+            eprintln!("Usage: nerv --export-html <session-id> [output.html]");
+            std::process::exit(1);
+        });
+        let out_path = args
+            .get(pos + 2)
+            .filter(|a| !a.starts_with('-'))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(format!("{}.html", session_id)));
+        match nerv::core::agent_session::export_session_html(session_id, &out_path, &nerv_dir) {
+            Ok(path) => {
+                println!("Exported to {}", path);
+                return;
+            }
+            Err(e) => {
+                eprintln!("Export failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let config = NervConfig::load(&nerv_dir);
