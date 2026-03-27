@@ -103,8 +103,8 @@ pub enum SessionCommand {
     SetModel { provider: String, model_id: String },
     SetThinkingLevel { level: ThinkingLevel },
     Compact { custom_instructions: Option<String> },
-    ExportJsonl { path: PathBuf },
-    ExportHtml { path: PathBuf },
+    ExportJsonl,
+    ExportHtml,
     Login { provider: String },
     ListSessions { repo_root: Option<String> },
     SearchSessions { query: String },
@@ -868,7 +868,11 @@ pub fn session_task(
                     will_retry: false,
                 });
             }
-            SessionCommand::ExportJsonl { path } => {
+            SessionCommand::ExportJsonl => {
+                let sid = session.session_manager.session_id().to_string();
+                let exports_dir = crate::nerv_dir().join("exports");
+                let _ = std::fs::create_dir_all(&exports_dir);
+                let path = exports_dir.join(format!("{sid}.jsonl"));
                 let result = if let Some(content) = session.session_manager.export_jsonl() {
                     std::fs::write(&path, content)
                         .map(|_| path.to_string_lossy().to_string())
@@ -878,7 +882,11 @@ pub fn session_task(
                 };
                 let _ = event_tx.send(AgentSessionEvent::ExportDone { result });
             }
-            SessionCommand::ExportHtml { path } => {
+            SessionCommand::ExportHtml => {
+                let sid = session.session_manager.session_id().to_string();
+                let exports_dir = crate::nerv_dir().join("exports");
+                let _ = std::fs::create_dir_all(&exports_dir);
+                let path = exports_dir.join(format!("{sid}.html"));
                 let result = crate::export::export_entries_html(
                     session.session_manager.entries(),
                     &session.agent.state.messages,
