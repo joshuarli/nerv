@@ -137,6 +137,7 @@ impl ChatWriter {
                 total - 30,
                 theme::RESET,
             ));
+            lines.push(String::new());
         }
         self.blocks.push(Block::Styled(lines));
     }
