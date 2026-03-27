@@ -46,7 +46,7 @@ impl AgentTool for EditTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string"},
+                "path": {"type": "string", "description": "Path to the file to edit"},
                 "old_text": {"type": "string", "description": "Exact text to find and replace"},
                 "new_text": {"type": "string", "description": "Replacement text"},
                 "edits": {
@@ -81,8 +81,9 @@ impl AgentTool for EditTool {
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("path").and_then(|v| v.as_str()).is_none() {
+            let keys: Vec<&str> = input.as_object().map(|m| m.keys().map(|k| k.as_str()).collect()).unwrap_or_default();
             return Err(ToolError::InvalidArguments {
-                message: "path is required".into(),
+                message: format!("path is required (got keys: {})", keys.join(", ")),
             });
         }
         let has_single = input.get("old_text").is_some() || input.get("new_text").is_some();
