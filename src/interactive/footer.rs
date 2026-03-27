@@ -176,26 +176,27 @@ impl Component for FooterComponent {
             String::new()
         };
 
-        // Show thinking on/off, and effort level if set.
-        let think_right = if self.thinking_on {
-            if let Some(effort) = self.effort_level {
-                let name = match effort {
-                    EffortLevel::Low => "low",
-                    EffortLevel::Medium => "medium",
-                    EffortLevel::High => "high",
-                    EffortLevel::Max => "max",
-                };
-                let color = match effort {
-                    EffortLevel::Low => theme::THINKING_LOW,
-                    EffortLevel::Medium => theme::THINKING,
-                    EffortLevel::High | EffortLevel::Max => theme::THINKING_HIGH,
-                };
-                format!("{}thinking {} effort{}", color, name, r)
-            } else {
-                format!("{}thinking on{}", theme::THINKING, r)
-            }
+        // Show thinking on/off, and effort level if set (effort shown regardless of thinking state).
+        let effort_suffix = if let Some(effort) = self.effort_level {
+            let name = match effort {
+                EffortLevel::Low => "low",
+                EffortLevel::Medium => "medium",
+                EffortLevel::High => "high",
+                EffortLevel::Max => "max",
+            };
+            let color = match effort {
+                EffortLevel::Low => theme::THINKING_LOW,
+                EffortLevel::Medium => theme::THINKING,
+                EffortLevel::High | EffortLevel::Max => theme::THINKING_HIGH,
+            };
+            format!(" {}[{}]{}", color, name, r)
         } else {
-            format!("{}thinking off{}", dim, r)
+            String::new()
+        };
+        let think_right = if self.thinking_on {
+            format!("{}thinking on{}{}", theme::THINKING, r, effort_suffix)
+        } else {
+            format!("{}thinking off{}{}", dim, r, effort_suffix)
         };
 
         let mode_right = format!("{}{}", plan_tag, think_right);

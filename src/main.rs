@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use nerv::agent::EffortLevel;
 use nerv::core::*;
 use nerv::{nerv_dir};
 use nerv::interactive::event_loop::InteractiveMode;
@@ -510,6 +511,22 @@ fn main() {
                                 let next = interactive.cycle_thinking();
                                 let _ = interactive.cmd_tx().try_send(SessionCommand::SetThinkingLevel { level: next });
                                 layout.footer.set_thinking(next);
+                                tui.request_render(false); tui.maybe_render(&layout); continue;
+                            }
+                            if keys::matches_key(seq, "ctrl+e") {
+                                let next = interactive.cycle_effort();
+                                let _ = interactive.cmd_tx().try_send(SessionCommand::SetEffortLevel { level: next });
+                                layout.footer.set_effort(next);
+                                let label = match next {
+                                    None => "Effort: off".into(),
+                                    Some(e) => format!("Effort: {}", match e {
+                                        EffortLevel::Low => "low",
+                                        EffortLevel::Medium => "medium",
+                                        EffortLevel::High => "high",
+                                        EffortLevel::Max => "max",
+                                    }),
+                                };
+                                push_status(&mut layout, &label, false);
                                 tui.request_render(false); tui.maybe_render(&layout); continue;
                             }
                             if keys::matches_key(seq, "ctrl+g") {

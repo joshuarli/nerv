@@ -170,13 +170,7 @@ impl OpenAICompatProvider {
                     body["reasoning_effort"] = serde_json::json!("medium");
                     body["max_completion_tokens"] = serde_json::json!(request.max_tokens + tokens);
                 }
-                ThinkingRequest::Adaptive { effort } => {
-                    body["reasoning_effort"] = serde_json::json!(match effort {
-                        AdaptiveEffort::Low => "low",
-                        AdaptiveEffort::Medium => "medium",
-                        AdaptiveEffort::High | AdaptiveEffort::Max => "high",
-                    });
-                }
+
             }
         }
         body

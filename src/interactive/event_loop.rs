@@ -892,6 +892,18 @@ impl InteractiveMode {
         self.current_thinking
     }
 
+    /// Cycle effort level: off → low → medium → high → max → off (^E)
+    pub fn cycle_effort(&mut self) -> Option<EffortLevel> {
+        self.current_effort = match self.current_effort {
+            None => Some(EffortLevel::Low),
+            Some(EffortLevel::Low) => Some(EffortLevel::Medium),
+            Some(EffortLevel::Medium) => Some(EffortLevel::High),
+            Some(EffortLevel::High) => Some(EffortLevel::Max),
+            Some(EffortLevel::Max) => None,
+        };
+        self.current_effort
+    }
+
     pub fn current_model(&self) -> Option<&Model> {
         self.current_model.as_ref()
     }

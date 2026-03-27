@@ -182,16 +182,7 @@ impl AnthropicProvider {
                         "budget_tokens": tokens,
                     });
                 }
-                ThinkingRequest::Adaptive { effort } => {
-                    let effort_str = match effort {
-                        AdaptiveEffort::Low => "low",
-                        AdaptiveEffort::Medium => "medium",
-                        AdaptiveEffort::High => "high",
-                        AdaptiveEffort::Max => "max",
-                    };
-                    body["thinking"] = serde_json::json!({"type": "enabled"});
-                    body["effort"] = serde_json::json!(effort_str);
-                }
+
             }
         }
 

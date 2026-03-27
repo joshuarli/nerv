@@ -49,15 +49,6 @@ pub struct CompletionRequest {
 #[derive(Debug, Clone)]
 pub enum ThinkingRequest {
     Budget { tokens: u32 },
-    Adaptive { effort: AdaptiveEffort },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum AdaptiveEffort {
-    Low,
-    Medium,
-    High,
-    Max,
 }
 
 #[derive(Debug, Clone)]
@@ -149,16 +140,15 @@ pub fn resolve_thinking(
     effort: Option<EffortLevel>,
     _model: &Model,
 ) -> Option<ThinkingRequest> {
-    // Effort overrides thinking level — adaptive mode lets the model pick its own budget
+    // Effort overrides thinking level — map to concrete token budgets
     if let Some(e) = effort {
-        return Some(ThinkingRequest::Adaptive {
-            effort: match e {
-                EffortLevel::Low => AdaptiveEffort::Low,
-                EffortLevel::Medium => AdaptiveEffort::Medium,
-                EffortLevel::High => AdaptiveEffort::High,
-                EffortLevel::Max => AdaptiveEffort::Max,
-            },
-        });
+        let tokens = match e {
+            EffortLevel::Low    =>  2_000,
+            EffortLevel::Medium =>  8_000,
+            EffortLevel::High   => 16_000,
+            EffortLevel::Max    => 32_000,
+        };
+        return Some(ThinkingRequest::Budget { tokens });
     }
     if level == ThinkingLevel::Off {
         return None;
@@ -182,6 +172,5 @@ pub fn adjust_max_tokens_for_thinking(
             };
             (adjusted, budget)
         }
-        ThinkingRequest::Adaptive { .. } => (base_max, 0),
     }
 }
