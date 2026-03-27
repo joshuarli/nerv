@@ -344,4 +344,79 @@ mod tests {
             &r.content[..20.min(r.content.len())]
         );
     }
+
+    /// Regression test for session c3f4190e: Sonnet reading a 1180-line file in
+    /// 120-line chunks 10 times. With auto-size at 2000 lines, every call should
+    /// return the full file regardless of offset/limit, and repeated reads of the
+    /// unchanged file should hit the mtime cache.
+    #[test]
+    fn no_chunked_read_storm() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("main.rs");
+        // Simulate a 1180-line Rust file
+        let content = (0..1180)
+            .map(|i| format!("    fn line_{}() {{ /* body */ }}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&file, &content).unwrap();
+
+        let tool = make_tool(dir.path());
+
+        // Simulate the model's chunked read pattern: offset=0 limit=120
+        let cb: UpdateCallback = Arc::new(|_| {});
+        let r1 = tool.execute(
+            serde_json::json!({"path": "main.rs", "offset": 0, "limit": 120}),
+            cb,
+        );
+        assert!(!r1.is_error);
+        // Auto-size should override: we get ALL 1180 lines, not just 120
+        assert!(
+            r1.content.contains("line_0"),
+            "should contain first line"
+        );
+        assert!(
+            r1.content.contains("line_1179"),
+            "should contain last line despite limit=120"
+        );
+
+        // Second chunked read: offset=120 limit=120 — should hit cache
+        let cb: UpdateCallback = Arc::new(|_| {});
+        let r2 = tool.execute(
+            serde_json::json!({"path": "main.rs", "offset": 120, "limit": 120}),
+            cb,
+        );
+        assert!(
+            r2.content.contains("unchanged"),
+            "second read of same file should be cached: {}",
+            &r2.content[..80.min(r2.content.len())]
+        );
+
+        // Third read: offset=0 limit=120 again — also cached
+        let cb: UpdateCallback = Arc::new(|_| {});
+        let r3 = tool.execute(
+            serde_json::json!({"path": "main.rs", "offset": 0, "limit": 120}),
+            cb,
+        );
+        assert!(
+            r3.content.contains("unchanged"),
+            "third read should still be cached"
+        );
+
+        // After edit, cache invalidates and returns full new content
+        let modified = content.replace("line_500", "EDITED_500");
+        std::fs::write(&file, &modified).unwrap();
+        let cb: UpdateCallback = Arc::new(|_| {});
+        let r4 = tool.execute(
+            serde_json::json!({"path": "main.rs", "offset": 0, "limit": 120}),
+            cb,
+        );
+        assert!(
+            r4.content.contains("EDITED_500"),
+            "post-edit read should return new content"
+        );
+        assert!(
+            r4.content.contains("line_1179"),
+            "post-edit read should return FULL file, not just 120 lines"
+        );
+    }
 }
