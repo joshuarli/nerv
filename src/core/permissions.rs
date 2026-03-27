@@ -139,6 +139,18 @@ fn is_safe_system_path(path: &str) -> bool {
 /// Extract tokens that might be paths, including redirect targets.
 fn extract_path_tokens(cmd: &str) -> Vec<String> {
     let mut tokens = Vec::new();
+    // Strip heredoc body — everything after a `<< EOF` or `<< 'EOF'` marker is
+    // literal content and must not be scanned for path tokens.
+    let cmd = if let Some(pos) = cmd.find("<<") {
+        // Find end of the `<<` line; heredoc body starts after the first newline.
+        if let Some(nl) = cmd[pos..].find('\n') {
+            &cmd[..pos + nl]
+        } else {
+            &cmd[..pos]
+        }
+    } else {
+        cmd
+    };
     // Strip double-quoted and single-quoted strings before tokenizing — their
     // contents are argument values (commit messages, regex patterns, etc.) and
     // should never be interpreted as path tokens.
@@ -385,6 +397,15 @@ mod tests {
     fn bash_git_commit_with_double_slash_in_message_allowed() {
         // `//` appearing in a -m commit message must not be treated as an outside-repo path.
         let args = serde_json::json!({"command": r#"git commit -m "fix prompt for // patterns""#});
+        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn bash_heredoc_to_tmp_allowed() {
+        // heredoc body contains `//` (a Rust comment) which is a valid filesystem
+        // path on macOS but must not be scanned — only the redirect target matters.
+        let cmd = "cat > /tmp/test.rs << 'EOF'\n// a rust comment\nfn main() {}\nEOF";
+        let args = serde_json::json!({"command": cmd});
         assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
     }
 
