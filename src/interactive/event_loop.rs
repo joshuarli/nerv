@@ -23,6 +23,8 @@ pub struct InteractiveMode {
     pub status_message: Option<String>,
     pub status_is_error: bool,
     pub quit_requested: bool,
+    /// The plain text of the last completed assistant response (for /copy).
+    last_response: Option<String>,
     /// Pending messages queued while streaming.
     pub pending_messages: Vec<String>,
     /// If editing a queued message, which index.
@@ -66,6 +68,7 @@ impl InteractiveMode {
             quit_requested: false,
             session_picker: None,
             tree_selector: None,
+            last_response: None,
             pending_messages: Vec::new(),
             editing_queue_idx: None,
             message_history: Vec::new(),
@@ -343,6 +346,9 @@ impl InteractiveMode {
             }
             AgentEvent::MessageEnd { message } => {
                 let text = message.text_content();
+                if !text.is_empty() {
+                    self.last_response = Some(text.clone());
+                }
                 let thinking: Option<String> = message
                     .content
                     .iter()
@@ -584,6 +590,21 @@ impl InteractiveMode {
                 self.session_id = None;
                 self.status_message = Some("New session started.".into());
             }
+            "/copy" => {
+                if let Some(ref text) = self.last_response.clone() {
+                    match copy_to_clipboard(text) {
+                        Ok(()) => {
+                            self.status_message = Some("Copied to clipboard.".into());
+                        }
+                        Err(e) => {
+                            self.status_message = Some(format!("Copy failed: {}", e));
+                            self.status_is_error = true;
+                        }
+                    }
+                } else {
+                    self.status_message = Some("Nothing to copy yet.".into());
+                }
+            }
             "/quit" | "/exit" | "/q" => {
                 // Signal quit — handled by setting a flag the main loop checks
                 self.quit_requested = true;
@@ -598,6 +619,7 @@ impl InteractiveMode {
                      /compact        — compact context\n\
                      /session        — show session info\n\
                      /export <path>  — export to .jsonl or .html\n\
+                     /copy           — copy last response to clipboard\n\
                      /resume [id]    — list/load sessions\n\
                      /tree           — browse/switch session branches\n\
                      /new            — start new session\n\
@@ -680,6 +702,7 @@ impl InteractiveMode {
             "/think".into(),
             "/compact".into(),
             "/session".into(),
+            "/copy".into(),
             "/export".into(),
             "/resume".into(),
             "/tree".into(),
@@ -770,4 +793,52 @@ fn count_tree_nodes(tree: &[crate::session::types::SessionTreeNode]) -> usize {
     tree.iter()
         .map(|n| 1 + count_tree_nodes(&n.children))
         .sum()
+}
+
+/// Copy `text` to the system clipboard.
+///
+/// Tries, in order: `pbcopy` (macOS), `wl-copy` (Wayland), `xclip`, `xsel`.
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    // On macOS pbcopy is always present; on Linux try Wayland then X11.
+    #[cfg(target_os = "macos")]
+    let candidates: &[&[&str]] = &[&["pbcopy"]];
+
+    #[cfg(target_os = "linux")]
+    let candidates: &[&[&str]] = &[
+        &["wl-copy"],
+        &["xclip", "-selection", "clipboard"],
+        &["xsel", "--clipboard", "--input"],
+    ];
+
+    for argv in candidates {
+        let (prog, args) = argv.split_first().unwrap();
+        let Ok(mut child) = Command::new(prog)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            continue;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        match child.wait() {
+            Ok(status) if status.success() => return Ok(()),
+            _ => continue,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    return Err("pbcopy failed".into());
+
+    #[cfg(target_os = "linux")]
+    return Err("no clipboard utility found (wl-copy / xclip / xsel)".into());
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    return Err("clipboard not supported on this platform".into());
 }
