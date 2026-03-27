@@ -165,9 +165,19 @@ impl InteractiveMode {
                 response_tx,
                 ..
             } => {
+                // Show the full command/path so the user can make an informed decision.
+                // For bash, pull out the command string directly; for others show the reason.
+                let detail = if tool == "bash" {
+                    args["command"]
+                        .as_str()
+                        .unwrap_or(&reason)
+                        .to_string()
+                } else {
+                    reason.clone()
+                };
                 self.status_message = Some(format!(
-                    "⚠ Permission: {} ({})\n  y = allow, n = deny",
-                    tool, reason
+                    "⚠ Permission: {}\n  {}\n  y = allow, n = deny",
+                    tool, detail
                 ));
                 self.status_is_error = true;
                 self.pending_permission = Some(response_tx);

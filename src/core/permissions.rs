@@ -75,7 +75,7 @@ fn check_bash(args: &serde_json::Value, repo_root: Option<&Path>) -> Permission 
 
     // Subshell/eval — can hide arbitrary commands
     if cmd.contains("$(") || cmd.contains('`') || cmd.contains("eval ") {
-        return Permission::Ask(format!("bash uses subshell/eval: {}", truncate_cmd(cmd)));
+        return Permission::Ask(format!("bash uses subshell/eval: {}", cmd));
     }
 
     // Check for paths outside repo in the command (including after redirects)
@@ -206,14 +206,6 @@ fn extract_path_tokens(cmd: &str) -> Vec<String> {
         }
     }
     tokens
-}
-
-fn truncate_cmd(cmd: &str) -> String {
-    if cmd.len() > 80 {
-        format!("{}...", &cmd[..80])
-    } else {
-        cmd.to_string()
-    }
 }
 
 fn is_within_repo(path: &str, repo_root: Option<&Path>) -> bool {
