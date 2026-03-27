@@ -39,19 +39,10 @@ impl AgentTool for LsTool {
         {
             Ok(output) => {
                 let tr = truncate_tail(&output.stdout, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
-                let entry_count = tr.content.lines().count();
-                let display = format!("{} ({} entries)", path, entry_count);
-                ToolResult {
-                    content: tr.content,
-                    details: Some(serde_json::json!({"display": display})),
-                    is_error: false,
-                }
+                let display = format!("{} ({} entries)", path, tr.content.lines().count());
+                ToolResult::ok_with_details(tr.content, serde_json::json!({"display": display}))
             }
-            Err(e) => ToolResult {
-                content: format!("Error running eza: {}", e),
-                details: None,
-                is_error: true,
-            },
+            Err(e) => ToolResult::error(format!("Error running eza: {}", e)),
         }
     }
 }

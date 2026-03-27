@@ -31,6 +31,20 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
+impl ToolResult {
+    pub fn ok(content: impl Into<String>) -> Self {
+        Self { content: content.into(), details: None, is_error: false }
+    }
+
+    pub fn error(content: impl Into<String>) -> Self {
+        Self { content: content.into(), details: None, is_error: true }
+    }
+
+    pub fn ok_with_details(content: impl Into<String>, details: serde_json::Value) -> Self {
+        Self { content: content.into(), details: Some(details), is_error: false }
+    }
+}
+
 /// Callback that checks if a tool call is allowed. Returns true to proceed.
 pub type PermissionFn = Arc<dyn Fn(&str, &serde_json::Value) -> bool + Send + Sync>;
 

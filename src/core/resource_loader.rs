@@ -8,6 +8,7 @@ pub struct ContextFile {
 }
 
 /// Resources discovered from the filesystem at startup.
+#[derive(Clone)]
 pub struct LoadedResources {
     pub context_files: Vec<ContextFile>,
     pub system_prompt: Option<String>,

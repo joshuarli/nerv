@@ -1,7 +1,9 @@
 pub mod agent;
+pub mod bootstrap;
 pub mod compaction;
 pub mod core;
 pub mod errors;
+pub mod export;
 pub mod http;
 pub mod interactive;
 pub mod log;

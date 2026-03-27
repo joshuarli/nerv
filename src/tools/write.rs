@@ -51,23 +51,11 @@ impl AgentTool for WriteTool {
         if let Some(parent) = abs_path.parent()
             && let Err(e) = std::fs::create_dir_all(parent)
         {
-            return ToolResult {
-                content: format!("Error creating directories: {}", e),
-                details: None,
-                is_error: true,
-            };
+            return ToolResult::error(format!("Error creating directories: {}", e));
         }
         match std::fs::write(&abs_path, content) {
-            Ok(()) => ToolResult {
-                content: format!("Wrote {} bytes to {}", content.len(), path_str),
-                details: None,
-                is_error: false,
-            },
-            Err(e) => ToolResult {
-                content: format!("Error writing {}: {}", path_str, e),
-                details: None,
-                is_error: true,
-            },
+            Ok(()) => ToolResult::ok(format!("Wrote {} bytes to {}", content.len(), path_str)),
+            Err(e) => ToolResult::error(format!("Error writing {}: {}", path_str, e)),
         }
     }
 }

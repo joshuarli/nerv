@@ -45,26 +45,13 @@ impl AgentTool for FindTool {
             Ok(output) => {
                 let tr = truncate_tail(&output.stdout, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
                 if tr.content.is_empty() {
-                    ToolResult {
-                        content: "No files found".into(),
-                        details: None,
-                        is_error: false,
-                    }
+                    ToolResult::ok("No files found")
                 } else {
-                    let file_count = tr.content.lines().count();
-                    let display = format!("{} files", file_count);
-                    ToolResult {
-                        content: tr.content,
-                        details: Some(serde_json::json!({"display": display})),
-                        is_error: false,
-                    }
+                    let display = format!("{} files", tr.content.lines().count());
+                    ToolResult::ok_with_details(tr.content, serde_json::json!({"display": display}))
                 }
             }
-            Err(e) => ToolResult {
-                content: format!("Error running fd: {}", e),
-                details: None,
-                is_error: true,
-            },
+            Err(e) => ToolResult::error(format!("Error running fd: {}", e)),
         }
     }
 }

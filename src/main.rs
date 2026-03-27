@@ -2,15 +2,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use nerv::agent::agent::Agent;
 use nerv::core::*;
 use nerv::home_dir;
 use nerv::interactive::event_loop::InteractiveMode;
 use nerv::interactive::footer::FooterComponent;
 use nerv::interactive::layout::AppLayout;
 use nerv::interactive::statusbar::StatusBar;
-use nerv::session::SessionManager;
-use nerv::tools::*;
 use nerv::tui::components::editor::Editor;
 use nerv::tui::*;
 
@@ -122,7 +119,7 @@ fn main() {
             .filter(|a| !a.starts_with('-'))
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(format!("{}.html", session_id)));
-        match nerv::core::agent_session::export_session_html(session_id, &out_path, &nerv_dir) {
+        match nerv::export::export_session_html(session_id, &out_path, &nerv_dir) {
             Ok(path) => {
                 println!("Exported to {}", path);
                 return;
@@ -135,12 +132,23 @@ fn main() {
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let config = NervConfig::load(&nerv_dir);
-    let mut auth = nerv::core::auth::AuthStorage::load(&nerv_dir);
-    let model_registry = Arc::new(ModelRegistry::new(&config, &mut auth));
-    let resources = nerv::core::resource_loader::load_resources(&cwd, &nerv_dir);
-    let skills = resources.skills.clone();
-    let loaded_files: Vec<(String, usize)> = resources
+
+    let b = nerv::bootstrap::bootstrap(
+        &cwd,
+        &nerv_dir,
+        nerv::bootstrap::BootstrapOptions {
+            memory: true,
+            permissions: true,
+        },
+    );
+    let config = b.config;
+    let model_registry = b.model_registry;
+    let cancel_flag = b.cancel_flag;
+    let skills = b.resources.skills.clone();
+
+    // Token cost breakdown for startup display
+    let loaded_files: Vec<(String, usize)> = b
+        .resources
         .context_files
         .iter()
         .map(|cf| {
@@ -148,47 +156,27 @@ fn main() {
             (cf.path.display().to_string(), tokens)
         })
         .collect();
-    let system_prompt_tokens = resources
+    let system_prompt_tokens = b
+        .resources
         .system_prompt
         .as_ref()
         .map(|sp| nerv::compaction::count_tokens(sp));
-    let memory_tokens = resources
+    let memory_tokens = b
+        .resources
         .memory
         .as_ref()
         .map(|m| nerv::compaction::count_tokens(m))
         .filter(|&t| t > 0);
-    let append_prompt_tokens: Vec<usize> = resources
+    let append_prompt_tokens: Vec<usize> = b
+        .resources
         .append_prompts
         .iter()
         .map(|ap| nerv::compaction::count_tokens(ap))
         .collect();
-
-    let mutation_queue = Arc::new(FileMutationQueue::new());
-    let mut tool_registry = ToolRegistry::new();
-    for tool in [
-        Arc::new(ReadTool::new(cwd.clone())) as Arc<dyn nerv::agent::agent::AgentTool>,
-        Arc::new(BashTool::new(cwd.clone())),
-        Arc::new(EditTool::new(cwd.clone(), mutation_queue.clone())),
-        Arc::new(WriteTool::new(cwd.clone())),
-        Arc::new(GrepTool::new(cwd.clone())),
-        Arc::new(FindTool::new(cwd.clone())),
-        Arc::new(LsTool::new(cwd.clone())),
-        Arc::new(MemoryTool::new(nerv_dir.clone())),
-    ] {
-        tool_registry.register(ToolDefinition { tool });
-    }
-
-    let provider_registry = Arc::new(std::sync::RwLock::new(
-        model_registry.provider_registry.clone(),
-    ));
-    let agent = Agent::new(provider_registry);
-    let cancel_flag = agent.cancel.clone();
-
-    // Compute per-component token costs before resources/tools are moved
     let base_prompt_tokens =
         nerv::compaction::count_tokens(nerv::core::system_prompt::DEFAULT_SYSTEM_PROMPT);
     let tools_tokens = {
-        let tools = tool_registry.active_tools();
+        let tools = b.session.tool_registry.active_tools();
         let mut tool_text = String::new();
         for t in &tools {
             tool_text.push_str(t.name());
@@ -199,17 +187,7 @@ fn main() {
         nerv::compaction::count_tokens(&tool_text)
     };
 
-    let session_manager = SessionManager::new(&nerv_dir);
-
-    let mut session = AgentSession::new(
-        agent,
-        session_manager,
-        tool_registry,
-        model_registry.clone(),
-        resources,
-        cwd.clone(),
-    );
-    session.permissions_enabled = true;
+    let session = b.session;
 
     // Channels (crossbeam)
     let (cmd_tx, cmd_rx) = crossbeam_channel::bounded::<SessionCommand>(32);
@@ -910,45 +888,25 @@ fn print_mode(args: &[String]) {
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let config = nerv::core::NervConfig::load(&nerv_dir);
-    let mut auth = nerv::core::auth::AuthStorage::load(&nerv_dir);
-    let model_registry = Arc::new(nerv::core::model_registry::ModelRegistry::new(
-        &config, &mut auth,
-    ));
-    let resources = nerv::core::resource_loader::load_resources(&cwd, &nerv_dir);
+    let b = nerv::bootstrap::bootstrap(
+        &cwd,
+        &nerv_dir,
+        nerv::bootstrap::BootstrapOptions {
+            memory: false,
+            permissions: false,
+        },
+    );
+    let mut agent = b.session.agent;
 
-    let mutation_queue = Arc::new(FileMutationQueue::new());
-    let mut tool_registry = nerv::core::tool_registry::ToolRegistry::new();
-    for tool in [
-        Arc::new(ReadTool::new(cwd.clone())) as Arc<dyn nerv::agent::agent::AgentTool>,
-        Arc::new(BashTool::new(cwd.clone())),
-        Arc::new(EditTool::new(cwd.clone(), mutation_queue.clone())),
-        Arc::new(WriteTool::new(cwd.clone())),
-        Arc::new(GrepTool::new(cwd.clone())),
-        Arc::new(FindTool::new(cwd.clone())),
-        Arc::new(LsTool::new(cwd.clone())),
-    ] {
-        tool_registry.register(nerv::core::tool_registry::ToolDefinition { tool });
-    }
-
-    let provider_registry = Arc::new(std::sync::RwLock::new(
-        model_registry.provider_registry.clone(),
-    ));
-    let mut agent = nerv::agent::agent::Agent::new(provider_registry);
-
-    // Select model: --model <name> or default
+    // Select model
     let model_arg = args
         .iter()
         .position(|a| a == "--model")
         .and_then(|i| args.get(i + 1));
     let model = if let Some(name) = model_arg {
-        if let Some((p, m)) = name.split_once('/') {
-            model_registry.get_model(p, m).cloned()
-        } else {
-            model_registry.find_model(name).cloned()
-        }
+        nerv::bootstrap::resolve_model(&b.model_registry, name)
     } else {
-        model_registry.default_model(&config).cloned()
+        b.model_registry.default_model(&b.config).cloned()
     };
     if let Some(ref m) = model {
         agent.state.model = Some(m.clone());
@@ -960,13 +918,13 @@ fn print_mode(args: &[String]) {
     }
 
     // Build system prompt
-    agent.state.tools = tool_registry.active_tools();
+    agent.state.tools = b.session.tool_registry.active_tools();
     let tool_names: Vec<&str> = agent.state.tools.iter().map(|t| t.name()).collect();
-    let snippets = tool_registry.prompt_snippets();
-    let guidelines = tool_registry.prompt_guidelines();
+    let snippets = b.session.tool_registry.prompt_snippets();
+    let guidelines = b.session.tool_registry.prompt_guidelines();
     let model_id = model.as_ref().map(|m| m.id.as_str());
     agent.state.system_prompt = nerv::core::system_prompt::build_system_prompt_for_model(
-        &cwd, &resources, &tool_names, &snippets, &guidelines, model_id,
+        &cwd, &b.resources, &tool_names, &snippets, &guidelines, model_id,
     );
 
     // Collect metrics via the event callback (using RefCell since Fn closure)

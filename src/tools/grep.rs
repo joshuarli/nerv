@@ -49,11 +49,7 @@ impl AgentTool for GrepTool {
         match cmd.output() {
             Ok(output) => {
                 if output.stdout.is_empty() && !output.status.success() {
-                    return ToolResult {
-                        content: "No matches found".into(),
-                        details: None,
-                        is_error: false,
-                    };
+                    return ToolResult::ok("No matches found");
                 }
                 let tr = truncate_tail(&output.stdout, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
                 let match_count = tr.content.lines().count();
@@ -62,17 +58,12 @@ impl AgentTool for GrepTool {
                 } else {
                     format!("{} matches", match_count)
                 };
-                ToolResult {
-                    content: tr.content,
-                    details: Some(serde_json::json!({"truncated": tr.truncated, "display": display})),
-                    is_error: false,
-                }
+                ToolResult::ok_with_details(
+                    tr.content,
+                    serde_json::json!({"truncated": tr.truncated, "display": display}),
+                )
             }
-            Err(e) => ToolResult {
-                content: format!("Error running rg: {}", e),
-                details: None,
-                is_error: true,
-            },
+            Err(e) => ToolResult::error(format!("Error running rg: {}", e)),
         }
     }
 }
