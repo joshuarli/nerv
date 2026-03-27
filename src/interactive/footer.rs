@@ -291,10 +291,10 @@ impl Component for FooterComponent {
         let cache_stats = {
             let mut parts = String::new();
             if self.total_cache_read > 0 {
-                parts.push_str(&format!(" {}R{}{}", dim, fmt_tokens_u64(self.total_cache_read), r));
+                parts.push_str(&format!(" {}Rc{}{}", dim, fmt_tokens_u64(self.total_cache_read), r));
             }
             if self.total_cache_write > 0 {
-                parts.push_str(&format!(" {}W{}{}", dim, fmt_tokens_u64(self.total_cache_write), r));
+                parts.push_str(&format!(" {}Wc{}{}", dim, fmt_tokens_u64(self.total_cache_write), r));
             }
             parts
         };
