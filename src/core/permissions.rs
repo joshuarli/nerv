@@ -134,6 +134,21 @@ fn is_safe_system_path(path: &str) -> bool {
         || path.starts_with("/opt")
         || path.starts_with("/proc/self")
         || path.starts_with("/etc/hosts")
+        || is_safe_home_path(path)
+}
+
+fn is_safe_home_path(path: &str) -> bool {
+    let Some(home) = crate::home_dir() else {
+        return false;
+    };
+    let home = home.to_string_lossy();
+    // Same directories exempted for ~/ prefixed paths (check_bash line 97-101)
+    for dir in &[".nerv", ".config", ".cargo"] {
+        if path.starts_with(&format!("{}/{}", home, dir)) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Extract tokens that might be paths, including redirect targets.
@@ -409,5 +424,42 @@ mod tests {
         assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
     }
 
+    #[test]
+    fn bash_absolute_nerv_dir_allowed() {
+        // ~/.nerv is the app's data directory — absolute paths into it should be
+        // safe just like the ~/ prefixed form.
+        let home = crate::home_dir().unwrap();
+        let db = format!("sqlite3 {}/.nerv/sessions.db '.tables'", home.display());
+        let args = serde_json::json!({"command": db});
+        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn bash_absolute_cargo_dir_allowed() {
+        let home = crate::home_dir().unwrap();
+        let cmd = format!("cat {}/.cargo/config.toml", home.display());
+        let args = serde_json::json!({"command": cmd});
+        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn bash_absolute_config_dir_allowed() {
+        let home = crate::home_dir().unwrap();
+        let cmd = format!("cat {}/.config/some-tool/config.yml", home.display());
+        let args = serde_json::json!({"command": cmd});
+        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn bash_absolute_other_home_dir_asks() {
+        // Arbitrary home subdirs (not in the safe list) should still prompt.
+        let home = crate::home_dir().unwrap();
+        let cmd = format!("cat {}/.zshrc", home.display());
+        let args = serde_json::json!({"command": cmd});
+        assert!(matches!(
+            check("bash", &args, Some(&repo())),
+            Permission::Ask(_)
+        ));
+    }
 }
 
