@@ -5,7 +5,8 @@ use crate::session::types::SessionEntry;
 
 pub struct CompactionSettings {
     pub enabled: bool,
-    pub reserve_tokens: usize,
+    /// Fraction of the model's context window at which auto-compact triggers (0.0–1.0).
+    pub threshold_pct: f64,
     pub keep_recent_tokens: usize,
 }
 
@@ -13,7 +14,7 @@ impl Default for CompactionSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            reserve_tokens: 16_384,
+            threshold_pct: 0.50,
             keep_recent_tokens: 20_000,
         }
     }
@@ -75,7 +76,8 @@ pub fn should_compact(tokens: usize, context_window: u32, settings: &CompactionS
     if !settings.enabled {
         return false;
     }
-    tokens > (context_window as usize).saturating_sub(settings.reserve_tokens)
+    let threshold = (context_window as f64 * settings.threshold_pct) as usize;
+    tokens > threshold
 }
 
 pub struct CompactionResult {

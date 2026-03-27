@@ -56,6 +56,8 @@ impl SessionManager {
         db.execute("ALTER TABLE sessions ADD COLUMN worktree TEXT").ok();
         // Migration: add name column for auto-generated session titles
         db.execute("ALTER TABLE sessions ADD COLUMN name TEXT").ok();
+        // Migration: per-session auto-compact threshold (fraction 0.0–1.0)
+        db.execute("ALTER TABLE sessions ADD COLUMN compact_threshold REAL").ok();
 
         db.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
@@ -529,6 +531,35 @@ impl SessionManager {
             stmt.read::<Option<String>, _>("name").ok().flatten()
         } else {
             None
+        }
+    }
+
+    /// Get the auto-compact threshold (fraction 0.0–1.0) for the current session, if set.
+    pub fn get_compact_threshold(&self) -> Option<f64> {
+        let sid = self.session_id.as_deref()?;
+        let mut stmt = self
+            .db
+            .prepare("SELECT compact_threshold FROM sessions WHERE id = ?")
+            .ok()?;
+        stmt.bind((1, sid)).ok()?;
+        if stmt.next().ok()? == sqlite::State::Row {
+            stmt.read::<Option<f64>, _>("compact_threshold").ok().flatten()
+        } else {
+            None
+        }
+    }
+
+    /// Persist the auto-compact threshold for the current session.
+    pub fn set_compact_threshold(&self, pct: f64) {
+        if let Some(ref sid) = self.session_id {
+            if let Ok(mut stmt) = self
+                .db
+                .prepare("UPDATE sessions SET compact_threshold = ? WHERE id = ?")
+            {
+                stmt.bind((1, pct)).ok();
+                stmt.bind((2, sid.as_str())).ok();
+                stmt.next().ok();
+            }
         }
     }
 

@@ -19,6 +19,8 @@ pub struct FooterComponent {
     cost_output: f64,
     provider_online: Option<bool>,
     plan_mode: bool,
+    /// Auto-compact threshold (0–100). Default 50.
+    compact_threshold_pct: u8,
     /// Total input/output tokens sent across all API calls in this session.
     total_input: u64,
     total_output: u64,
@@ -68,6 +70,7 @@ impl FooterComponent {
             cost_output: 0.0,
             provider_online: None,
             plan_mode: false,
+            compact_threshold_pct: 50,
             total_input: 0,
             total_output: 0,
             api_calls: 0,
@@ -100,6 +103,10 @@ impl FooterComponent {
         if provider == self.provider_name {
             self.provider_online = Some(online);
         }
+    }
+
+    pub fn set_compact_threshold(&mut self, pct: u8) {
+        self.compact_threshold_pct = pct;
     }
 
     pub fn set_plan_mode(&mut self, enabled: bool) {
@@ -256,12 +263,17 @@ impl Component for FooterComponent {
         let line2 = right_align(&session_label, &model, w);
 
         // Line 4: centered counter + cost + api_info
+        let compact_tag = format!(
+            " {}(compact @ {}%){}",
+            dim, self.compact_threshold_pct, r,
+        );
         let counter = format!(
-            "{}{}/{}{}",
+            "{}{}/{}{}{}",
             ctx_color,
             fmt_tokens(self.context_used),
             fmt_tokens(self.context_window),
             r,
+            compact_tag,
         );
         let total_cost = self.cost_input + self.cost_output;
         let cost = if total_cost > 0.001 {

@@ -95,6 +95,10 @@ pub enum AgentSessionEvent {
     SessionNamed {
         name: String,
     },
+    /// Auto-compact threshold changed for this session (0–100).
+    CompactThresholdChanged {
+        pct: u8,
+    },
     PermissionRequest {
         tool: String,
         args: serde_json::Value,
@@ -119,6 +123,7 @@ pub enum SessionCommand {
     SetThinkingLevel { level: ThinkingLevel },
     SetEffortLevel { level: Option<EffortLevel> },
     Compact { custom_instructions: Option<String> },
+    SetCompactThreshold { pct: u8 },
     ExportJsonl,
     ExportHtml,
     Login { provider: String },
@@ -808,6 +813,9 @@ impl AgentSession {
                     messages: self.agent.state.messages.clone(),
                 });
                 self.load_permission_cache();
+                if let Some(pct) = self.apply_saved_compact_threshold() {
+                    let _ = event_tx.send(AgentSessionEvent::CompactThresholdChanged { pct });
+                }
                 // Don't re-name sessions that were already named (or have a preview we could use).
                 // We consider any loaded session as already handled.
                 self.session_named = true;
@@ -820,6 +828,14 @@ impl AgentSession {
                 });
             }
         }
+    }
+
+    /// Apply a saved compact threshold from the session DB (if any) to compaction_settings.
+    /// Returns the loaded percentage (0–100) if one was saved, so the caller can notify the UI.
+    fn apply_saved_compact_threshold(&mut self) -> Option<u8> {
+        let pct = self.session_manager.get_compact_threshold()?;
+        self.compaction_settings.threshold_pct = pct.clamp(0.01, 1.0);
+        Some((pct * 100.0).round() as u8)
     }
 
     /// Check if a tool call with given arguments has been previously accepted in this session.
@@ -1007,6 +1023,16 @@ pub fn session_task(
             }
             SessionCommand::SetPlanMode { enabled } => {
                 session.set_plan_mode(enabled, &event_tx);
+            }
+            SessionCommand::SetCompactThreshold { pct } => {
+                let frac = (pct as f64 / 100.0).clamp(0.01, 1.0);
+                session.compaction_settings.threshold_pct = frac;
+                session.session_manager.set_compact_threshold(frac);
+                let _ = event_tx.send(AgentSessionEvent::CompactThresholdChanged { pct });
+                let _ = event_tx.send(AgentSessionEvent::Status {
+                    message: format!("Auto-compact threshold set to {}%.", pct),
+                    is_error: false,
+                });
             }
             SessionCommand::Compact {
                 custom_instructions,

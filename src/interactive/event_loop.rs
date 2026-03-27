@@ -126,6 +126,9 @@ impl InteractiveMode {
             AgentSessionEvent::SessionNamed { name } => {
                 layout.footer.set_session_name(Some(name));
             }
+            AgentSessionEvent::CompactThresholdChanged { pct } => {
+                layout.footer.set_compact_threshold(pct);
+            }
             AgentSessionEvent::Status { message, is_error } => {
                 self.status_message = Some(message);
                 self.status_is_error = is_error;
@@ -532,10 +535,21 @@ impl InteractiveMode {
 
         match command {
             "/compact" => {
-                let _ = self.cmd_tx.send(SessionCommand::Compact {
-                    custom_instructions: None,
-                });
-                self.status_message = Some("Compacting...".into());
+                // `/compact at 70` — set session threshold; `/compact` — compact now
+                if let Some(rest) = args.strip_prefix("at ") {
+                    if let Ok(pct) = rest.trim().parse::<u8>() {
+                        let _ = self
+                            .cmd_tx
+                            .send(SessionCommand::SetCompactThreshold { pct });
+                    } else {
+                        self.status_message =
+                            Some("Usage: /compact at <1-100>".into());
+                    }
+                } else {
+                    let _ = self.cmd_tx.send(SessionCommand::Compact {
+                        custom_instructions: None,
+                    });
+                }
             }
             "/model" => {
                 if !args.is_empty() {
@@ -719,10 +733,11 @@ impl InteractiveMode {
                     "Commands:\n\
                      /model          — list/switch models\n\
                      /think [on|off] — toggle extended thinking (Shift+Tab to cycle)\n\
-                     /effort [low|medium|high|max] — set adaptive effort level\n\
+                     /effort [low|medium|high|max] — set adaptive effort level (^E to cycle)\n\
                      /login [provider] — OAuth login (default: anthropic)\n\
                      /logout [provider] — remove stored credentials\n\
-                     /compact        — compact context\n\
+                     /compact        — compact context now
+                     /compact at N   — set auto-compact threshold to N% for this session\n\
                      /session        — browse and resume sessions\n\
                      /export [jsonl]  — export session to ~/.nerv/exports/ (html by default)\n\
                      /copy           — copy last response to clipboard\n\
@@ -811,6 +826,7 @@ impl InteractiveMode {
             "/model".into(),
             "/think".into(),
             "/compact".into(),
+            "/compact at ".into(),
             "/session".into(),
             "/copy".into(),
             "/export".into(),
