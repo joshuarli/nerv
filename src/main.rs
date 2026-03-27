@@ -114,11 +114,17 @@ fn main() {
             eprintln!("Usage: nerv --export-html <session-id> [output.html]");
             std::process::exit(1);
         });
+        let exports_dir = nerv_dir.join("exports");
         let out_path = args
             .get(pos + 2)
             .filter(|a| !a.starts_with('-'))
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(format!("{}.html", session_id)));
+            .unwrap_or_else(|| exports_dir.join(format!("{}.html", session_id)));
+        // Create exports directory if it doesn't exist
+        if let Err(e) = std::fs::create_dir_all(out_path.parent().unwrap_or(&exports_dir)) {
+            eprintln!("Failed to create exports directory: {}", e);
+            std::process::exit(1);
+        }
         match nerv::export::export_session_html(session_id, &out_path, &nerv_dir) {
             Ok(path) => {
                 println!("Exported to {}", path);

@@ -447,6 +447,47 @@ fn edit_validates_missing_new_text_in_edits() {
     assert!(result.is_err());
 }
 
+// ── normalize: double-encoded edits ──
+
+// Regression: models sometimes emit `edits` as a JSON string rather than an
+// inline array. validate() alone rejects it; normalize() must unwrap it first.
+//
+// The tricky case (observed in session d2cd6f6c) is that the string value
+// contains literal newline characters — the model streams \n inside string
+// values, which serde_json rejects. normalize() must re-escape them before
+// attempting to parse the inner JSON.
+#[test]
+fn edit_validate_rejects_string_encoded_edits() {
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(PathBuf::from("/tmp"), mq);
+    // edits is a JSON string containing literal newlines (as a model would emit)
+    let edits_str = "[\n  {\n    \"old_text\": \"Vec<String>,\",\n    \"new_text\": \"b\"\n  }\n]";
+    let args = serde_json::json!({
+        "path": "test.txt",
+        "edits": edits_str
+    });
+    assert!(tool.validate(&args).is_err(), "validate should reject string-encoded edits");
+}
+
+#[test]
+fn edit_normalize_unwraps_string_encoded_edits_and_validate_passes() {
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(PathBuf::from("/tmp"), mq);
+    // Mirrors the actual failure: edits is a string with literal \n chars and
+    // inner quotes (e.g. Vec<String> in old_text).
+    let edits_str = "[\n  {\n    \"old_text\": \"Vec<String>,\",\n    \"new_text\": \"b\"\n  }\n]";
+    let args = serde_json::json!({
+        "path": "test.txt",
+        "edits": edits_str
+    });
+    let normalized = tool.normalize(args);
+    assert!(
+        normalized["edits"].is_array(),
+        "normalize should convert string-encoded edits (with literal newlines) to array"
+    );
+    assert!(tool.validate(&normalized).is_ok());
+}
+
 // ── Single-edit additional coverage ──
 
 #[test]
@@ -1118,3 +1159,4 @@ fn edit_multi_output_token_efficiency() {
         tokens, result.content,
     );
 }
+
