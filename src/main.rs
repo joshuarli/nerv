@@ -901,8 +901,9 @@ fn print_mode(args: &[String]) {
     let tool_names: Vec<&str> = agent.state.tools.iter().map(|t| t.name()).collect();
     let snippets = tool_registry.prompt_snippets();
     let guidelines = tool_registry.prompt_guidelines();
-    agent.state.system_prompt = nerv::core::system_prompt::build_system_prompt(
-        &cwd, &resources, &tool_names, &snippets, &guidelines,
+    let model_id = model.as_ref().map(|m| m.id.as_str());
+    agent.state.system_prompt = nerv::core::system_prompt::build_system_prompt_for_model(
+        &cwd, &resources, &tool_names, &snippets, &guidelines, model_id,
     );
 
     // Collect metrics via the event callback (using RefCell since Fn closure)

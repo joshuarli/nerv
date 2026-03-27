@@ -5,7 +5,7 @@ use crossbeam_channel::Sender;
 
 use super::model_registry::ModelRegistry;
 use super::resource_loader::LoadedResources;
-use super::system_prompt::build_system_prompt;
+use super::system_prompt::build_system_prompt_for_model;
 use super::tool_registry::ToolRegistry;
 use crate::agent::agent::Agent;
 use crate::agent::types::*;
@@ -268,12 +268,14 @@ impl AgentSession {
         let tool_names: Vec<&str> = self.agent.state.tools.iter().map(|t| t.name()).collect();
         let snippets = self.tool_registry.prompt_snippets();
         let guidelines = self.tool_registry.prompt_guidelines();
-        self.agent.state.system_prompt = build_system_prompt(
+        let model_id = self.agent.state.model.as_ref().map(|m| m.id.as_str());
+        self.agent.state.system_prompt = build_system_prompt_for_model(
             &self.cwd,
             &self.resources,
             &tool_names,
             &snippets,
             &guidelines,
+            model_id,
         );
     }
 

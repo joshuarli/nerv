@@ -20,7 +20,8 @@ You are an expert coding agent. You have tools to read, edit, and write files, r
 - When the task is done, stop. Do not add a closing summary unless the user asked a question that needs an answer.";
 
 /// Build the full system prompt by concatenating:
-/// 1. ~/.nerv/SYSTEM.md (or default)
+/// 1. Per-model prompt (~/.nerv/prompts/{model_id}.md) or
+///    global (~/.nerv/system-prompt.md) or compiled default
 /// 2. Tool list
 /// 3. Project context (AGENTS.md, CLAUDE.md)
 /// 4. Memory
@@ -33,10 +34,34 @@ pub fn build_system_prompt(
     tool_snippets: &[(String, String)],
     tool_guidelines: &[String],
 ) -> String {
+    build_system_prompt_for_model(cwd, resources, tool_names, tool_snippets, tool_guidelines, None)
+}
+
+pub fn build_system_prompt_for_model(
+    cwd: &Path,
+    resources: &LoadedResources,
+    tool_names: &[&str],
+    tool_snippets: &[(String, String)],
+    tool_guidelines: &[String],
+    model_id: Option<&str>,
+) -> String {
     let mut prompt = String::with_capacity(4096);
 
-    // 1. Base system prompt
-    if let Some(ref custom) = resources.system_prompt {
+    // 1. Base system prompt: per-model → global override → compiled default
+    let model_prompt = model_id.and_then(|id| {
+        let nerv_dir = crate::home_dir()?.join(".nerv");
+        let path = nerv_dir.join("prompts").join(format!("{}.md", id));
+        if path.is_file() {
+            crate::log::info(&format!("loaded per-model prompt: {}", path.display()));
+            std::fs::read_to_string(&path).ok()
+        } else {
+            None
+        }
+    });
+
+    if let Some(ref mp) = model_prompt {
+        prompt.push_str(mp);
+    } else if let Some(ref custom) = resources.system_prompt {
         prompt.push_str(custom);
     } else {
         prompt.push_str(DEFAULT_SYSTEM_PROMPT);
