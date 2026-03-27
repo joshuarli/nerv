@@ -3,12 +3,17 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use nerv::agent::agent::{AgentTool, UpdateCallback};
+use nerv::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use nerv::tools::*;
 use tempfile::TempDir;
 
 fn noop_update() -> UpdateCallback {
     Arc::new(|_| {})
+}
+
+/// Count approximate tokens in a tool result (chars/4 heuristic).
+fn approx_tokens(result: &ToolResult) -> usize {
+    result.content.len() / 4
 }
 
 #[test]
@@ -807,4 +812,304 @@ fn edit_multi_large_file_rejected() {
 
     assert!(result.is_error, "should reject large file: {}", result.content);
     assert!(result.content.contains("too large"), "{}", result.content);
+}
+
+// ── Read tool ──
+
+#[test]
+fn read_empty_file() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("empty.txt"), "").unwrap();
+
+    let tool = ReadTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(serde_json::json!({"path": "empty.txt"}), noop_update());
+    assert!(!result.is_error);
+    assert!(result.content.is_empty() || result.content.trim().is_empty());
+}
+
+#[test]
+fn read_binary_file_does_not_panic() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("bin"), b"\x00\x01\xff\xfe").unwrap();
+
+    let tool = ReadTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(serde_json::json!({"path": "bin"}), noop_update());
+    assert!(!result.is_error);
+}
+
+#[test]
+fn read_unicode() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("uni.txt"), "héllo 世界\nñ\n").unwrap();
+
+    let tool = ReadTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(serde_json::json!({"path": "uni.txt"}), noop_update());
+    assert!(!result.is_error);
+    assert!(result.content.contains("héllo"));
+    assert!(result.content.contains("世界"));
+}
+
+#[test]
+fn read_offset_past_end() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("small.txt"), "one\ntwo\n").unwrap();
+
+    let tool = ReadTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(
+        serde_json::json!({"path": "small.txt", "offset": 999}),
+        noop_update(),
+    );
+    assert!(!result.is_error);
+    assert!(result.content.is_empty() || result.content.trim().is_empty());
+}
+
+#[test]
+fn read_absolute_path() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("abs.txt");
+    std::fs::write(&file, "content\n").unwrap();
+
+    let tool = ReadTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(
+        serde_json::json!({"path": file.to_str().unwrap()}),
+        noop_update(),
+    );
+    assert!(!result.is_error);
+    assert!(result.content.contains("content"));
+}
+
+#[test]
+fn read_output_token_efficiency() {
+    let tmp = TempDir::new().unwrap();
+    // 100 lines of code
+    let lines: Vec<String> = (1..=100).map(|i| format!("let x{} = {};", i, i)).collect();
+    std::fs::write(tmp.path().join("code.rs"), lines.join("\n")).unwrap();
+
+    let tool = ReadTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(serde_json::json!({"path": "code.rs"}), noop_update());
+    assert!(!result.is_error);
+
+    let tokens = approx_tokens(&result);
+    let source_tokens = lines.join("\n").len() / 4;
+    // Line numbers add overhead, but should be <2x the source
+    assert!(
+        tokens < source_tokens * 2,
+        "read output too bloated: {} tokens for {} source tokens",
+        tokens, source_tokens,
+    );
+}
+
+// ── Write tool ──
+
+#[test]
+fn write_overwrites_existing() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "old content").unwrap();
+
+    let tool = WriteTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(
+        serde_json::json!({"path": "test.txt", "content": "new content"}),
+        noop_update(),
+    );
+    assert!(!result.is_error);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "new content");
+}
+
+#[test]
+fn write_empty_content() {
+    let tmp = TempDir::new().unwrap();
+
+    let tool = WriteTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(
+        serde_json::json!({"path": "empty.txt", "content": ""}),
+        noop_update(),
+    );
+    assert!(!result.is_error);
+    assert_eq!(std::fs::read_to_string(tmp.path().join("empty.txt")).unwrap(), "");
+}
+
+#[test]
+fn write_unicode_content() {
+    let tmp = TempDir::new().unwrap();
+
+    let tool = WriteTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(
+        serde_json::json!({"path": "uni.txt", "content": "héllo 世界\n"}),
+        noop_update(),
+    );
+    assert!(!result.is_error);
+    assert!(std::fs::read_to_string(tmp.path().join("uni.txt")).unwrap().contains("世界"));
+}
+
+#[test]
+fn write_deeply_nested_path() {
+    let tmp = TempDir::new().unwrap();
+
+    let tool = WriteTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(
+        serde_json::json!({"path": "a/b/c/d/e.txt", "content": "deep"}),
+        noop_update(),
+    );
+    assert!(!result.is_error);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("a/b/c/d/e.txt")).unwrap(),
+        "deep"
+    );
+}
+
+#[test]
+fn write_absolute_path() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("abs.txt");
+
+    let tool = WriteTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(
+        serde_json::json!({"path": file.to_str().unwrap(), "content": "abs"}),
+        noop_update(),
+    );
+    assert!(!result.is_error);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "abs");
+}
+
+// ── File mutation queue ──
+
+#[test]
+fn mutation_queue_serializes_same_file() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let counter = Arc::new(AtomicU32::new(0));
+    let path = PathBuf::from("/tmp/nerv-test-mq");
+
+    let mut handles = Vec::new();
+    for _ in 0..10 {
+        let mq = mq.clone();
+        let counter = counter.clone();
+        let path = path.clone();
+        handles.push(std::thread::spawn(move || {
+            mq.with(&path, || {
+                let val = counter.load(Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                counter.store(val + 1, Ordering::SeqCst);
+            });
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+    // Without serialization, concurrent read-modify-write would lose increments
+    assert_eq!(counter.load(Ordering::SeqCst), 10);
+}
+
+#[test]
+fn mutation_queue_different_files_parallel() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Instant;
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let counter = Arc::new(AtomicU32::new(0));
+    let start = Instant::now();
+
+    let mut handles = Vec::new();
+    for i in 0..4 {
+        let mq = mq.clone();
+        let counter = counter.clone();
+        handles.push(std::thread::spawn(move || {
+            let path = PathBuf::from(format!("/tmp/nerv-test-mq-{}", i));
+            mq.with(&path, || {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                counter.fetch_add(1, Ordering::SeqCst);
+            });
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+    assert_eq!(counter.load(Ordering::SeqCst), 4);
+    // Should complete in ~25ms (parallel), not ~100ms (serial)
+    assert!(start.elapsed().as_millis() < 80, "different files should run in parallel");
+}
+
+// ── Diff token efficiency ──
+
+#[test]
+fn diff_output_is_compact() {
+    // Single-line change in a 50-line file. Diff should include ~7 lines
+    // (3 context + 1 old + 1 new + header), not 50.
+    let old: String = (1..=50).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+    let new = old.replace("line 25", "CHANGED 25");
+    let diff = nerv::tools::diff::unified_diff(&old, &new, "a/f", "b/f");
+
+    let diff_lines = diff.lines().count();
+    assert!(
+        diff_lines < 15,
+        "diff too verbose for single-line change: {} lines\n{}",
+        diff_lines, diff,
+    );
+}
+
+#[test]
+fn diff_no_change_is_minimal() {
+    let text = "unchanged\n".repeat(100);
+    let diff = nerv::tools::diff::unified_diff(&text, &text, "a/f", "b/f");
+    // Just the header, no hunks
+    assert_eq!(diff.lines().count(), 2, "no-change diff should be header only: {}", diff);
+}
+
+#[test]
+fn edit_single_output_token_efficiency() {
+    let tmp = TempDir::new().unwrap();
+    // 200-line file, change one line
+    let lines: Vec<String> = (1..=200).map(|i| format!("fn func_{}() {{}}", i)).collect();
+    std::fs::write(tmp.path().join("big.rs"), lines.join("\n")).unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "big.rs",
+            "old_text": "fn func_100() {}",
+            "new_text": "fn func_100_renamed() {}"
+        }),
+        noop_update(),
+    );
+    assert!(!result.is_error, "{}", result.content);
+
+    let tokens = approx_tokens(&result);
+    // A single-line edit in a 200-line file should produce <50 tokens of output
+    assert!(
+        tokens < 50,
+        "edit output too bloated for single-line change: {} tokens\n{}",
+        tokens, result.content,
+    );
+}
+
+#[test]
+fn edit_multi_output_token_efficiency() {
+    let tmp = TempDir::new().unwrap();
+    let lines: Vec<String> = (1..=200).map(|i| format!("let var_{} = {};", i, i)).collect();
+    std::fs::write(tmp.path().join("big.rs"), lines.join("\n")).unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "big.rs",
+            "edits": [
+                {"old_text": "let var_10 = 10;", "new_text": "let var_10 = 100;"},
+                {"old_text": "let var_190 = 190;", "new_text": "let var_190 = 1900;"}
+            ]
+        }),
+        noop_update(),
+    );
+    assert!(!result.is_error, "{}", result.content);
+
+    let tokens = approx_tokens(&result);
+    // Two small edits far apart — should produce 2 hunks, <120 tokens
+    assert!(
+        tokens < 120,
+        "multi-edit output too bloated: {} tokens\n{}",
+        tokens, result.content,
+    );
 }

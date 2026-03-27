@@ -35,6 +35,10 @@ harness = false
 name = "json_encoding"
 harness = false
 
+[[bench]]
+name = "tools"
+harness = false
+
 [profile.dev]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
