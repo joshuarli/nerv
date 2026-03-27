@@ -60,11 +60,12 @@ src/
 │   ├── system_prompt.rs       # Prompt assembly, per-model override
 │   ├── skills.rs              # Skill loading from ~/.nerv/skills/
 │   └── tool_registry.rs       # ToolRegistry
+├── worktree.rs                    # Git worktree create/merge for isolated sessions
 ├── interactive/
 │   ├── chat_writer.rs         # Block-cached chat output (streaming, tools, status)
 │   ├── event_loop.rs          # Slash commands, permission prompts, session picker
 │   ├── layout.rs              # AppLayout: editor + statusbar + footer + chat
-│   ├── footer.rs              # Hexagon context bar, model, cost, thinking level
+│   ├── footer.rs              # Hexagon context bar, model, cost, thinking level, plan mode
 │   ├── statusbar.rs           # Spinner, per-turn token delta, tok/s, queue
 │   ├── session_picker.rs      # /resume session list
 │   ├── tree_selector.rs       # /tree session branch navigator
@@ -90,6 +91,8 @@ src/
 - **Per-turn token deltas**: statusbar shows marginal cost (↑800 ↓110), footer shows cumulative context
 - **SQLite sessions**: WAL mode, entries table with parent_id chain, 12µs listing
 - **Context optimization**: strip thinking, denied args, orphans; truncate stale results
+- **Plan mode**: `/plan`, Shift+Tab, or bare "plan" toggles read-only research mode. Removes edit/write from the tool set and injects a planning-focused system prompt section. `ToolRegistry::set_active` handles the filtering.
+- **Git worktrees**: `/wt <branch>` creates an isolated worktree for the session; `/wt merge` merges back and cleans up. Session DB tracks worktree path for `/resume` restoration.
 - **macOS Keychain**: credentials via `security` CLI, not on disk
 
 ## Deep dives

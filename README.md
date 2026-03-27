@@ -39,6 +39,7 @@ nerv
 | Ctrl+C | Interrupt stream / quit (double-tap to force) |
 | Esc, Ctrl+D | Quit |
 | Ctrl+G | Open message in $EDITOR |
+| Shift+Tab | Toggle plan mode (read-only research) |
 | Ctrl+T | Cycle thinking level |
 | Ctrl+Z | Suspend |
 | Up/Down | Browse history (idle) / navigate queue (streaming) |
@@ -54,8 +55,11 @@ nerv
 | `/login [provider]` | OAuth login (default: anthropic) |
 | `/logout [provider]` | Remove stored credentials |
 | `/compact` | Compact conversation context |
+| `/plan` | Toggle plan mode (read-only, no edit/write) |
 | `/resume [id]` | Browse or load previous sessions |
 | `/tree` | Browse and switch session branches |
+| `/wt <branch>` | Create git worktree for isolated work |
+| `/wt merge` | Merge worktree back and clean up |
 | `/new` | Start new session |
 | `/export <path>` | Export to .jsonl or .html |
 | `/session` | Show session info |
@@ -68,6 +72,7 @@ nerv
 nerv                              # interactive TUI
 nerv --resume [id]                # resume session
 nerv --model <name>               # select model on startup
+nerv --wt <branch>                # create worktree on startup
 nerv --print                      # headless: stdin prompt → JSON stdout
 nerv --print --model sonnet       # headless with specific model
 nerv --print --max-turns 10       # cap agent turns
