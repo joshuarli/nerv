@@ -270,7 +270,7 @@ fn main() {
     footer.set_thinking(initial_thinking_level);
 
     let mut layout = AppLayout::new(Editor::new(), StatusBar::new(), footer);
-    tui.fixed_bottom = 8; // editor + statusbar + footer — never flushed to scrollback
+    tui.fixed_bottom = 9; // editor + statusbar + footer — never flushed to scrollback
 
     let dim = nerv::interactive::theme::DIM;
     let load = |chat: &mut nerv::interactive::chat_writer::ChatWriter, name: &str, tok: usize| {

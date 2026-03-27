@@ -208,7 +208,7 @@ impl Component for FooterComponent {
         let mode_right = format!("{}{}", plan_tag, think_right);
         let line1 = right_align(&pwd_left, &mode_right, w);
 
-        // Line 2: full-width hexagon progress bar
+        // Line 3: full-width hexagon progress bar
         let context_pct = if self.context_window > 0 {
             (self.context_used as f64 / self.context_window as f64) * 100.0
         } else {
@@ -236,7 +236,26 @@ impl Component for FooterComponent {
             r,
         );
 
-        // Line 3: centered counter + cost + model
+        // Line 2: session name/id (left) — model name (right)
+        let session_label = if let Some(name) = &self.session_name {
+            format!("{}{}{}", theme::DIM, name, r)
+        } else if let Some(id) = &self.session_id {
+            format!("{}#{}{}", theme::DIM, &id[..id.len().min(8)], r)
+        } else {
+            String::new()
+        };
+        let model = if self.model_id.is_empty() {
+            format!("{}no model{}", theme::ERROR, r)
+        } else {
+            match self.provider_online {
+                Some(false) => format!("{}(offline) {}{}", theme::ERROR, self.model_id, r),
+                Some(true) => format!("{}{}{}", theme::SUCCESS, self.model_id, r),
+                None => format!("{}{}{}", label, self.model_id, r),
+            }
+        };
+        let line2 = right_align(&session_label, &model, w);
+
+        // Line 4: centered counter + cost + api_info
         let counter = format!(
             "{}{}/{}{}",
             ctx_color,
@@ -276,36 +295,13 @@ impl Component for FooterComponent {
         } else {
             String::new()
         };
-        let model = if self.model_id.is_empty() {
-            format!("{}no model{}", theme::ERROR, r)
-        } else {
-            match self.provider_online {
-                Some(false) => format!("{}(offline) {}{}", theme::ERROR, self.model_id, r),
-                Some(true) => format!("{}{}{}", theme::SUCCESS, self.model_id, r),
-                None => format!("{}{}{}", label, self.model_id, r),
-            }
-        };
 
-        let info = format!("{}{}{} {}", counter, cost, api_info, model);
+        let info = format!("{}{}{}", counter, cost, api_info);
+        let info_width = visible_width(&info) as usize;
+        let pad = w.saturating_sub(info_width) / 2;
+        let line4 = format!("{}{}", " ".repeat(pad), info);
 
-        // Session label: use name if set, else the first 8 chars of the session id.
-        let session_label = if let Some(name) = &self.session_name {
-            format!("{}{}{}", theme::DIM, name, r)
-        } else if let Some(id) = &self.session_id {
-            format!("{}#{}{}", theme::DIM, &id[..id.len().min(8)], r)
-        } else {
-            String::new()
-        };
-
-        let line3 = if session_label.is_empty() {
-            let info_width = visible_width(&info) as usize;
-            let pad = w.saturating_sub(info_width) / 2;
-            format!("{}{}", " ".repeat(pad), info)
-        } else {
-            right_align(&session_label, &info, w)
-        };
-
-        vec![line1, hex_bar, line3]
+        vec![line1, line2, hex_bar, line4]
     }
 }
 
