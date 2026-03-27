@@ -95,12 +95,20 @@ impl AgentTool for BashTool {
             tr.content
         };
 
-        // Check if this is a text-reading command (sed/head/tail/awk) — don't show display for these
-        // Match on tool invocations, not just substring (e.g., "awk" in "hawk" or comments)
-        let is_text_reading = (command.contains("sed ") && (command.contains(".rs") || command.contains(".toml") || command.contains(".md") || command.contains("/")))
-            || (command.contains(" head ") || command.starts_with("head ")) && (command.contains(".rs") || command.contains(".toml") || command.contains(".md"))
-            || (command.contains(" tail ") || command.starts_with("tail ")) && (command.contains(".rs") || command.contains(".toml") || command.contains(".md"))
-            || (command.contains(" awk ") || command.starts_with("awk ")) && (command.contains(".rs") || command.contains(".toml") || command.contains(".md"));
+        // Suppress display for bare sed/head/tail/awk file reads — the system prompt tells
+        // agents these produce no TUI output, incentivising them to use the read tool instead.
+        // Only suppress when there's no pipe (rg | head is fine; head file.rs is not).
+        let is_text_reading = !command.contains('|') && {
+            let c = command.trim_start();
+            c.starts_with("sed ")
+                || c.starts_with("head ")
+                || c.starts_with("tail ")
+                || c.starts_with("awk ")
+                || c.contains(" sed ")
+                || c.contains(" head ")
+                || c.contains(" tail ")
+                || c.contains(" awk ")
+        };
 
         let line_count = content.lines().count();
         let display = if is_text_reading {
