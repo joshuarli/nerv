@@ -1067,19 +1067,25 @@ fn args_to_summary(args: &serde_json::Value) -> String {
     }
 
     match args {
-        serde_json::Value::Object(map) => map
-            .iter()
-            .map(|(k, v)| {
-                let val = match v {
-                    serde_json::Value::String(s) => {
-                        truncate(&s.replace('\n', "↵"), 60)
-                    }
-                    other => truncate(&other.to_string(), 60),
-                };
-                format!("{}={}", k, val)
-            })
-            .collect::<Vec<_>>()
-            .join("  "),
+        serde_json::Value::Object(map) => {
+            // For tools with a single "command" key (e.g. bash), show the full
+            // command without truncation — it's the most useful thing to display.
+            if map.len() == 1 {
+                if let Some(serde_json::Value::String(cmd)) = map.get("command") {
+                    return cmd.replace('\n', "↵");
+                }
+            }
+            map.iter()
+                .map(|(k, v)| {
+                    let val = match v {
+                        serde_json::Value::String(s) => truncate(&s.replace('\n', "↵"), 60),
+                        other => truncate(&other.to_string(), 60),
+                    };
+                    format!("{}={}", k, val)
+                })
+                .collect::<Vec<_>>()
+                .join("  ")
+        }
         serde_json::Value::String(s) => truncate(&s.replace('\n', "↵"), 80),
         other => other.to_string(),
     }
