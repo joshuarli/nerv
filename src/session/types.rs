@@ -144,6 +144,22 @@ pub struct SystemPromptEntry {
     pub token_count: u32,
 }
 
+/// Tree node for `SessionManager::get_tree()`.
+#[derive(Debug, Clone)]
+pub struct SessionTreeNode {
+    pub entry_id: String,
+    /// "message", "compaction", "model_change", etc.
+    pub entry_type: String,
+    /// First ~80 chars of meaningful content.
+    pub summary: String,
+    pub timestamp: String,
+    pub children: Vec<SessionTreeNode>,
+    /// True if this is a user message entry.
+    pub is_user: bool,
+    /// True if assistant message contains tool calls.
+    pub has_tool_calls: bool,
+}
+
 pub fn gen_entry_id() -> String {
     format!("{:08x}", rand_u64() as u32)
 }

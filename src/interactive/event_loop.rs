@@ -4,6 +4,7 @@ use std::sync::Arc;
 use super::layout::AppLayout;
 use super::session_picker::SessionPicker;
 use super::theme;
+use super::tree_selector::TreeSelector;
 use crate::agent::types::*;
 use crate::core::model_registry::ModelRegistry;
 use crate::core::*;
@@ -32,6 +33,8 @@ pub struct InteractiveMode {
     pub history_index: Option<usize>,
     /// Session picker state (when /resume is active).
     pub session_picker: Option<SessionPicker>,
+    /// Tree selector state (when /tree is active).
+    pub tree_selector: Option<TreeSelector>,
     /// Saved editor text when entering history browse.
     history_saved_text: String,
     /// Pending permission request — waiting for y/n from user.
@@ -60,6 +63,7 @@ impl InteractiveMode {
             status_is_error: false,
             quit_requested: false,
             session_picker: None,
+            tree_selector: None,
             pending_messages: Vec::new(),
             editing_queue_idx: None,
             message_history: Vec::new(),
@@ -96,6 +100,15 @@ impl InteractiveMode {
                     self.status_message = Some("No previous sessions found.".into());
                 } else {
                     self.session_picker = Some(SessionPicker::new(sessions));
+                }
+            }
+            AgentSessionEvent::TreeData { tree, current_leaf } => {
+                // Check if tree has any branch points worth showing
+                let total_nodes = count_tree_nodes(&tree);
+                if total_nodes == 0 {
+                    self.status_message = Some("No entries in session.".into());
+                } else {
+                    self.tree_selector = Some(TreeSelector::new(tree, current_leaf));
                 }
             }
             AgentSessionEvent::ExportDone { result } => match result {
@@ -545,6 +558,13 @@ impl InteractiveMode {
                     });
                 }
             }
+            "/tree" => {
+                if self.session_id.is_none() {
+                    self.status_message = Some("No active session.".into());
+                } else {
+                    let _ = self.cmd_tx.send(SessionCommand::GetTree);
+                }
+            }
             "/login" => {
                 let provider = if args.is_empty() { "anthropic" } else { args };
                 self.status_message = Some(format!("Starting {} login...", provider));
@@ -580,6 +600,7 @@ impl InteractiveMode {
                      /session        — show session info\n\
                      /export <path>  — export to .jsonl or .html\n\
                      /resume [id]    — list/load sessions\n\
+                     /tree           — browse/switch session branches\n\
                      /new            — start new session\n\
                      /quit           — quit nerv\n\
                      /help           — this message",
@@ -662,6 +683,7 @@ impl InteractiveMode {
             "/session".into(),
             "/export".into(),
             "/resume".into(),
+            "/tree".into(),
             "/login".into(),
             "/logout".into(),
             "/new".into(),
@@ -743,4 +765,10 @@ impl InteractiveMode {
     pub fn current_model(&self) -> Option<&Model> {
         self.current_model.as_ref()
     }
+}
+
+fn count_tree_nodes(tree: &[crate::session::types::SessionTreeNode]) -> usize {
+    tree.iter()
+        .map(|n| 1 + count_tree_nodes(&n.children))
+        .sum()
 }

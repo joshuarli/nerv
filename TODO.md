@@ -8,7 +8,12 @@
 - [ ] Print mode — `echo "fix" | nerv` non-interactive piped usage
 - [ ] Image input — paste/drag screenshots
 - [ ] MCP server support — external tool providers
-- [ ] Session tree browser (`/tree`)
+- [ ] Session tree browser (`/tree`) — in progress
+  - [ ] v2: node folding (collapse subtrees)
+  - [ ] v2: filter modes (user-only, no-tools, labeled-only)
+  - [ ] v2: search within tree
+  - [ ] v2: label editing from tree view
+  - [ ] v2: branch summary on fork (LLM-generated context for abandoned path)
 - [ ] Session naming (`/name`)
 - [ ] Session search (`/search <query>`)
 

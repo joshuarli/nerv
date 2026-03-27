@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use super::types::*;
-use crate::agent::types::{AgentMessage, ContentItem, ThinkingLevel};
+use crate::agent::types::{AgentMessage, ContentBlock, ContentItem, ThinkingLevel};
 
 pub struct SessionContext {
     pub messages: Vec<AgentMessage>,
@@ -118,7 +118,6 @@ impl SessionManager {
                 Ok(entry) => {
                     let idx = self.entries.len();
                     self.by_id.insert(entry.id().to_string(), idx);
-                    self.leaf_id = Some(entry.id().to_string());
                     self.entries.push(entry);
                     self.next_seq = seq + 1;
                 }
@@ -127,6 +126,9 @@ impl SessionManager {
                 }
             }
         }
+
+        // Find the actual latest leaf: highest-seq entry with no children
+        self.leaf_id = self.find_latest_leaf();
 
         Ok(self.build_session_context())
     }
@@ -323,18 +325,33 @@ impl SessionManager {
             if let Ok(entry) = serde_json::from_str::<SessionEntry>(&data) {
                 let idx = self.entries.len();
                 self.by_id.insert(entry.id().to_string(), idx);
-                self.leaf_id = Some(entry.id().to_string());
                 self.entries.push(entry);
                 self.next_seq = seq + 1;
             }
         }
 
+        self.leaf_id = self.find_latest_leaf();
+
         Ok(())
     }
 
     pub fn get_branch(&self) -> Vec<&SessionEntry> {
-        // With linear sessions (no branching), the branch is just all entries in order
-        self.entries.iter().collect()
+        let Some(ref leaf) = self.leaf_id else {
+            return Vec::new();
+        };
+        let mut path = Vec::new();
+        let mut current_id: Option<&str> = Some(leaf);
+        while let Some(id) = current_id {
+            if let Some(&idx) = self.by_id.get(id) {
+                let entry = &self.entries[idx];
+                path.push(entry);
+                current_id = entry.parent_id();
+            } else {
+                break;
+            }
+        }
+        path.reverse();
+        path
     }
 
     pub fn build_session_context(&self) -> SessionContext {
@@ -406,6 +423,108 @@ impl SessionManager {
 
     pub fn entries(&self) -> &[SessionEntry] {
         &self.entries
+    }
+
+    /// Move the leaf pointer to an earlier entry, forking on next append.
+    pub fn branch(&mut self, from_id: &str) {
+        if self.by_id.contains_key(from_id) {
+            self.leaf_id = Some(from_id.to_string());
+        }
+    }
+
+    /// Reset leaf to None (next append creates a new root).
+    pub fn reset_leaf(&mut self) {
+        self.leaf_id = None;
+    }
+
+    /// Find the latest leaf: highest-seq entry that has no children.
+    fn find_latest_leaf(&self) -> Option<String> {
+        let children_of: HashSet<&str> = self
+            .entries
+            .iter()
+            .filter_map(|e| e.parent_id())
+            .collect();
+
+        // Walk entries in reverse (highest seq first), pick first with no children
+        self.entries
+            .iter()
+            .rev()
+            .find(|e| !children_of.contains(e.id()))
+            .map(|e| e.id().to_string())
+    }
+
+    /// True if the session has any branch points (entries with >1 child).
+    pub fn has_branches(&self) -> bool {
+        let mut child_count: HashMap<&str, u32> = HashMap::new();
+        for entry in &self.entries {
+            if let Some(pid) = entry.parent_id() {
+                *child_count.entry(pid).or_default() += 1;
+            }
+        }
+        child_count.values().any(|&c| c > 1)
+    }
+
+    /// Build tree structure from entries for the tree selector UI.
+    pub fn get_tree(&self) -> Vec<SessionTreeNode> {
+        let mut nodes: HashMap<&str, SessionTreeNode> = HashMap::new();
+        let mut roots: Vec<&str> = Vec::new();
+
+        // Create nodes
+        for entry in &self.entries {
+            let (entry_type, summary, is_user, has_tool_calls) = summarize_entry(entry);
+            nodes.insert(
+                entry.id(),
+                SessionTreeNode {
+                    entry_id: entry.id().to_string(),
+                    entry_type,
+                    summary,
+                    timestamp: entry_timestamp(entry),
+                    children: Vec::new(),
+                    is_user,
+                    has_tool_calls,
+                },
+            );
+        }
+
+        // Build parent→children relationships
+        // We need to collect child IDs first, then move nodes out
+        let mut children_map: HashMap<&str, Vec<&str>> = HashMap::new();
+        for entry in &self.entries {
+            match entry.parent_id() {
+                Some(pid) if nodes.contains_key(pid) => {
+                    children_map.entry(pid).or_default().push(entry.id());
+                }
+                _ => roots.push(entry.id()),
+            }
+        }
+
+        // Recursive builder — take ownership of nodes from the map
+        fn build(
+            id: &str,
+            nodes: &mut HashMap<&str, SessionTreeNode>,
+            children_map: &HashMap<&str, Vec<&str>>,
+        ) -> Option<SessionTreeNode> {
+            let mut node = nodes.remove(id)?;
+            if let Some(child_ids) = children_map.get(id) {
+                for &cid in child_ids {
+                    if let Some(child) = build(cid, nodes, children_map) {
+                        node.children.push(child);
+                    }
+                }
+                // Sort children by timestamp
+                node.children.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+            }
+            Some(node)
+        }
+
+        let mut tree = Vec::new();
+        for &rid in &roots {
+            if let Some(node) = build(rid, &mut nodes, &children_map) {
+                tree.push(node);
+            }
+        }
+        tree.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        tree
     }
 
     pub fn list_sessions(&self) -> Vec<SessionSummary> {
@@ -525,6 +644,84 @@ fn ymd_to_days(y: u64, m: u64, d: u64) -> u64 {
     let doy = (153 * m + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146097 + doe - 719468
+}
+
+/// Extract type string, summary text, is_user, has_tool_calls from an entry.
+fn summarize_entry(entry: &SessionEntry) -> (String, String, bool, bool) {
+    match entry {
+        SessionEntry::Message(e) => match &e.message {
+            AgentMessage::User { content, .. } => {
+                let text = content_text(content);
+                ("message".into(), truncate(&text, 80), true, false)
+            }
+            AgentMessage::Assistant(a) => {
+                let text = a.text_content();
+                let has_tools = a
+                    .content
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolCall { .. }));
+                ("message".into(), truncate(&text, 80), false, has_tools)
+            }
+            AgentMessage::ToolResult { .. } => {
+                ("tool_result".into(), String::new(), false, false)
+            }
+            _ => ("message".into(), String::new(), false, false),
+        },
+        SessionEntry::Compaction(c) => {
+            ("compaction".into(), truncate(&c.summary, 60), false, false)
+        }
+        SessionEntry::BranchSummary(b) => {
+            ("branch_summary".into(), truncate(&b.summary, 60), false, false)
+        }
+        SessionEntry::ModelChange(m) => {
+            ("model_change".into(), m.model_id.clone(), false, false)
+        }
+        SessionEntry::ThinkingLevelChange(t) => {
+            ("thinking_change".into(), t.thinking_level.clone(), false, false)
+        }
+        SessionEntry::Label(l) => ("label".into(), l.label.clone(), false, false),
+        SessionEntry::SessionInfo(s) => {
+            ("session_info".into(), s.name.clone().unwrap_or_default(), false, false)
+        }
+        SessionEntry::SystemPrompt(_) => ("system_prompt".into(), String::new(), false, false),
+        SessionEntry::CustomMessage(_) => ("custom_message".into(), String::new(), false, false),
+    }
+}
+
+fn entry_timestamp(entry: &SessionEntry) -> String {
+    match entry {
+        SessionEntry::Message(e) => e.timestamp.clone(),
+        SessionEntry::Compaction(e) => e.timestamp.clone(),
+        SessionEntry::BranchSummary(e) => e.timestamp.clone(),
+        SessionEntry::ModelChange(e) => e.timestamp.clone(),
+        SessionEntry::ThinkingLevelChange(e) => e.timestamp.clone(),
+        SessionEntry::Label(e) => e.timestamp.clone(),
+        SessionEntry::SessionInfo(e) => e.timestamp.clone(),
+        SessionEntry::SystemPrompt(e) => e.timestamp.clone(),
+        SessionEntry::CustomMessage(e) => e.timestamp.clone(),
+    }
+}
+
+fn content_text(items: &[ContentItem]) -> String {
+    items
+        .iter()
+        .filter_map(|c| match c {
+            ContentItem::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    let s = s.trim();
+    // Take first line only
+    let line = s.lines().next().unwrap_or("");
+    if line.len() <= max {
+        line.to_string()
+    } else {
+        format!("{}...", &line[..max - 3])
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -6,3 +6,4 @@ pub mod layout;
 pub mod session_picker;
 pub mod statusbar;
 pub mod theme;
+pub mod tree_selector;

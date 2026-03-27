@@ -53,6 +53,10 @@ pub enum AgentSessionEvent {
     SessionList {
         sessions: Vec<crate::session::manager::SessionSummary>,
     },
+    TreeData {
+        tree: Vec<crate::session::types::SessionTreeNode>,
+        current_leaf: Option<String>,
+    },
     /// A session is now active (created or loaded).
     SessionStarted {
         id: String,
@@ -88,6 +92,8 @@ pub enum SessionCommand {
     AddLocal,
     Login { provider: String },
     ListSessions { repo_root: Option<String> },
+    GetTree,
+    SwitchBranch { entry_id: String },
 }
 
 pub struct AgentSession {
@@ -820,6 +826,26 @@ pub fn session_task(
                     sessions.retain(|s| s.cwd.starts_with(root.as_str()));
                 }
                 let _ = event_tx.send(AgentSessionEvent::SessionList { sessions });
+            }
+            SessionCommand::GetTree => {
+                let tree = session.session_manager.get_tree();
+                let current_leaf = session.session_manager.leaf_id().map(|s| s.to_string());
+                let _ = event_tx.send(AgentSessionEvent::TreeData { tree, current_leaf });
+            }
+            SessionCommand::SwitchBranch { entry_id } => {
+                session.session_manager.branch(&entry_id);
+                let ctx = session.session_manager.build_session_context();
+                session.agent.state.messages = ctx.messages;
+                session.agent.state.thinking_level = ctx.thinking_level;
+                let _ = event_tx.send(AgentSessionEvent::ThinkingLevelChanged {
+                    level: ctx.thinking_level,
+                });
+                if let Some((provider, model_id)) = ctx.model {
+                    session.set_model(&provider, &model_id, &event_tx);
+                }
+                let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
+                    messages: session.agent.state.messages.clone(),
+                });
             }
         }
     }

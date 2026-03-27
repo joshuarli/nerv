@@ -318,6 +318,25 @@ fn main() {
                 for event in events {
                     match event {
                         StdinEvent::Sequence(ref seq) => {
+                            // Tree selector input
+                            if interactive.tree_selector.is_some() {
+                                if keys::matches_key(seq, "up") {
+                                    interactive.tree_selector.as_mut().unwrap().move_up();
+                                } else if keys::matches_key(seq, "down") {
+                                    interactive.tree_selector.as_mut().unwrap().move_down();
+                                } else if keys::matches_key(seq, "enter") {
+                                    if let Some(id) = interactive.tree_selector.as_ref().unwrap().selected_entry_id().map(|s| s.to_string()) {
+                                        pop_tree(&mut interactive, &mut layout);
+                                        let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::SwitchBranch { entry_id: id });
+                                    }
+                                } else if keys::matches_key(seq, "escape") || keys::matches_key(seq, "ctrl+c") {
+                                    pop_tree(&mut interactive, &mut layout);
+                                }
+                                render_tree(&mut interactive, &mut layout);
+                                tui.request_render(false); tui.maybe_render(&layout);
+                                continue;
+                            }
+
                             // Session picker input
                             if interactive.session_picker.is_some() {
                                 if keys::matches_key(seq, "up") {
@@ -514,10 +533,19 @@ fn process_event(
         render_picker(interactive, layout);
         tui.request_render(false);
     }
+    if interactive.tree_selector.is_some() {
+        render_tree(interactive, layout);
+        tui.request_render(false);
+    }
 }
 
 fn pop_picker(interactive: &mut InteractiveMode, layout: &mut AppLayout) {
     interactive.session_picker = None;
+    layout.chat.clear_picker();
+}
+
+fn pop_tree(interactive: &mut InteractiveMode, layout: &mut AppLayout) {
+    interactive.tree_selector = None;
     layout.chat.clear_picker();
 }
 
@@ -527,6 +555,14 @@ fn render_picker(interactive: &mut InteractiveMode, layout: &mut AppLayout) {
     };
     let repo = interactive.repo_root();
     let lines = picker.render_lines(repo.as_deref());
+    layout.chat.set_picker(lines);
+}
+
+fn render_tree(interactive: &mut InteractiveMode, layout: &mut AppLayout) {
+    let Some(ref selector) = interactive.tree_selector else {
+        return;
+    };
+    let lines = selector.render_lines();
     layout.chat.set_picker(lines);
 }
 
