@@ -253,6 +253,7 @@ fn main() {
 
     // Capture initial state before session is moved to its thread
     let initial_thinking_level = session.agent.state.thinking_level;
+    let initial_effort_level = session.agent.state.effort_level;
 
     // Session thread
     let evt_tx = event_tx.clone();
@@ -268,6 +269,7 @@ fn main() {
         footer.set_model(m);
     }
     footer.set_thinking(initial_thinking_level);
+    footer.set_effort(initial_effort_level);
 
     let mut layout = AppLayout::new(Editor::new(), StatusBar::new(), footer);
     tui.fixed_bottom = 9; // editor + statusbar + footer — never flushed to scrollback
@@ -305,6 +307,8 @@ fn main() {
         cmd_tx,
         model_registry.clone(),
         model_registry.default_model(&config).cloned(),
+        initial_thinking_level,
+        initial_effort_level,
         skills,
         repo_root,
     );
