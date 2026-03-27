@@ -385,17 +385,23 @@ def main():
     if json_output:
         print(json.dumps([asdict(r) for r in results], indent=2))
     else:
+        # Summary
         passed = sum(1 for r in results if r.passed)
         total = len(results)
         total_tokens = sum(r.tokens_in + r.tokens_cache_read + r.tokens_out for r in results)
         total_cost = sum(r.cost for r in results)
+        total_turns = sum(r.turns for r in results)
         total_tools = sum(r.total_tool_calls for r in results)
+        goals_met = sum(1 for r in results for g in r.goal_results if g.startswith("GOAL"))
+        goals_total = sum(len(r.goal_results) for r in results)
+
         print(file=sys.stderr)
-        print(
-            f"  {passed}/{total} passed | {total_tools} tool calls | "
-            f"{total_tokens} tokens | ${total_cost:.4f}",
-            file=sys.stderr,
-        )
+        print(f"  {'─' * 60}", file=sys.stderr)
+        print(f"  {passed}/{total} passed | {total_turns} turns | {total_tools} tools | "
+              f"{total_tokens} tok | ${total_cost:.4f}",
+              file=sys.stderr)
+        if goals_total > 0:
+            print(f"  goals: {goals_met}/{goals_total}", file=sys.stderr)
         print(f"  report: {report_dir}", file=sys.stderr)
 
 

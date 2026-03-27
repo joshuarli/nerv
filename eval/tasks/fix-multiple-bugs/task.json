@@ -6,7 +6,7 @@
   "goals": {
     "max_edit_calls": 1,
     "min_multi_edits": 1,
-    "max_turns": 5,
-    "description": "4 bugs should be fixed in a single multi-edit call"
+    "max_turns": 4,
+    "description": "Read both files, fix all 4 bugs in one multi-edit, verify. 3-4 turns."
   }
 }

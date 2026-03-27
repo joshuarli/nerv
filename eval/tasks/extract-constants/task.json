@@ -7,6 +7,6 @@
     "max_edit_calls": 2,
     "min_multi_edits": 1,
     "max_turns": 5,
-    "description": "Add constants + replace all occurrences, ideally in 1-2 multi-edit calls"
+    "description": "Read both files, add constants + replace all occurrences in 1-2 multi-edits, verify. 4-5 turns."
   }
 }
