@@ -302,12 +302,21 @@ fn apply_multi_edit(
     abs_path: &Path,
     path_str: &str,
 ) -> ToolResult {
-    // Normalize all old_text values and find their positions in original content
+    // Normalize and validate all old_text values
     let mut positioned: Vec<(usize, &Edit, String)> = Vec::with_capacity(edits.len());
     for (i, edit) in edits.iter().enumerate() {
         let norm_old = edit.old_text.replace("\r\n", "\n");
-        let pos = match normalized.find(&norm_old) {
-            Some(p) => p,
+        if norm_old.is_empty() {
+            return ToolResult {
+                content: format!("Error: edits[{}].old_text must not be empty", i),
+                details: None,
+                is_error: true,
+            };
+        }
+        // Check uniqueness: old_text must appear exactly once
+        let mut occurrences = normalized.match_indices(&norm_old);
+        let first = match occurrences.next() {
+            Some((pos, _)) => pos,
             None => {
                 return ToolResult {
                     content: format!(
@@ -319,7 +328,17 @@ fn apply_multi_edit(
                 }
             }
         };
-        positioned.push((pos, edit, norm_old));
+        if occurrences.next().is_some() {
+            return ToolResult {
+                content: format!(
+                    "Error: edits[{}].old_text matches multiple times in {}. Must be unique.",
+                    i, path_str
+                ),
+                details: None,
+                is_error: true,
+            };
+        }
+        positioned.push((first, edit, norm_old));
     }
 
     // Sort by position (top-to-bottom in file)

@@ -671,3 +671,85 @@ fn edit_multi_no_change_rejected() {
     assert!(result.is_error);
     assert!(result.content.contains("No changes"), "{}", result.content);
 }
+
+// ── Bug regression tests ──
+// These use 2+ edits to exercise the multi-edit code path.
+// (1-edit arrays route to single-edit which has its own checks.)
+
+#[test]
+fn edit_multi_ambiguous_old_text_rejected() {
+    // "foo" appears twice. An edit targeting "foo" alongside another valid
+    // edit should be rejected — find() would silently pick the first.
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "foo\nbar\nfoo\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "foo", "new_text": "baz"},
+                {"old_text": "bar", "new_text": "BAR"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(result.is_error, "should reject ambiguous match: {}", result.content);
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(content, "foo\nbar\nfoo\n");
+}
+
+#[test]
+fn edit_multi_two_edits_same_old_text_rejected() {
+    // Two edits both targeting "foo" (which appears twice).
+    // Third edit keeps us in multi-edit path.
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "foo\nbar\nfoo\nbaz\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "foo", "new_text": "first"},
+                {"old_text": "baz", "new_text": "BAZ"},
+                {"old_text": "foo", "new_text": "second"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(result.is_error, "should reject duplicate targets: {}", result.content);
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(content, "foo\nbar\nfoo\nbaz\n");
+}
+
+#[test]
+fn edit_multi_empty_old_text_rejected() {
+    // Empty old_text with 2 edits to exercise multi-edit path
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "hello\nworld\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "", "new_text": "injected"},
+                {"old_text": "world", "new_text": "WORLD"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(result.is_error, "empty old_text should be rejected: {}", result.content);
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(content, "hello\nworld\n");
+}
