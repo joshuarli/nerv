@@ -1,5 +1,6 @@
 {
   "prompt": "The tests in test_sum.py are failing. Diagnose and fix the bug.",
   "verify": "python3 test_sum.py",
-  "max_turns": 10
+  "max_turns": 10,
+  "on_fail": "That didn't fix it. Run the tests and look at what values are actually being returned."
 }

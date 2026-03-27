@@ -1,5 +1,6 @@
 {
   "prompt": "formatter.py has duplicated normalization logic in three functions. Refactor it to eliminate the duplication. All tests in test_formatter.py must pass, including the one that checks duplication was removed.",
   "verify": "python3 test_formatter.py",
-  "max_turns": 15
+  "max_turns": 15,
+  "on_fail": "There's a test that checks the duplication is actually gone. Read what it asserts."
 }

@@ -1,5 +1,6 @@
 {
   "prompt": "test_parse_sales.py is failing. Find and fix the bug.",
   "verify": "python3 test_parse_sales.py",
-  "max_turns": 10
+  "max_turns": 10,
+  "on_fail": "Still broken. Try adding a print to see what the totals dict looks like after parsing."
 }

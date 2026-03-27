@@ -1,5 +1,6 @@
 {
   "prompt": "Add caching to the TemperatureConverter in converter.py so that repeated conversions with the same input skip recomputation and don't add duplicate history entries. The cache should be cleared when clear_history() is called. All tests in test_converter.py must pass.",
   "verify": "python3 test_converter.py",
-  "max_turns": 15
+  "max_turns": 15,
+  "on_fail": "Tests are still failing. Read the failing test names — they tell you what behavior is expected."
 }

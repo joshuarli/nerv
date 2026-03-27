@@ -1,5 +1,6 @@
 {
   "prompt": "Some tests in test_config_loader.py are failing. Fix config_loader.py so all tests pass.",
   "verify": "python3 test_config_loader.py",
-  "max_turns": 15
+  "max_turns": 15,
+  "on_fail": "Still failing. Run the tests and read the tracebacks carefully — there are multiple distinct failure modes."
 }

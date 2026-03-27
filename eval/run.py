@@ -35,6 +35,8 @@ class ToolCall:
 class EvalResult:
     task: str
     passed: bool
+    attempts: int = 1
+    hint_used: bool = False
     turns: int = 0
     tool_calls: list[ToolCall] = field(default_factory=list)
     total_tool_calls: int = 0
@@ -123,30 +125,29 @@ def verify(command: str, work_dir: Path, expected_exit: int = 0) -> tuple[bool, 
 
 
 def write_report(report_dir: Path, task_name: str, config: dict,
-                 nerv_output: dict, nerv_stdout: str, nerv_stderr: str,
+                 nerv_output: dict, nerv_stderr: str, _nerv_stdout: str,
                  passed: bool, verify_output: str, result: EvalResult):
     """Write detailed task report."""
     task_dir = report_dir / task_name
     task_dir.mkdir(parents=True, exist_ok=True)
 
-    # Full nerv JSON output
+    # Full nerv JSON output (may contain {"attempts": [...]})
     with open(task_dir / "nerv_output.json", "w") as f:
         json.dump(nerv_output, f, indent=2)
 
-    # Raw stdout/stderr
     if nerv_stderr.strip():
         with open(task_dir / "nerv_stderr.txt", "w") as f:
             f.write(nerv_stderr)
 
-    # Verification output
-    with open(task_dir / "verify_output.txt", "w") as f:
-        f.write(verify_output)
+    if verify_output:
+        with open(task_dir / "verify_output.txt", "w") as f:
+            f.write(verify_output)
 
-    # Summary
     summary = {
         "task": task_name,
         "passed": passed,
         "prompt": config["prompt"],
+        "on_fail": config.get("on_fail", []),
         "verify_command": config["verify"],
         **asdict(result),
     }
@@ -154,65 +155,111 @@ def write_report(report_dir: Path, task_name: str, config: dict,
         json.dump(summary, f, indent=2)
 
 
+def extract_metrics(nerv_output: dict) -> tuple[list[ToolCall], dict]:
+    """Extract tool calls and raw metrics dict from nerv output."""
+    metrics = nerv_output.get("metrics", {})
+    tool_calls = [
+        ToolCall(name=tc["name"], is_error=tc.get("is_error", False))
+        for tc in metrics.get("tool_calls", [])
+    ]
+    return tool_calls, metrics
+
+
 def run_task(task_dir: Path, binary: Path, report_dir: Path,
              model: str | None = None) -> EvalResult:
     task_name = task_dir.name
     config = load_task(task_dir)
+    on_fail_hints = config.get("on_fail", [])
+    if isinstance(on_fail_hints, str):
+        on_fail_hints = [on_fail_hints]
 
     with tempfile.TemporaryDirectory(prefix="nerv-eval-") as tmpdir:
         work_dir = Path(tmpdir)
         setup_workdir(task_dir, work_dir)
 
+        # Accumulate metrics across attempts
+        all_tool_calls: list[ToolCall] = []
+        all_outputs: list[dict] = []
+        all_stderr: list[str] = []
+        total_turns = 0
+        total_tokens_in = 0
+        total_tokens_out = 0
+        total_tokens_cache = 0
+        total_cost = 0.0
+        hint_used = False
+
+        prompts = [config["prompt"]] + on_fail_hints
         start = time.monotonic()
-        nerv_output, nerv_stdout, nerv_stderr = run_nerv(
-            binary,
-            config["prompt"],
-            work_dir,
-            max_turns=config.get("max_turns", 20),
-            model=model,
-        )
-        wall_time = time.monotonic() - start
 
-        if "error" in nerv_output:
-            result = EvalResult(
-                task=task_name,
-                passed=False,
-                wall_time_s=round(wall_time, 2),
-                error=nerv_output["error"],
+        for attempt, prompt in enumerate(prompts):
+            nerv_output, nerv_stdout, nerv_stderr = run_nerv(
+                binary,
+                prompt,
+                work_dir,
+                max_turns=config.get("max_turns", 20),
+                model=model,
             )
-            write_report(report_dir, task_name, config,
-                         nerv_output, nerv_stdout, nerv_stderr,
-                         False, "", result)
-            return result
 
-        # Extract metrics
-        metrics = nerv_output.get("metrics", {})
-        tool_calls = [
-            ToolCall(name=tc["name"], is_error=tc.get("is_error", False))
-            for tc in metrics.get("tool_calls", [])
-        ]
+            all_outputs.append(nerv_output)
+            all_stderr.append(nerv_stderr)
 
-        passed, verify_output = verify(
-            config["verify"],
-            work_dir,
-            config.get("expected_exit", 0),
-        )
+            if "error" in nerv_output:
+                wall_time = time.monotonic() - start
+                result = EvalResult(
+                    task=task_name,
+                    passed=False,
+                    attempts=attempt + 1,
+                    hint_used=hint_used,
+                    wall_time_s=round(wall_time, 2),
+                    error=nerv_output["error"],
+                )
+                write_report(report_dir, task_name, config,
+                             {"attempts": all_outputs},
+                             "\n".join(all_stderr), "",
+                             False, "", result)
+                return result
+
+            tool_calls, metrics = extract_metrics(nerv_output)
+            all_tool_calls.extend(tool_calls)
+            total_turns += metrics.get("turns", 0)
+            total_tokens_in = max(total_tokens_in, metrics.get("tokens_in", 0))
+            total_tokens_out += metrics.get("tokens_out", 0)
+            total_tokens_cache = max(total_tokens_cache, metrics.get("tokens_cache_read", 0))
+            total_cost += metrics.get("cost", 0.0)
+
+            passed, verify_output = verify(
+                config["verify"],
+                work_dir,
+                config.get("expected_exit", 0),
+            )
+
+            if passed:
+                break
+
+            # Not the last attempt — will send a hint
+            if attempt < len(prompts) - 1:
+                hint_used = True
+
+        wall_time = time.monotonic() - start
 
         result = EvalResult(
             task=task_name,
             passed=passed,
-            turns=metrics.get("turns", 0),
-            tool_calls=tool_calls,
-            total_tool_calls=len(tool_calls),
-            tokens_in=metrics.get("tokens_in", 0),
-            tokens_out=metrics.get("tokens_out", 0),
-            tokens_cache_read=metrics.get("tokens_cache_read", 0),
-            cost=metrics.get("cost", 0.0),
+            attempts=len(all_outputs),
+            hint_used=hint_used,
+            turns=total_turns,
+            tool_calls=all_tool_calls,
+            total_tool_calls=len(all_tool_calls),
+            tokens_in=total_tokens_in,
+            tokens_out=total_tokens_out,
+            tokens_cache_read=total_tokens_cache,
+            cost=round(total_cost, 6),
             wall_time_s=round(wall_time, 2),
         )
 
         write_report(report_dir, task_name, config,
-                     nerv_output, nerv_stdout, nerv_stderr,
+                     {"attempts": all_outputs},
+                     "\n".join(all_stderr), "",
                      passed, verify_output, result)
 
         return result
@@ -271,15 +318,18 @@ def main():
 
         if not json_output:
             if result.passed:
+                hint = " +hint" if result.hint_used else ""
+                att = f" ({result.attempts} attempts)" if result.attempts > 1 else ""
                 print(
-                    f"PASS  ({result.turns} turns, {result.total_tool_calls} tools, "
+                    f"PASS{att}{hint}  ({result.turns} turns, {result.total_tool_calls} tools, "
                     f"{result.tokens_in}+{result.tokens_out} tok, "
                     f"{result.wall_time_s}s)",
                     file=sys.stderr,
                 )
             else:
                 err = result.error or "verification failed"
-                print(f"FAIL  {err}", file=sys.stderr)
+                att = f" after {result.attempts} attempts" if result.attempts > 1 else ""
+                print(f"FAIL{att}  {err}", file=sys.stderr)
 
         results.append(result)
 
