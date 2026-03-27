@@ -854,82 +854,28 @@ pub fn session_task(
 }
 
 fn highlight_for_html(text: &str) -> String {
-    use crate::tui::highlight::{highlight_line, rules_for_lang, HlState};
-    
-    let mut result = String::new();
-    let mut state = HlState::default();
-    
-    // Try to detect language from first few lines, default to bash
-    let lang = if text.starts_with("python") || text.starts_with(">>>") || text.contains("def ") {
-        "python"
-    } else if text.starts_with("#!/usr/bin/env python") {
+    use crate::tui::highlight::{highlight_line_html, rules_for_lang, HlState};
+
+    // Sniff language from the first non-empty line. Default to bash since most
+    // tool output is shell-like text.
+    let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let lang = if first.starts_with("#!/usr/bin/env python")
+        || first.starts_with("python")
+        || text.contains("\ndef ")
+    {
         "python"
     } else {
         "bash"
     };
-    
-    let rules = rules_for_lang(lang).unwrap_or(rules_for_lang("bash").unwrap());
-    
-    for line in text.lines() {
-        let highlighted = highlight_line(line, &mut state, rules);
-        // Convert ANSI codes to HTML spans
-        let html_line = ansi_to_html(&highlighted);
-        result.push_str(&html_line);
-        result.push('\n');
-    }
-    
-    result
-}
 
-fn ansi_to_html(ansi_str: &str) -> String {
-    let mut result = String::new();
-    let mut in_span = false;
-    
-    let mut chars = ansi_str.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' && chars.peek() == Some(&'[') {
-            chars.next(); // consume '['
-            let mut code = String::new();
-            while let Some(&c) = chars.peek() {
-                if c == 'm' {
-                    chars.next();
-                    break;
-                }
-                code.push(chars.next().unwrap());
-            }
-            
-            // Close previous span if one is open
-            if in_span {
-                result.push_str("</span>");
-                in_span = false;
-            }
-            
-            // Map ANSI codes to our HTML classes
-            let class = match code.as_str() {
-                "35" => Some("hl-keyword"),      // Magenta - keywords
-                "32" => Some("hl-string"),       // Green - strings
-                "90" => Some("hl-comment"),      // Dark gray - comments
-                "33" => Some("hl-number"),       // Yellow - numbers
-                "34" => Some("hl-type"),         // Blue - types
-                "31" => Some("hl-function"),     // Red - functions
-                "37" => Some("hl-punctuation"),  // White - punctuation
-                _ => None,
-            };
-            
-            if let Some(cls) = class {
-                result.push_str(&format!("<span class='{}'>", cls));
-                in_span = true;
-            }
-        } else {
-            result.push(ch);
-        }
+    let rules = rules_for_lang(lang).unwrap_or_else(|| rules_for_lang("bash").unwrap());
+    let mut state = HlState::default();
+    let mut out = String::with_capacity(text.len() + 256);
+    for line in text.lines() {
+        out.push_str(&highlight_line_html(line, &mut state, rules));
+        out.push('\n');
     }
-    
-    if in_span {
-        result.push_str("</span>");
-    }
-    
-    result
+    out
 }
 
 fn export_html(session: &AgentSession, path: &std::path::Path) -> Result<String, String> {
@@ -960,13 +906,16 @@ body{font-family:-apple-system,system-ui,'Segoe UI',sans-serif;max-width:720px;m
 .tool-header:hover{background:#374151}
 .tool-output{border:1px solid #1a202c;border-top:none;border-radius:0 0 6px 6px;padding:1rem;font-family:'SF Mono',Menlo,monospace;font-size:0.8rem;white-space:pre-wrap;overflow-y:auto;background:#1a202c;color:#e2e8f0}
 .tool-output.hidden{display:none}
-.hl-keyword{color:#e879f9}
+.hl-keyword{color:#c084fc}
 .hl-string{color:#6ee7b7}
-.hl-comment{color:#6b7280}
+.hl-comment{color:#6b7280;font-style:italic}
 .hl-number{color:#fbbf24}
 .hl-type{color:#60a5fa}
 .hl-function{color:#f87171}
-.hl-punctuation{color:#9ca3af}
+.hl-operator{color:#94a3b8}
+.hl-bracket{color:#e2e8f0}
+.hl-constant{color:#fb923c}
+.hl-macro{color:#e879f9}
 .meta{font-size:0.75rem;color:#999;margin-top:0.25rem}
 .controls{margin-bottom:1.5rem;padding:1rem;background:#fafafa;border-radius:6px;border:1px solid #eee}
 .controls button{padding:0.5rem 1rem;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:500;transition:background 0.2s}

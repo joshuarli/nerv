@@ -33,6 +33,22 @@ impl Hl {
             Hl::Macro => "\x1b[35;1m",
         }
     }
+
+    pub fn html_class(self) -> Option<&'static str> {
+        match self {
+            Hl::Normal => None,
+            Hl::Comment => Some("hl-comment"),
+            Hl::Keyword => Some("hl-keyword"),
+            Hl::Type => Some("hl-type"),
+            Hl::String => Some("hl-string"),
+            Hl::Number => Some("hl-number"),
+            Hl::Bracket => Some("hl-bracket"),
+            Hl::Operator => Some("hl-operator"),
+            Hl::Function => Some("hl-function"),
+            Hl::Constant => Some("hl-constant"),
+            Hl::Macro => Some("hl-macro"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -57,6 +73,18 @@ pub struct Rules {
 
 /// Highlight a line of code. Returns ANSI-colored string.
 pub fn highlight_line(line: &str, state: &mut HlState, rules: &Rules) -> String {
+    let hl = build_hl(line, state, rules);
+    apply_hl(line, &hl)
+}
+
+/// Highlight a line of code into HTML spans with HTML-escaped characters.
+/// Returns a plain HTML string (no trailing newline).
+pub fn highlight_line_html(line: &str, state: &mut HlState, rules: &Rules) -> String {
+    let hl = build_hl(line, state, rules);
+    apply_hl_html(line, &hl)
+}
+
+fn build_hl(line: &str, state: &mut HlState, rules: &Rules) -> Vec<Hl> {
     let bytes = line.as_bytes();
     let len = bytes.len();
     let mut hl = vec![Hl::Normal; len];
@@ -86,7 +114,7 @@ pub fn highlight_line(line: &str, state: &mut HlState, rules: &Rules) -> String 
                 i += 1;
             }
             if *state == HlState::BlockComment {
-                return apply_hl(line, &hl);
+                return hl;
             }
         }
         HlState::MultiLineString(idx) => {
@@ -113,7 +141,7 @@ pub fn highlight_line(line: &str, state: &mut HlState, rules: &Rules) -> String 
                 i += 1;
             }
             if matches!(*state, HlState::MultiLineString(_)) {
-                return apply_hl(line, &hl);
+                return hl;
             }
         }
         HlState::Normal => {}
@@ -126,7 +154,7 @@ pub fn highlight_line(line: &str, state: &mut HlState, rules: &Rules) -> String 
                 *b = Hl::Comment;
             }
             *state = HlState::Normal;
-            return apply_hl(line, &hl);
+            return hl;
         }
         // Block comment
         if !block_open.is_empty() && starts_with(bytes, block_open, i) {
@@ -151,7 +179,7 @@ pub fn highlight_line(line: &str, state: &mut HlState, rules: &Rules) -> String 
                     *b = Hl::Comment;
                 }
                 *state = HlState::BlockComment;
-                return apply_hl(line, &hl);
+                return hl;
             }
             continue;
         }
@@ -190,7 +218,7 @@ pub fn highlight_line(line: &str, state: &mut HlState, rules: &Rules) -> String 
                     if multiline {
                         *state = HlState::MultiLineString(di as u8);
                     }
-                    return apply_hl(line, &hl);
+                    return hl;
                 }
                 matched = true;
                 break;
@@ -297,7 +325,7 @@ pub fn highlight_line(line: &str, state: &mut HlState, rules: &Rules) -> String 
         i += 1;
     }
     *state = HlState::Normal;
-    apply_hl(line, &hl)
+    hl
 }
 
 fn starts_with(hay: &[u8], needle: &[u8], pos: usize) -> bool {
@@ -359,6 +387,38 @@ fn apply_hl(line: &str, hl: &[Hl]) -> String {
     }
     if current != Hl::Normal {
         out.push_str("\x1b[0m");
+    }
+    out
+}
+
+fn apply_hl_html(line: &str, hl: &[Hl]) -> String {
+    let bytes = line.as_bytes();
+    let mut out = String::with_capacity(line.len() + 128);
+    let mut current = Hl::Normal;
+    for (i, &b) in bytes.iter().enumerate() {
+        let h = if i < hl.len() { hl[i] } else { Hl::Normal };
+        if h != current {
+            if current != Hl::Normal {
+                out.push_str("</span>");
+            }
+            if let Some(cls) = h.html_class() {
+                out.push_str("<span class='");
+                out.push_str(cls);
+                out.push_str("'>");
+            }
+            current = h;
+        }
+        // HTML-escape at the character level so content never breaks out of the block
+        match b {
+            b'&' => out.push_str("&amp;"),
+            b'<' => out.push_str("&lt;"),
+            b'>' => out.push_str("&gt;"),
+            b'"' => out.push_str("&quot;"),
+            _ => out.push(b as char),
+        }
+    }
+    if current != Hl::Normal {
+        out.push_str("</span>");
     }
     out
 }
