@@ -121,6 +121,37 @@ pub fn error_response(msg: &str) -> Vec<ProviderEvent> {
     }]
 }
 
+pub fn thinking_then_text(thinking: &str, text: &str) -> Vec<ProviderEvent> {
+    vec![
+        ProviderEvent::ThinkingDelta(thinking.to_string()),
+        ProviderEvent::TextDelta(text.to_string()),
+        ProviderEvent::MessageStop {
+            stop_reason: StopReason::EndTurn,
+            usage: Usage {
+                input: 100,
+                output: 40,
+                ..Default::default()
+            },
+        },
+    ]
+}
+
+pub fn chunked_response(chunks: &[&str]) -> Vec<ProviderEvent> {
+    let mut events: Vec<ProviderEvent> = chunks
+        .iter()
+        .map(|c| ProviderEvent::TextDelta(c.to_string()))
+        .collect();
+    events.push(ProviderEvent::MessageStop {
+        stop_reason: StopReason::EndTurn,
+        usage: Usage {
+            input: 100,
+            output: 20,
+            ..Default::default()
+        },
+    });
+    events
+}
+
 pub fn test_model() -> Model {
     Model {
         id: "test-model".into(),
@@ -132,8 +163,8 @@ pub fn test_model() -> Model {
         supports_adaptive_thinking: false,
         supports_xhigh: false,
         pricing: ModelPricing {
-            input: 0.0,
-            output: 0.0,
+            input: 1.0,
+            output: 2.0,
             cache_read: 0.0,
             cache_write: 0.0,
         },

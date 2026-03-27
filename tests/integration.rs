@@ -1,236 +1,25 @@
 //! Integration tests — full AgentSession with mock provider, session persistence, export.
 
-use std::sync::{Arc, RwLock};
+mod helpers;
 
-use nerv::agent::agent::{Agent, AgentTool, ToolResult, UpdateCallback};
+use helpers::*;
 use nerv::agent::provider::*;
 use nerv::agent::types::*;
 use nerv::core::*;
 use nerv::session::SessionManager;
 use tempfile::TempDir;
 
-// ---------------------------------------------------------------------------
-// Mock provider — pops canned response sequences one per stream_completion call
-// ---------------------------------------------------------------------------
-
-struct MockProvider {
-    responses: std::sync::Mutex<Vec<Vec<ProviderEvent>>>,
-}
-
-impl MockProvider {
-    fn new(responses: Vec<Vec<ProviderEvent>>) -> Self {
-        Self {
-            responses: std::sync::Mutex::new(responses),
-        }
-    }
-}
-
-impl Provider for MockProvider {
-    fn name(&self) -> &str {
-        "mock"
-    }
-    fn stream_completion(
-        &self,
-        _request: &CompletionRequest,
-        _cancel: &CancelFlag,
-        on_event: &mut dyn FnMut(ProviderEvent),
-    ) -> Result<(), nerv::errors::ProviderError> {
-        for event in self.responses.lock().unwrap().remove(0) {
-            on_event(event);
-        }
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Mock tool — just echoes input back
-// ---------------------------------------------------------------------------
-
-struct EchoTool;
-
-impl AgentTool for EchoTool {
-    fn name(&self) -> &str {
-        "echo"
-    }
-    fn description(&self) -> &str {
-        "Echoes input"
-    }
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": { "text": { "type": "string" } },
-            "required": ["text"]
-        })
-    }
-    fn validate(&self, _input: &serde_json::Value) -> Result<(), nerv::errors::ToolError> {
-        Ok(())
-    }
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback) -> ToolResult {
-        let text = input["text"].as_str().unwrap_or("(no input)");
-        ToolResult {
-            content: format!("echo: {}", text),
-            details: None,
-            is_error: false,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn simple_response(text: &str) -> Vec<ProviderEvent> {
-    vec![
-        ProviderEvent::TextDelta(text.to_string()),
-        ProviderEvent::MessageStop {
-            stop_reason: StopReason::EndTurn,
-            usage: Usage {
-                input: 100,
-                output: 20,
-                ..Default::default()
-            },
-        },
-    ]
-}
-
-fn tool_call_response(tool_id: &str, tool_name: &str, args: &str) -> Vec<ProviderEvent> {
-    vec![
-        ProviderEvent::ToolCallStart {
-            id: tool_id.to_string(),
-            name: tool_name.to_string(),
-        },
-        ProviderEvent::ToolCallArgsDelta {
-            id: tool_id.to_string(),
-            delta: args.to_string(),
-        },
-        ProviderEvent::ToolCallEnd {
-            id: tool_id.to_string(),
-        },
-        ProviderEvent::MessageStop {
-            stop_reason: StopReason::ToolUse,
-            usage: Usage {
-                input: 100,
-                output: 30,
-                ..Default::default()
-            },
-        },
-    ]
-}
-
-fn thinking_then_text(thinking: &str, text: &str) -> Vec<ProviderEvent> {
-    vec![
-        ProviderEvent::ThinkingDelta(thinking.to_string()),
-        ProviderEvent::TextDelta(text.to_string()),
-        ProviderEvent::MessageStop {
-            stop_reason: StopReason::EndTurn,
-            usage: Usage {
-                input: 100,
-                output: 40,
-                ..Default::default()
-            },
-        },
-    ]
-}
-
-fn chunked_response(chunks: &[&str]) -> Vec<ProviderEvent> {
-    let mut events: Vec<ProviderEvent> = chunks
-        .iter()
-        .map(|c| ProviderEvent::TextDelta(c.to_string()))
-        .collect();
-    events.push(ProviderEvent::MessageStop {
-        stop_reason: StopReason::EndTurn,
-        usage: Usage {
-            input: 100,
-            output: 20,
-            ..Default::default()
-        },
-    });
-    events
-}
-
-fn error_response(msg: &str) -> Vec<ProviderEvent> {
-    vec![ProviderEvent::MessageStop {
-        stop_reason: StopReason::Error {
-            message: msg.to_string(),
-        },
-        usage: Usage::default(),
-    }]
-}
-
 fn setup_session(
     responses: Vec<Vec<ProviderEvent>>,
-) -> (
-    TempDir,
-    AgentSession,
-    crossbeam_channel::Sender<AgentSessionEvent>,
-) {
-    setup_session_with_tools(responses, false)
+) -> (TempDir, AgentSession, crossbeam_channel::Sender<AgentSessionEvent>) {
+    mock_session(responses, false)
 }
 
 fn setup_session_with_tools(
     responses: Vec<Vec<ProviderEvent>>,
     register_tools: bool,
-) -> (
-    TempDir,
-    AgentSession,
-    crossbeam_channel::Sender<AgentSessionEvent>,
-) {
-    let tmp = TempDir::new().unwrap();
-    let nerv_dir = tmp.path().join(".nerv");
-    std::fs::create_dir_all(&nerv_dir).unwrap();
-
-    let provider = Arc::new(MockProvider::new(responses));
-    let mut registry = ProviderRegistry::new();
-    registry.register("mock", provider);
-
-    let mut agent = Agent::new(Arc::new(RwLock::new(registry)));
-    agent.state.model = Some(Model {
-        id: "test-model".into(),
-        name: "Test".into(),
-        provider_name: "mock".into(),
-        context_window: 100_000,
-        max_output_tokens: 4096,
-        reasoning: false,
-        supports_adaptive_thinking: false,
-        supports_xhigh: false,
-        pricing: ModelPricing {
-            input: 1.0,
-            output: 2.0,
-            cache_read: 0.0,
-            cache_write: 0.0,
-        },
-    });
-    agent.state.system_prompt = "Test system prompt.".into();
-
-    let session_manager = SessionManager::new(&nerv_dir);
-    let mut tool_registry = nerv::core::ToolRegistry::new();
-    if register_tools {
-        tool_registry.register(nerv::core::ToolDefinition {
-            tool: Arc::new(EchoTool),
-        });
-    }
-    let config = NervConfig::load(&nerv_dir);
-    let mut auth = nerv::core::auth::AuthStorage::load(&nerv_dir);
-    let model_registry = Arc::new(ModelRegistry::new(&config, &mut auth));
-    let resources = nerv::core::resource_loader::LoadedResources {
-        context_files: Vec::new(),
-        system_prompt: None,
-        append_prompts: Vec::new(),
-        memory: None,
-        skills: Vec::new(),
-    };
-
-    let session = AgentSession::new(
-        agent,
-        session_manager,
-        tool_registry,
-        model_registry,
-        resources,
-        tmp.path().to_path_buf(),
-    );
-
-    let (event_tx, _event_rx) = crossbeam_channel::bounded(256);
-    (tmp, session, event_tx)
+) -> (TempDir, AgentSession, crossbeam_channel::Sender<AgentSessionEvent>) {
+    mock_session(responses, register_tools)
 }
 
 fn collect_events(
@@ -243,11 +32,11 @@ fn collect_events_with_tools(
     responses: Vec<Vec<ProviderEvent>>,
     register_tools: bool,
 ) -> (TempDir, AgentSession, Vec<AgentSessionEvent>) {
-    let (_tmp, mut session, _event_tx) = setup_session_with_tools(responses, register_tools);
+    let (tmp, mut session, _) = mock_session(responses, register_tools);
     let (tx, rx) = crossbeam_channel::bounded(256);
     session.prompt("test".into(), &tx);
     let events: Vec<_> = rx.try_iter().collect();
-    (_tmp, session, events)
+    (tmp, session, events)
 }
 
 fn session_messages(session: &AgentSession) -> Vec<AgentMessage> {
