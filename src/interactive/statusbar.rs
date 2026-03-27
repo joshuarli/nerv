@@ -30,6 +30,8 @@ pub struct StatusBar {
     first_output: Option<std::time::Instant>,
     input_tokens: u32,
     output_tokens: u32,
+    /// Input tokens at end of previous turn — used to compute delta.
+    prev_input_tokens: u32,
     completed: Option<CompletedInfo>,
     queued: Vec<String>,
     editing_idx: Option<usize>,
@@ -37,7 +39,8 @@ pub struct StatusBar {
 
 struct CompletedInfo {
     elapsed: std::time::Duration,
-    input_tokens: u32,
+    /// New tokens added this turn (input delta from previous turn).
+    input_delta: u32,
     output_tokens: u32,
     tok_per_sec: Option<f64>,
     interrupted: bool,
@@ -54,6 +57,7 @@ impl StatusBar {
             first_output: None,
             input_tokens: 0,
             output_tokens: 0,
+            prev_input_tokens: 0,
             completed: None,
             queued: Vec::new(),
             editing_idx: None,
@@ -99,13 +103,15 @@ impl StatusBar {
     pub fn finish(&mut self) {
         let elapsed = self.start.map(|s| s.elapsed()).unwrap_or_default();
         let tok_per_sec = self.output_tok_per_sec();
+        let input_delta = self.input_tokens.saturating_sub(self.prev_input_tokens);
         self.completed = Some(CompletedInfo {
             elapsed,
-            input_tokens: self.input_tokens,
+            input_delta,
             output_tokens: self.output_tokens,
             tok_per_sec,
             interrupted: false,
         });
+        self.prev_input_tokens = self.input_tokens;
         self.streaming = false;
         self.start = None;
     }
@@ -113,13 +119,15 @@ impl StatusBar {
     pub fn cancel_streaming(&mut self) {
         let elapsed = self.start.map(|s| s.elapsed()).unwrap_or_default();
         let tok_per_sec = self.output_tok_per_sec();
+        let input_delta = self.input_tokens.saturating_sub(self.prev_input_tokens);
         self.completed = Some(CompletedInfo {
             elapsed,
-            input_tokens: self.input_tokens,
+            input_delta,
             output_tokens: self.output_tokens,
             tok_per_sec,
             interrupted: true,
         });
+        self.prev_input_tokens = self.input_tokens;
         self.streaming = false;
         self.start = None;
     }
@@ -143,12 +151,12 @@ impl Component for StatusBar {
                 .tok_per_sec
                 .map(|t| format!(" {}{:.1} t/s{}", theme::FOOTER_DIM, t, r))
                 .unwrap_or_default();
-            let tok = if info.input_tokens > 0 || info.output_tokens > 0 {
+            let tok = if info.input_delta > 0 || info.output_tokens > 0 {
                 format!(
                     " {}·{} ↑{} ↓{}{}",
                     theme::DIM,
                     theme::FOOTER_LABEL,
-                    fmt_tok(info.input_tokens),
+                    fmt_tok(info.input_delta),
                     fmt_tok(info.output_tokens),
                     tps,
                 )
@@ -206,7 +214,8 @@ impl StatusBar {
         let spinner = SPINNER_FRAMES[self.frame % SPINNER_FRAMES.len()];
 
         // Highlight the active direction in yellow, show tok/s during output
-        let tok = if self.input_tokens > 0 || self.output_tokens > 0 {
+        let input_delta = self.input_tokens.saturating_sub(self.prev_input_tokens);
+        let tok = if input_delta > 0 || self.output_tokens > 0 {
             let (up_color, down_color) = if self.output_tokens == 0 {
                 (theme::WARN, theme::FOOTER_DIM) // input phase
             } else {
@@ -223,7 +232,7 @@ impl StatusBar {
                 theme::DIM,
                 r,
                 up_color,
-                fmt_tok(self.input_tokens),
+                fmt_tok(input_delta),
                 r,
                 down_color,
                 fmt_tok(self.output_tokens),
