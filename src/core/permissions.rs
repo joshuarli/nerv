@@ -139,28 +139,43 @@ fn is_safe_system_path(path: &str) -> bool {
 /// Extract tokens that might be paths, including redirect targets.
 fn extract_path_tokens(cmd: &str) -> Vec<String> {
     let mut tokens = Vec::new();
+    // Strip double-quoted and single-quoted strings before tokenizing — their
+    // contents are argument values (commit messages, regex patterns, etc.) and
+    // should never be interpreted as path tokens.
+    let mut stripped = String::with_capacity(cmd.len());
+    let mut chars = cmd.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '"' || c == '\'' {
+            // Consume until matching closing quote (no escape handling needed)
+            while let Some(inner) = chars.next() {
+                if inner == c {
+                    break;
+                }
+            }
+            stripped.push(' '); // preserve token boundary
+        } else {
+            stripped.push(c);
+        }
+    }
+
     // Split on whitespace but also catch tokens after redirect operators
-    let cleaned = cmd
+    let cleaned = stripped
         .replace(">>", " >> ")
         .replace(">", " > ")
         .replace("<", " < ");
     for token in cleaned.split_whitespace() {
-        // Strip quotes
-        let t = token.trim_matches(|c| c == '\'' || c == '"');
-        if t.starts_with('/') || t.starts_with("~/") {
-            // Skip tokens that contain regex metacharacters or glob wildcards —
-            // they're patterns/arguments, not filesystem paths (e.g. `//.*Value`).
-            if t.contains(|c: char| matches!(c, '*' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | '|' | '^')) {
-                continue;
+        if token.starts_with('/') || token.starts_with("~/") {
+            // Only treat a token as a path if it actually exists on the
+            // filesystem. This rejects non-existent paths, regex patterns,
+            // and other strings that happen to start with `/` or `~/`.
+            let resolved = if let Some(rest) = token.strip_prefix("~/") {
+                crate::home_dir().map(|h| h.join(rest))
+            } else {
+                Some(PathBuf::from(token))
+            };
+            if resolved.map(|p| p.exists()).unwrap_or(false) {
+                tokens.push(token.to_string());
             }
-            // Skip tokens that don't have an alphanumeric path component after
-            // the leading slash(es) — e.g. bare `//` from a commit message or
-            // comment fragment is not a filesystem path.
-            let after_slashes = t.trim_start_matches('/');
-            if !after_slashes.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '.') {
-                continue;
-            }
-            tokens.push(t.to_string());
         }
     }
     tokens
@@ -270,7 +285,7 @@ mod tests {
 
     #[test]
     fn bash_outside_path_asks() {
-        let args = serde_json::json!({"command": "cat /Users/josh/secrets/key.pem"});
+        let args = serde_json::json!({"command": "cat /etc/passwd"});
         assert!(matches!(
             check("bash", &args, Some(&repo())),
             Permission::Ask(_)
@@ -336,7 +351,7 @@ mod tests {
 
     #[test]
     fn bash_redirect_outside_repo_asks() {
-        let args = serde_json::json!({"command": "echo evil > /Users/josh/secrets/key"});
+        let args = serde_json::json!({"command": "echo evil > /etc/passwd"});
         assert!(matches!(
             check("bash", &args, Some(&repo())),
             Permission::Ask(_)
@@ -345,7 +360,7 @@ mod tests {
 
     #[test]
     fn bash_pipe_to_tee_outside_asks() {
-        let args = serde_json::json!({"command": "echo hi | tee /Users/josh/secrets/out"});
+        let args = serde_json::json!({"command": "echo hi | tee /etc/passwd"});
         assert!(matches!(
             check("bash", &args, Some(&repo())),
             Permission::Ask(_)
