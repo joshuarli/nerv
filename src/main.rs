@@ -445,8 +445,16 @@ fn main() {
                                     if let Some(tx) = interactive.pending_permission.take() {
                                         let _ = tx.send(approved);
                                     }
+                                    interactive.pending_permission_details = None;
                                     interactive.status_message = None;
                                     interactive.status_is_error = false;
+                                    let label = if approved { "allowed" } else { "denied" };
+                                    let style = if approved {
+                                        nerv::interactive::theme::SUCCESS
+                                    } else {
+                                        nerv::interactive::theme::ERROR
+                                    };
+                                    layout.chat.push_styled(style, &format!("  → {}", label));
                                     tui.request_render(false); tui.maybe_render(&layout);
                                 }
                                 continue;
