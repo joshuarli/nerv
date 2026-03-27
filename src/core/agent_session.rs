@@ -853,6 +853,85 @@ pub fn session_task(
     }
 }
 
+fn highlight_for_html(text: &str) -> String {
+    use crate::tui::highlight::{highlight_line, rules_for_lang, HlState};
+    
+    let mut result = String::new();
+    let mut state = HlState::default();
+    
+    // Try to detect language from first few lines, default to bash
+    let lang = if text.starts_with("python") || text.starts_with(">>>") || text.contains("def ") {
+        "python"
+    } else if text.starts_with("#!/usr/bin/env python") {
+        "python"
+    } else {
+        "bash"
+    };
+    
+    let rules = rules_for_lang(lang).unwrap_or(rules_for_lang("bash").unwrap());
+    
+    for line in text.lines() {
+        let highlighted = highlight_line(line, &mut state, rules);
+        // Convert ANSI codes to HTML spans
+        let html_line = ansi_to_html(&highlighted);
+        result.push_str(&html_line);
+        result.push('\n');
+    }
+    
+    result
+}
+
+fn ansi_to_html(ansi_str: &str) -> String {
+    let mut result = String::new();
+    let mut in_span = false;
+    
+    let mut chars = ansi_str.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next(); // consume '['
+            let mut code = String::new();
+            while let Some(&c) = chars.peek() {
+                if c == 'm' {
+                    chars.next();
+                    break;
+                }
+                code.push(chars.next().unwrap());
+            }
+            
+            // Close previous span if one is open
+            if in_span {
+                result.push_str("</span>");
+                in_span = false;
+            }
+            
+            // Map ANSI codes to our HTML classes
+            let class = match code.as_str() {
+                "35" => Some("hl-keyword"),      // Magenta - keywords
+                "32" => Some("hl-string"),       // Green - strings
+                "90" => Some("hl-comment"),      // Dark gray - comments
+                "33" => Some("hl-number"),       // Yellow - numbers
+                "34" => Some("hl-type"),         // Blue - types
+                "31" => Some("hl-function"),     // Red - functions
+                "37" => Some("hl-punctuation"),  // White - punctuation
+                _ => None,
+            };
+            
+            if let Some(cls) = class {
+                result.push_str(&format!("<span class='{}'>", cls));
+                in_span = true;
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    
+    if in_span {
+        result.push_str("</span>");
+    }
+    
+    result
+}
+
 fn export_html(session: &AgentSession, path: &std::path::Path) -> Result<String, String> {
     let mut html = String::from(
         r#"<!DOCTYPE html>
@@ -875,15 +954,19 @@ body{font-family:-apple-system,system-ui,'Segoe UI',sans-serif;max-width:720px;m
 .assistant pre code{background:none;padding:0}
 .assistant blockquote{border-left:3px solid #ddd;padding-left:1rem;color:#555;margin:0.75rem 0}
 .assistant ul,.assistant ol{padding-left:1.5rem}
-.tool{background:#f9f9f9;border:1px solid #eee;border-radius:6px;padding:0.75rem;margin:0.5rem 0;font-family:'SF Mono',Menlo,monospace;font-size:0.8rem;white-space:pre-wrap;color:#555;max-height:300px;overflow-y:auto}
-.tool-wrapper{margin:0.5rem 0}
-.tool-header{display:flex;align-items:center;justify-content:space-between;background:#f9f9f9;padding:0.5rem 0.75rem;border:1px solid #eee;border-radius:6px 6px 0 0;cursor:pointer;user-select:none}
+.tool-wrapper{margin:1rem 0}
+.tool-header{display:flex;align-items:center;justify-content:space-between;background:#2d3748;padding:0.5rem 0.75rem;border:1px solid #1a202c;border-radius:6px 6px 0 0;cursor:pointer;user-select:none;color:#e2e8f0;font-weight:500}
 .tool-header.collapsed{border-radius:6px}
-.tool-header:hover{background:#f5f5f5}
-.tool-output{border:1px solid #eee;border-top:none;border-radius:0 0 6px 6px;padding:0.75rem;font-family:'SF Mono',Menlo,monospace;font-size:0.8rem;white-space:pre-wrap;color:#555;max-height:300px;overflow-y:auto}
+.tool-header:hover{background:#374151}
+.tool-output{border:1px solid #1a202c;border-top:none;border-radius:0 0 6px 6px;padding:1rem;font-family:'SF Mono',Menlo,monospace;font-size:0.8rem;white-space:pre-wrap;overflow-y:auto;background:#1a202c;color:#e2e8f0}
 .tool-output.hidden{display:none}
-.toggle-btn{padding:0.25rem 0.5rem;background:#e5e5e5;border:1px solid #ccc;border-radius:3px;cursor:pointer;font-size:0.75rem;color:#666;transition:background 0.2s}
-.toggle-btn:hover{background:#d5d5d5}
+.hl-keyword{color:#e879f9}
+.hl-string{color:#6ee7b7}
+.hl-comment{color:#6b7280}
+.hl-number{color:#fbbf24}
+.hl-type{color:#60a5fa}
+.hl-function{color:#f87171}
+.hl-punctuation{color:#9ca3af}
 .meta{font-size:0.75rem;color:#999;margin-top:0.25rem}
 .controls{margin-bottom:1.5rem;padding:1rem;background:#fafafa;border-radius:6px;border:1px solid #eee}
 .controls button{padding:0.5rem 1rem;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:500;transition:background 0.2s}
@@ -909,9 +992,8 @@ function toggleAllTools() {
     }
   });
 }
-function toggleTool(btn, outputId) {
-  const output = document.getElementById(outputId);
-  const header = btn.parentElement;
+function toggleTool(header) {
+  const output = header.nextElementSibling;
   output.classList.toggle('hidden');
   header.classList.toggle('collapsed');
 }
@@ -943,7 +1025,6 @@ function toggleTool(btn, outputId) {
         entries
     };
 
-    let mut tool_counter = 0;
     for entry in entries {
         if let crate::session::types::SessionEntry::SystemPrompt(sp) = entry {
             html.push_str(&format!(
@@ -977,13 +1058,11 @@ function toggleTool(btn, outputId) {
                     html.push_str("</div>\n");
                 }
                 AgentMessage::ToolResult { content, .. } => {
-                    let tool_id = format!("tool-{}", tool_counter);
-                    tool_counter += 1;
-                    html.push_str(&format!("<div class='tool-wrapper'><div class='tool-header' onclick=\"toggleTool(this.querySelector('.toggle-btn'), '{}')\"><span>Tool Output</span><button class='toggle-btn' onclick='event.stopPropagation()'>Hide</button></div>", tool_id));
-                    html.push_str(&format!("<div class='tool-output' id='{}'>\n", tool_id));
+                    html.push_str(&format!("<div class='tool-wrapper'><div class='tool-header' onclick=\"toggleTool(this)\"><span>Tool Output</span></div>"));
+                    html.push_str("<div class='tool-output'>\n");
                     for item in content {
                         if let ContentItem::Text { text } = item {
-                            html.push_str(&html_escape(text));
+                            html.push_str(&highlight_for_html(text));
                         }
                     }
                     html.push_str("</div></div>\n");
