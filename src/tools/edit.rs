@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -27,6 +28,8 @@ impl EditTool {
     }
 }
 
+const MAX_EDIT_FILE_SIZE: usize = 10 * 1024 * 1024; // 10MB
+
 struct Edit {
     old_text: String,
     new_text: String,
@@ -43,17 +46,17 @@ impl AgentTool for EditTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Path to the file to edit"},
-                "old_text": {"type": "string", "description": "Exact text to find (single edit mode)"},
-                "new_text": {"type": "string", "description": "Replacement text (single edit mode)"},
+                "path": {"type": "string"},
+                "old_text": {"type": "string", "description": "Exact text to find and replace"},
+                "new_text": {"type": "string", "description": "Replacement text"},
                 "edits": {
                     "type": "array",
-                    "description": "Multiple edits to apply atomically. Each edit is matched against the original file content, not incrementally. Edits must not overlap.",
+                    "description": "Multiple disjoint replacements, matched against the original file. Each old_text must be unique.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "old_text": {"type": "string", "description": "Exact text to find"},
-                            "new_text": {"type": "string", "description": "Replacement text"}
+                            "old_text": {"type": "string"},
+                            "new_text": {"type": "string"}
                         },
                         "required": ["old_text", "new_text"]
                     }
@@ -149,6 +152,18 @@ impl AgentTool for EditTool {
                     }
                 }
             };
+            if bytes.len() > MAX_EDIT_FILE_SIZE {
+                return ToolResult {
+                    content: format!(
+                        "Error: {} is too large to edit ({:.1}MB, max {}MB)",
+                        path_str,
+                        bytes.len() as f64 / 1_048_576.0,
+                        MAX_EDIT_FILE_SIZE / 1_048_576,
+                    ),
+                    details: None,
+                    is_error: true,
+                };
+            }
             let content = String::from_utf8_lossy(&bytes);
             let (bom, content_no_bom) = strip_bom(&content);
             let line_ending = if content_no_bom.contains("\r\n") {
@@ -156,7 +171,7 @@ impl AgentTool for EditTool {
             } else {
                 "\n"
             };
-            let normalized = content_no_bom.replace("\r\n", "\n");
+            let normalized = normalize_crlf(content_no_bom);
 
             if edits.len() == 1 {
                 return apply_single_edit(
@@ -185,8 +200,8 @@ fn apply_single_edit(
     abs_path: &Path,
     path_str: &str,
 ) -> ToolResult {
-    let normalized_old = edit.old_text.replace("\r\n", "\n");
-    let matches: Vec<_> = normalized.match_indices(&normalized_old).collect();
+    let normalized_old = normalize_crlf(&edit.old_text);
+    let matches: Vec<_> = normalized.match_indices(&*normalized_old).collect();
 
     if matches.is_empty() {
         // Fuzzy match fallback
@@ -218,7 +233,7 @@ fn apply_single_edit(
                 let new_content = format!(
                     "{}{}{}",
                     &normalized[..orig_start],
-                    edit.new_text.replace("\r\n", "\n"),
+                    normalize_crlf(&edit.new_text),
                     &normalized[orig_end.min(normalized.len())..]
                 );
                 let final_content = format!("{}{}", bom, restore_line_endings(&new_content, line_ending));
@@ -263,7 +278,8 @@ fn apply_single_edit(
         };
     }
 
-    let new_content = normalized.replacen(&normalized_old, &edit.new_text.replace("\r\n", "\n"), 1);
+    let norm_new = normalize_crlf(&edit.new_text);
+    let new_content = normalized.replacen(&*normalized_old, &norm_new, 1);
     if new_content == normalized {
         return ToolResult {
             content: format!("No changes: old_text and new_text are identical in {}", path_str),
@@ -305,7 +321,7 @@ fn apply_multi_edit(
     // Normalize and validate all old_text values
     let mut positioned: Vec<(usize, &Edit, String)> = Vec::with_capacity(edits.len());
     for (i, edit) in edits.iter().enumerate() {
-        let norm_old = edit.old_text.replace("\r\n", "\n");
+        let norm_old = normalize_crlf(&edit.old_text).into_owned();
         if norm_old.is_empty() {
             return ToolResult {
                 content: format!("Error: edits[{}].old_text must not be empty", i),
@@ -357,30 +373,10 @@ fn apply_multi_edit(
         }
     }
 
-    // Preflight: verify all matches exist with forward cursor on original content
-    {
-        let mut cursor = 0usize;
-        for (i, (_, _, norm_old)) in positioned.iter().enumerate() {
-            match normalized[cursor..].find(norm_old.as_str()) {
-                Some(rel) => cursor += rel + norm_old.len(),
-                None => {
-                    return ToolResult {
-                        content: format!(
-                            "Error: edits[{}].old_text not found (forward scan) in {}",
-                            i, path_str
-                        ),
-                        details: None,
-                        is_error: true,
-                    }
-                }
-            }
-        }
-    }
-
     // Apply all replacements (reverse order to preserve positions)
     let mut result = normalized.to_string();
     for (pos, edit, norm_old) in positioned.iter().rev() {
-        let norm_new = edit.new_text.replace("\r\n", "\n");
+        let norm_new = normalize_crlf(&edit.new_text);
         result.replace_range(*pos..*pos + norm_old.len(), &norm_new);
     }
 
@@ -422,11 +418,20 @@ fn strip_bom(content: &str) -> (&str, &str) {
     }
 }
 
-fn restore_line_endings(content: &str, line_ending: &str) -> String {
+fn restore_line_endings<'a>(content: &'a str, line_ending: &str) -> Cow<'a, str> {
     if line_ending == "\r\n" {
-        content.replace('\n', "\r\n")
+        Cow::Owned(content.replace('\n', "\r\n"))
     } else {
-        content.to_string()
+        Cow::Borrowed(content)
+    }
+}
+
+/// Normalize CRLF to LF, avoiding allocation if no CRLFs present.
+fn normalize_crlf(s: &str) -> Cow<'_, str> {
+    if s.contains("\r\n") {
+        Cow::Owned(s.replace("\r\n", "\n"))
+    } else {
+        Cow::Borrowed(s)
     }
 }
 

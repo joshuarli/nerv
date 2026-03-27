@@ -753,3 +753,58 @@ fn edit_multi_empty_old_text_rejected() {
     let content = std::fs::read_to_string(&file).unwrap();
     assert_eq!(content, "hello\nworld\n");
 }
+
+#[test]
+fn edit_multi_error_reports_original_index() {
+    // Edits listed in reverse file order. The third edit (index 2) has
+    // bad old_text. After sorting by position, it might be at a different
+    // slot — but the error should report the original index [2].
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "aaa\nbbb\nccc\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "ccc", "new_text": "CCC"},
+                {"old_text": "aaa", "new_text": "AAA"},
+                {"old_text": "DOES NOT EXIST", "new_text": "x"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(result.is_error);
+    // Should say edits[2], not some other index
+    assert!(
+        result.content.contains("edits[2]"),
+        "expected original index [2] in error: {}",
+        result.content
+    );
+}
+
+#[test]
+fn edit_multi_large_file_rejected() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("big.txt");
+    // 11MB file
+    let content = "x".repeat(11 * 1024 * 1024);
+    std::fs::write(&file, &content).unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "big.txt",
+            "old_text": "x",
+            "new_text": "y"
+        }),
+        noop_update(),
+    );
+
+    assert!(result.is_error, "should reject large file: {}", result.content);
+    assert!(result.content.contains("too large"), "{}", result.content);
+}
