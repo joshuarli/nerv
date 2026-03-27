@@ -1058,28 +1058,29 @@ function toggleTool(header) {
 // Produce a compact single-line summary of tool arguments for the header.
 // JSON objects are shown as key=value pairs; other values are truncated strings.
 fn args_to_summary(args: &serde_json::Value) -> String {
+    fn truncate(s: &str, max_chars: usize) -> String {
+        let mut chars = s.char_indices();
+        match chars.nth(max_chars) {
+            Some((byte_pos, _)) => format!("{}…", &s[..byte_pos]),
+            None => s.to_string(),
+        }
+    }
+
     match args {
         serde_json::Value::Object(map) => map
             .iter()
             .map(|(k, v)| {
                 let val = match v {
                     serde_json::Value::String(s) => {
-                        let s = s.replace('\n', "↵");
-                        if s.len() > 60 { format!("{}…", &s[..60]) } else { s }
+                        truncate(&s.replace('\n', "↵"), 60)
                     }
-                    other => {
-                        let s = other.to_string();
-                        if s.len() > 60 { format!("{}…", &s[..60]) } else { s }
-                    }
+                    other => truncate(&other.to_string(), 60),
                 };
                 format!("{}={}", k, val)
             })
             .collect::<Vec<_>>()
             .join("  "),
-        serde_json::Value::String(s) => {
-            let s = s.replace('\n', "↵");
-            if s.len() > 80 { format!("{}…", &s[..80]) } else { s }
-        }
+        serde_json::Value::String(s) => truncate(&s.replace('\n', "↵"), 80),
         other => other.to_string(),
     }
 }
