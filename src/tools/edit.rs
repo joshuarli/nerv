@@ -65,6 +65,20 @@ impl AgentTool for EditTool {
             "required": ["path"]
         })
     }
+    fn normalize(&self, mut input: serde_json::Value) -> serde_json::Value {
+        // Models sometimes emit `edits` as a JSON-encoded string instead of
+        // a raw array (double-encoding). Detect and unwrap it.
+        if let Some(edits_val) = input.get("edits") {
+            if let Some(s) = edits_val.as_str() {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s) {
+                    if parsed.is_array() {
+                        input["edits"] = parsed;
+                    }
+                }
+            }
+        }
+        input
+    }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("path").and_then(|v| v.as_str()).is_none() {
             return Err(ToolError::InvalidArguments {

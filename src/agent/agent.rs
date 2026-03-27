@@ -18,6 +18,11 @@ pub trait AgentTool: Send + Sync {
         vec![]
     }
 
+    /// Coerce model output before validate/execute. Default: identity.
+    fn normalize(&self, input: serde_json::Value) -> serde_json::Value {
+        input
+    }
+
     fn validate(&self, input: &serde_json::Value) -> Result<(), crate::errors::ToolError>;
 
     /// Execute the tool synchronously.
@@ -435,10 +440,11 @@ impl Agent {
                         is_error: true,
                     }
                 } else if let Some(tool) = tool {
-                    match tool.validate(args) {
+                    let args = tool.normalize(args.clone());
+                    match tool.validate(&args) {
                         Ok(()) => {
                             let update_cb: UpdateCallback = Arc::new(|_output: String| {});
-                            tool.execute(args.clone(), update_cb)
+                            tool.execute(args, update_cb)
                         }
                         Err(e) => ToolResult {
                             content: format!("Validation error: {}", e),
