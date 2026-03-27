@@ -2,6 +2,10 @@
 
 Coding evals that measure nerv's ability to drive LLMs on realistic tasks.
 
+**NEVER run evals automatically.** Each eval run costs real money (API calls).
+Only a human should invoke `eval/run.py`. Do not run it in scripts, hooks,
+CI, or as part of any automated workflow.
+
 ## Running evals
 
 ```bash
