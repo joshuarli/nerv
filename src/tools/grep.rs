@@ -46,7 +46,9 @@ impl AgentTool for GrepTool {
                 "ignore_case": {"type": "boolean", "description": "Case-insensitive search (default: false)"},
                 "literal": {"type": "boolean", "description": "Treat pattern as literal string, not regex (default: false)"},
                 "context": {"type": "integer", "description": "Lines of context before and after each match (default: 3)"},
-                "limit": {"type": "integer", "description": "Max matches to return (default: 100)"}
+                "limit": {"type": "integer", "description": "Max matches to return (default: 100)"},
+                "files_with_matches": {"type": "boolean", "description": "Only print filenames of files containing matches (default: false)"},
+                "count": {"type": "boolean", "description": "Only print match count per file (default: false)"}
             },
             "required": ["pattern"]
         })
@@ -70,14 +72,27 @@ impl AgentTool for GrepTool {
         let literal = input.get("literal").and_then(|v| v.as_bool()).unwrap_or(false);
         let context = input.get("context").and_then(|v| v.as_u64()).unwrap_or(3);
         let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+        // Output mode flags — mutually exclusive; files_with_matches takes precedence over count
+        let files_with_matches = input.get("files_with_matches").and_then(|v| v.as_bool()).unwrap_or(false);
+        let count_mode = input.get("count").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let mut cmd = Command::new("rg");
-        cmd.arg("--no-heading")
-            .arg("--line-number")
-            .arg("--color=never")
-            .arg(format!("--context={}", context))
+        cmd.arg("--color=never")
             .arg(format!("--max-count={}", limit))
             .current_dir(&self.cwd);
+
+        if files_with_matches {
+            // -l: only filenames; no context lines or line numbers needed
+            cmd.arg("--files-with-matches");
+        } else if count_mode {
+            // -c: match count per file; no context lines or line numbers
+            cmd.arg("--count");
+        } else {
+            // Normal mode: annotated matches with context
+            cmd.arg("--no-heading")
+                .arg("--line-number")
+                .arg(format!("--context={}", context));
+        }
 
         if ignore_case {
             cmd.arg("--ignore-case");
@@ -98,16 +113,36 @@ impl AgentTool for GrepTool {
                 }
                 let tr = truncate_tail(&output.stdout, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
 
-                // Truncate long lines to keep grep output compact
+                // Truncate long lines to keep grep output compact (not needed in files/count modes
+                // since those lines are always short, but harmless to apply uniformly)
                 let content = truncate_long_lines(&tr.content, GREP_MAX_LINE_LENGTH);
 
-                let match_count = content.lines()
-                    .filter(|l| !l.starts_with("--") && !l.is_empty())
-                    .count();
-                let display = if tr.truncated {
-                    format!("{} matches (truncated)", match_count)
+                let display = if files_with_matches {
+                    let file_count = content.lines().filter(|l| !l.is_empty()).count();
+                    if tr.truncated {
+                        format!("{} files (truncated)", file_count)
+                    } else {
+                        format!("{} files", file_count)
+                    }
+                } else if count_mode {
+                    // Each line is "file:N"; sum the N values
+                    let total: u64 = content.lines()
+                        .filter_map(|l| l.rfind(':').and_then(|i| l[i+1..].parse::<u64>().ok()))
+                        .sum();
+                    if tr.truncated {
+                        format!("{} matches across files (truncated)", total)
+                    } else {
+                        format!("{} matches across files", total)
+                    }
                 } else {
-                    format!("{} matches", match_count)
+                    let match_count = content.lines()
+                        .filter(|l| !l.starts_with("--") && !l.is_empty())
+                        .count();
+                    if tr.truncated {
+                        format!("{} matches (truncated)", match_count)
+                    } else {
+                        format!("{} matches", match_count)
+                    }
                 };
                 ToolResult::ok_with_details(
                     content,

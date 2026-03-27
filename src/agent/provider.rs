@@ -58,8 +58,11 @@ pub struct CacheConfig {
 
 impl Default for CacheConfig {
     fn default() -> Self {
+        // Long (1h TTL on api.anthropic.com) is the right default for agentic sessions
+        // where the same system prompt + context is sent on every turn.
+        // Override with NERV_CACHE_RETENTION=short|none to opt down.
         Self {
-            retention: CacheRetention::Short,
+            retention: CacheRetention::from_env(),
         }
     }
 }
@@ -74,9 +77,11 @@ pub enum CacheRetention {
 impl CacheRetention {
     pub fn from_env() -> Self {
         match std::env::var("NERV_CACHE_RETENTION").as_deref() {
-            Ok("long") => Self::Long,
+            Ok("short") => Self::Short,
             Ok("none") => Self::None,
-            _ => Self::Short,
+            // Default to Long — 5-minute TTL is too short for multi-turn agentic sessions.
+            // Long maps to "1h" on api.anthropic.com, plain ephemeral elsewhere.
+            _ => Self::Long,
         }
     }
 }
