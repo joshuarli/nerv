@@ -262,7 +262,7 @@ fn export_jsonl_produces_valid_output() {
     // First line: header
     let header: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(header["type"], "session");
-    assert_eq!(header["version"], 3);
+    assert_eq!(header["version"], 4);
 
     // Following lines: entries
     assert!(lines.len() >= 3); // header + 2 entries
