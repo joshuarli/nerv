@@ -1,6 +1,6 @@
 # nerv
 
-Rust coding agent for the terminal. See [README.md](README.md) for usage.
+Token-efficient coding agent. See [README.md](README.md) for usage.
 
 ## Architecture
 
@@ -14,27 +14,38 @@ Sync — no tokio/async. OS threads + crossbeam channels.
                          └──────────┘
 ```
 
-Three threads: stdin reader, main event loop, session (agent + provider).
+Three threads: stdin reader (poll-based, pausable for $EDITOR), main event loop, session (agent + provider).
 
 ### Source layout
 
 ```
 src/
-├── main.rs                    # event loop, CLI, signal handling
+├── main.rs                    # event loop, CLI, print mode, signal handling
 ├── lib.rs                     # module exports
-├── http.rs                    # shared ureq agent (native-tls, no status-as-error)
+├── http.rs                    # shared ureq agent (native-tls)
 ├── errors.rs                  # ProviderError, ToolError
 ├── agent/
-│   ├── types.rs               # AgentMessage, Model, Usage, AgentEvent
+│   ├── types.rs               # AgentMessage, Model, Usage, AgentEvent, ToolResultData
 │   ├── convert.rs             # AgentMessage → LlmMessage, transform_context
 │   ├── provider.rs            # Provider trait, ProviderRegistry, CancelFlag
 │   ├── anthropic.rs           # Anthropic Messages API + SSE + OAuth headers
 │   ├── openai_compat.rs       # OpenAI-compatible (llama-server, Ollama)
 │   └── agent.rs               # Agentic loop: stream → tool calls → permissions → loop
-├── tools/                     # 8 built-in tools (AgentTool trait)
+├── tools/
+│   ├── read.rs                # File read with offset/limit, line numbers
+│   ├── edit.rs                # Single + multi-edit, fuzzy match, BOM/CRLF
+│   ├── write.rs               # File write with mkdir -p
+│   ├── bash.rs                # /bin/bash -c, stderr on background thread
+│   ├── grep.rs                # ripgrep wrapper
+│   ├── find.rs                # fd wrapper
+│   ├── ls.rs                  # eza tree wrapper
+│   ├── memory.rs              # Persistent memory read/add/remove
+│   ├── diff.rs                # In-process Myers diff (replaced `similar` crate)
+│   ├── file_mutation_queue.rs # Per-file mutex for concurrent writes
+│   └── truncate.rs            # Output truncation (head/tail, bytes/lines)
 ├── session/
-│   ├── types.rs               # SessionEntry variants, TokenInfo
-│   └── manager.rs             # SQLite backend, WAL mode, 12µs listing
+│   ├── types.rs               # SessionEntry variants, TokenInfo, SessionTreeNode
+│   └── manager.rs             # SQLite backend, tree-aware branching, get_tree()
 ├── compaction/
 │   ├── mod.rs                 # tiktoken counting, cut point selection
 │   └── summarize.rs           # LLM-based summarization
@@ -43,10 +54,10 @@ src/
 │   ├── auth.rs                # Keychain storage, Anthropic OAuth (PKCE)
 │   ├── config.rs              # NervConfig (JSONC), per-provider headers
 │   ├── permissions.rs         # Tool call permission checks
-│   ├── local_models.rs        # GGUF download, hardware detection, llama-server args
+│   ├── local_models.rs        # GGUF download, hardware detection, llama-server
 │   ├── model_registry.rs      # Built-in + custom models, fuzzy matching
 │   ├── resource_loader.rs     # AGENTS.md/CLAUDE.md walker, memory, skills
-│   ├── system_prompt.rs       # Prompt assembly
+│   ├── system_prompt.rs       # Prompt assembly, per-model override
 │   ├── skills.rs              # Skill loading from ~/.nerv/skills/
 │   └── tool_registry.rs       # ToolRegistry
 ├── interactive/
@@ -54,32 +65,39 @@ src/
 │   ├── event_loop.rs          # Slash commands, permission prompts, session picker
 │   ├── layout.rs              # AppLayout: editor + statusbar + footer + chat
 │   ├── footer.rs              # Hexagon context bar, model, cost, thinking level
-│   ├── statusbar.rs           # Spinner, tok/s, queue display
+│   ├── statusbar.rs           # Spinner, per-turn token delta, tok/s, queue
+│   ├── session_picker.rs      # /resume session list
+│   ├── tree_selector.rs       # /tree session branch navigator
 │   └── theme.rs               # ANSI color constants
 └── tui/
     ├── tui.rs                 # Component trait, diff renderer (Vec<u8> buffer)
-    ├── terminal.rs            # Raw libc terminal, TCSAFLUSH cleanup
+    ├── terminal.rs            # Raw libc terminal, DECSCUSR cursor, TCSAFLUSH
     ├── stdin_buffer.rs        # Raw stdin → StdinEvent
-    ├── keys.rs                # VT100 + Kitty CSI-u parsing
+    ├── keys.rs                # VT100 + Kitty CSI-u + modifyOtherKeys parsing
     ├── highlight.rs           # Zero-dep syntax highlighter (8 languages)
     └── components/            # Editor, Markdown, StyledText
 ```
 
 ## Key design decisions
 
-- **Callback streaming**: `on_event: &mut dyn FnMut(ProviderEvent)` — events flow to TUI in real time
-- **Reader thread for cancellation**: SSE reads in background thread, main thread polls with 50ms timeout, drop receiver to cancel instantly
-- **ChatWriter**: single persistent component for all chat output, block-level render caching
+- **Content vs display**: tool results have `content` (terse, sent to LLM) and `details.display` (rich, TUI only). Edit returns "Edited foo.rs" to the model, full diff to the user. See [docs/tools.md](docs/tools.md).
+- **Per-model system prompts**: `~/.nerv/prompts/{model_id}.md` → global override → compiled default. Smaller models get numbered rules; larger models get nuanced guidelines.
+- **Multi-edit**: `edits` array in one tool call, matched against original file, uniqueness-enforced, overlap-detected, applied in reverse position order.
+- **Callback streaming**: `on_event: &dyn Fn(AgentEvent)` — events flow to TUI in real time
+- **Poll-based stdin**: reader uses `libc::poll()` with 100ms timeout + atomic pause flag so $EDITOR gets exclusive terminal access
+- **Session tree**: parent_id chain in SQLite, tree-aware branch walking, `/tree` TUI selector
+- **In-process diff**: Myers algorithm, ~170 lines, replaces `similar` crate (51KB binary savings)
+- **Per-turn token deltas**: statusbar shows marginal cost (↑800 ↓110), footer shows cumulative context
 - **SQLite sessions**: WAL mode, entries table with parent_id chain, 12µs listing
-- **Permission system**: auto-approve within repo, prompt for everything else
 - **Context optimization**: strip thinking, denied args, orphans; truncate stale results
 - **macOS Keychain**: credentials via `security` CLI, not on disk
-- **JSONC config**: JSON with `//` comments, zero-dep parser
 
 ## Deep dives
 
+- [Tools](docs/tools.md) — tool design, content vs display, multi-edit algorithm, allocation tracking
 - [Cancellation](docs/cancellation.md) — ^C flow, reader threads, should_quit flag
 - [Permissions](docs/permissions.md) — classification, path resolution, cross-thread y/n prompt
 - [Context optimization](docs/context.md) — transform_context, compaction, token savings
 - [Authentication](docs/auth.md) — OAuth PKCE, Keychain, required headers
-- [Local models](docs/local-models.md) — GGUF download, hardware detection, llama-server args
+- [Local models](docs/local-models.md) — GGUF download, hardware detection, llama-server
+- [Evals](eval/AGENTS.md) — eval harness, task design, oracle tests, report analysis

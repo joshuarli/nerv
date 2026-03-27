@@ -1,6 +1,16 @@
 # nerv
 
-Rust coding agent for the terminal.
+Token-efficient coding agent. Every tool result, system prompt, and display output is designed to minimize context consumption while maximizing the model's ability to act.
+
+## What's different
+
+- **Tool results split into LLM content vs TUI display.** The edit tool returns "Edited foo.rs" to the model (3 tokens) but shows the full unified diff to the user. Read, grep, find, ls all show compact summaries in the TUI while sending full content to the model.
+- **Per-model system prompts.** `~/.nerv/prompts/{model_id}.md` lets you tune behavior per model — terse numbered rules for small models, nuanced guidelines for large ones.
+- **Multi-edit tool.** Multiple disjoint replacements in one call, matched against the original file. One tool call instead of five.
+- **Per-turn token deltas.** The statusbar shows "↑800 ↓110" — what this turn *added*, not the cumulative 32k context.
+- **Session tree branching.** Fork conversations at any point, navigate branches with `/tree`.
+- **Headless mode with structured output.** `echo "fix the bug" | nerv --print --model sonnet` outputs JSON with full message trace, per-turn token usage, and cost.
+- **Eval harness.** `eval/run.py` drives nerv against coding tasks, measures turns/tools/tokens/cost, checks efficiency goals, supports on_fail hints.
 
 ## Setup
 
@@ -25,7 +35,7 @@ nerv
 | Key | Action |
 |---|---|
 | Enter | Send message |
-| Shift+Enter | Newline |
+| Shift+Enter, Ctrl+Enter | Newline |
 | Ctrl+C | Interrupt stream / quit (double-tap to force) |
 | Esc, Ctrl+D | Quit |
 | Ctrl+G | Open message in $EDITOR |
@@ -38,80 +48,61 @@ nerv
 
 | Command | Description |
 |---|---|
-| `/model [name]` | List or switch models (`/model sonnet`) |
+| `/model [name]` | List or switch models |
 | `/model add local` | Connect to local OpenAI-compatible server |
 | `/think [level]` | Set thinking: off, low, medium, high, xhigh |
 | `/login [provider]` | OAuth login (default: anthropic) |
 | `/logout [provider]` | Remove stored credentials |
 | `/compact` | Compact conversation context |
 | `/resume [id]` | Browse or load previous sessions |
+| `/tree` | Browse and switch session branches |
 | `/new` | Start new session |
 | `/export <path>` | Export to .jsonl or .html |
 | `/session` | Show session info |
+| `/commit` | Create a git commit (skill) |
 | `/help` | Show all commands |
 
-## Steering
+## CLI
 
-Type while the agent is streaming — messages queue up. On Ctrl+C the
-queued message fires immediately against the partial response.
-
-## Permissions
-
-Tool calls within the git repo root are auto-approved. Operations outside
-the repo prompt for `y`/`n` confirmation. [Details](docs/permissions.md)
-
-## Context management
-
-- Auto-compacts when approaching context limit
-- Emergency compact + retry on overflow errors
-- Thinking blocks stripped from context (never referenced by model)
-- Denied tool call args stripped to save tokens
-- Stale tool results truncated after 10 turns
-
-## Memory
-
-The agent has a `memory` tool that writes to `~/.nerv/memory.md`.
-Persistent across sessions, loaded into every system prompt.
-
-## Skills
-
-Markdown files in `~/.nerv/skills/` with YAML frontmatter:
-
-```markdown
----
-name: review
-description: Code review
----
-Review the code changes for correctness, style, and performance.
 ```
-
-Invoke with `/review` or `/review <context>`.
+nerv                              # interactive TUI
+nerv --resume [id]                # resume session
+nerv --model <name>               # select model on startup
+nerv --print                      # headless: stdin prompt → JSON stdout
+nerv --print --model sonnet       # headless with specific model
+nerv --print --max-turns 10       # cap agent turns
+nerv --list-models                # show all available models
+nerv models                       # list all models (API + local)
+nerv add <hf-repo> <quant>        # download GGUF from HuggingFace
+nerv load [alias]                 # start llama-server
+```
 
 ## Config
 
 ```
 ~/.nerv/
-├── config.json      # providers, models, headers (JSONC)
-├── models.json      # local GGUF models + llama-server args (JSONC)
-├── sessions.db      # SQLite session storage
-├── memory.md        # agent-writable persistent memory
-├── skills/          # skill markdown files
-├── system-prompt.md # custom system prompt (optional)
-└── debug.log        # NERV_LOG=debug for verbose
+├── config.json          # providers, models, headers (JSONC)
+├── models.json          # local GGUF models + llama-server args
+├── sessions.db          # SQLite session storage
+├── memory.md            # agent-writable persistent memory
+├── skills/              # skill markdown files
+├── prompts/             # per-model system prompts
+│   └── claude-haiku-4-5.md
+├── system-prompt.md     # global system prompt override
+└── debug.log            # NERV_LOG=debug for verbose
 ```
 
 Credentials stored in macOS Keychain (not on disk).
 
-## CLI
+## Documentation
 
-```
-nerv                         # interactive TUI
-nerv --resume [id]           # resume session
-nerv --log-level <level>     # debug/info/warn/error
-nerv add <hf-repo> <quant>   # download GGUF from HuggingFace
-nerv load [alias]             # start llama-server
-nerv models                   # list configured models
-```
+- [Tools](docs/tools.md) — built-in tool design, content vs display, multi-edit algorithm
+- [Permissions](docs/permissions.md) — auto-approve in repo, prompt outside
+- [Context](docs/context.md) — transform_context, compaction, token savings
+- [Cancellation](docs/cancellation.md) — ^C flow, reader threads
+- [Authentication](docs/auth.md) — OAuth PKCE, Keychain
+- [Local models](docs/local-models.md) — GGUF download, llama-server
+- [Evals](eval/AGENTS.md) — eval harness, task design, report analysis
 
 ## Environment
 
