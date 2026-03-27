@@ -1,0 +1,12 @@
+{
+  "prompt": "resolver.py has method stubs that raise NotImplementedError. Implement all methods so the tests in test_resolver.py pass. The tests are the only spec — read them carefully.",
+  "verify": "python3 test_resolver.py",
+  "max_turns": 15,
+  "on_fail": "Some tests are still failing. Read the failing test names and assertions carefully. Pay attention to version comparison semantics and cycle detection.",
+  "goals": {
+    "max_edit_calls": 1,
+    "min_multi_edits": 0,
+    "max_turns": 5,
+    "description": "Read both files, implement everything in one edit (write tool or single edit replacing the whole class), verify. 4-5 turns."
+  }
+}

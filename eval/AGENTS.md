@@ -48,6 +48,22 @@ top of the file AND replace every occurrence in the function bodies — a
 the hardest multi-edit stress test: many disjoint replacements that must
 all be correct, plus new code that must be added (not just replaced).
 
+### implement-from-tests
+
+A dependency resolver with **4 method stubs** (all raise NotImplementedError)
+and **20 tests** that define the complete spec. No documentation, no
+comments — the tests are the only source of truth. Requires implementing:
+version matching with constraints, transitive dependency resolution,
+circular dependency detection, and topological install ordering.
+
+**What this tests**: Raw problem-solving ability under ambiguity. The model
+must reverse-engineer the required behavior from test assertions alone,
+then implement graph algorithms (DFS, topological sort, cycle detection)
+correctly. The ideal solution reads both files, implements the entire
+class in one edit, and verifies — 4-5 turns. Weaker models iterate:
+implement → test → fail → re-read tests → fix → test → ... burning
+10+ turns. This is the hardest task in the suite.
+
 ## Task structure
 
 ```
