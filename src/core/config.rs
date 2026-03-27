@@ -41,6 +41,14 @@ pub struct NervConfig {
     pub default_model: Option<String>,
     pub default_thinking_level: Option<String>,
     pub auto_compact: Option<bool>,
+    /// Model used for background compaction summarisation.
+    /// Accepts any model id recognised by the model registry (fuzzy match).
+    /// Defaults to "claude-haiku-4-5" on the anthropic provider when unset.
+    pub compaction_model: Option<String>,
+    /// Model used for automatic session title generation after the first turn.
+    /// Accepts any model id recognised by the model registry (fuzzy match).
+    /// Defaults to "claude-haiku-4-5" on the anthropic provider when unset.
+    pub session_naming_model: Option<String>,
     /// Extra HTTP headers per provider, e.g. {"anthropic": {"user-agent": "claude-cli/1.0.0"}}
     #[serde(default)]
     pub headers: std::collections::HashMap<String, std::collections::HashMap<String, String>>,

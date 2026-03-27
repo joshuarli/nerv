@@ -54,6 +54,8 @@ impl SessionManager {
 
         // Migration: add worktree column
         db.execute("ALTER TABLE sessions ADD COLUMN worktree TEXT").ok();
+        // Migration: add name column for auto-generated session titles
+        db.execute("ALTER TABLE sessions ADD COLUMN name TEXT").ok();
 
         db.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
@@ -501,6 +503,35 @@ impl SessionManager {
         }
     }
 
+    /// Set the human-readable name for the current session.
+    pub fn set_name(&self, name: &str) {
+        if let Some(ref sid) = self.session_id {
+            if let Ok(mut stmt) = self
+                .db
+                .prepare("UPDATE sessions SET name = ? WHERE id = ?")
+            {
+                stmt.bind((1, name)).ok();
+                stmt.bind((2, sid.as_str())).ok();
+                stmt.next().ok();
+            }
+        }
+    }
+
+    /// Return the current name (if any) for the active session.
+    pub fn name(&self) -> Option<String> {
+        let sid = self.session_id.as_deref()?;
+        let mut stmt = self
+            .db
+            .prepare("SELECT name FROM sessions WHERE id = ?")
+            .ok()?;
+        stmt.bind((1, sid)).ok()?;
+        if stmt.next().ok()? == sqlite::State::Row {
+            stmt.read::<Option<String>, _>("name").ok().flatten()
+        } else {
+            None
+        }
+    }
+
     /// Clear the worktree association for the current session.
     pub fn clear_worktree(&self) {
         if let Some(ref sid) = self.session_id {
@@ -646,7 +677,7 @@ impl SessionManager {
 
     pub fn list_sessions(&self) -> Vec<SessionSummary> {
         let mut stmt = match self.db.prepare(
-            "SELECT id, cwd, created_at, updated_at, preview FROM sessions ORDER BY updated_at DESC LIMIT 100",
+            "SELECT id, cwd, created_at, updated_at, preview, name FROM sessions ORDER BY updated_at DESC LIMIT 100",
         ) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -659,6 +690,7 @@ impl SessionManager {
             let created_at: String = stmt.read("created_at").unwrap_or_default();
             let updated_at: String = stmt.read("updated_at").unwrap_or_default();
             let preview: String = stmt.read("preview").unwrap_or_default();
+            let name: Option<String> = stmt.read("name").unwrap_or(None);
 
             // Count entries for this session
             let message_count = self.count_entries(&id);
@@ -677,6 +709,7 @@ impl SessionManager {
                 timestamp: created_at,
                 cwd,
                 preview,
+                name,
                 message_count,
                 modified,
             });
@@ -945,6 +978,8 @@ pub struct SessionSummary {
     pub timestamp: String,
     pub cwd: String,
     pub preview: String,
+    /// Auto-generated session title (set after the first completed turn).
+    pub name: Option<String>,
     pub message_count: u32,
     pub modified: std::time::SystemTime,
 }

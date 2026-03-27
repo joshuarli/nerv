@@ -106,6 +106,9 @@ impl InteractiveMode {
                 let label = if enabled { "Plan mode on" } else { "Plan mode off" };
                 self.status_message = Some(label.into());
             }
+            AgentSessionEvent::SessionNamed { name } => {
+                layout.footer.set_session_name(Some(name));
+            }
             AgentSessionEvent::Status { message, is_error } => {
                 self.status_message = Some(message);
                 self.status_is_error = is_error;

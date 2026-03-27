@@ -119,7 +119,10 @@ impl SessionPicker {
                 } else {
                     for (i, s) in self.all_sessions.iter().take(20).enumerate() {
                         let age = format_age(&s.modified);
-                        let preview = if s.preview.is_empty() {
+                        // Show the auto-generated name if available, otherwise fall back to preview.
+                        let label = if let Some(ref name) = s.name {
+                            name.as_str()
+                        } else if s.preview.is_empty() {
                             "(empty)"
                         } else {
                             truncate_str(&s.preview, 50)
@@ -133,7 +136,7 @@ impl SessionPicker {
                         };
                         lines.push(format!(
                             " {}{} {:>4} {:>3}msg {}  {}{}",
-                            marker, s.id_short, age, s.message_count, cwd_short, preview, end,
+                            marker, s.id_short, age, s.message_count, cwd_short, label, end,
                         ));
                     }
                 }

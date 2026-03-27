@@ -9,9 +9,11 @@ use super::resource_loader::LoadedResources;
 use super::system_prompt::build_system_prompt_for_model;
 use super::tool_registry::ToolRegistry;
 use crate::agent::agent::Agent;
+use crate::agent::provider::Provider;
 use crate::agent::types::*;
-use crate::compaction::summarize::generate_summary;
+use crate::compaction::summarize::{generate_summary, generate_session_name};
 use crate::compaction::{self, CompactionResult, CompactionSettings};
+use crate::core::config::NervConfig;
 use crate::session::SessionManager;
 
 #[derive(Debug, Clone, Copy)]
@@ -87,6 +89,10 @@ pub enum AgentSessionEvent {
     PlanModeChanged {
         enabled: bool,
     },
+    /// Session title was generated after the first completed turn.
+    SessionNamed {
+        name: String,
+    },
     PermissionRequest {
         tool: String,
         args: serde_json::Value,
@@ -133,6 +139,8 @@ pub struct AgentSession {
     worktree: Option<PathBuf>,
     /// Plan mode: restrict tools to read-only, steer model toward planning.
     plan_mode: bool,
+    /// True once the session has been given an auto-generated name, to avoid re-naming.
+    session_named: bool,
 }
 
 impl AgentSession {
@@ -158,6 +166,7 @@ impl AgentSession {
             permission_cache: Arc::new(std::sync::Mutex::new(HashSet::new())),
             worktree: None,
             plan_mode: false,
+            session_named: false,
         }
     }
 
@@ -348,6 +357,30 @@ impl AgentSession {
                 });
             }
         }
+
+        // Generate a session title after the first completed turn.
+        if !self.session_named && self.session_manager.name().is_none() {
+            let config = NervConfig::load(crate::nerv_dir());
+            if let Some((provider, model_id)) =
+                self.resolve_utility_provider(config.session_naming_model.as_deref())
+            {
+                // `text` is the original user message string (still in scope).
+                if !text.is_empty() {
+                    match generate_session_name(&text, provider, &model_id) {
+                        Ok(name) => {
+                            self.session_manager.set_name(&name);
+                            self.session_named = true;
+                            let _ = event_tx.send(AgentSessionEvent::SessionNamed {
+                                name,
+                            });
+                        }
+                        Err(e) => {
+                            crate::log::info(&format!("session naming failed: {e}"));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn prepare_system_prompt(&mut self) {
@@ -472,18 +505,47 @@ impl AgentSession {
             .collect();
     }
 
+    /// Resolve the provider and model id to use for background utility tasks
+    /// (compaction, session naming). Resolution order:
+    ///   1. The `model_override` from config (fuzzy-matched via ModelRegistry).
+    ///   2. claude-haiku-4-5 on the anthropic provider (if registered).
+    ///   3. The active session model as fallback.
+    fn resolve_utility_provider(
+        &self,
+        model_override: Option<&str>,
+    ) -> Option<(Arc<dyn Provider>, String)> {
+        let registry = self.agent.provider_registry.read().ok()?;
+
+        // 1. Config override
+        if let Some(override_id) = model_override {
+            if let Some(model) = self.model_registry.find_model(override_id) {
+                if let Some(provider) = registry.get(&model.provider_name) {
+                    return Some((provider, model.id.clone()));
+                }
+            }
+        }
+
+        // 2. Default utility model (haiku) on anthropic
+        if let Some(provider) = registry.get(crate::compaction::summarize::DEFAULT_UTILITY_PROVIDER) {
+            return Some((
+                provider,
+                crate::compaction::summarize::DEFAULT_UTILITY_MODEL.to_string(),
+            ));
+        }
+
+        // 3. Fall back to the current session model
+        let model = self.agent.state.model.as_ref()?;
+        let provider = registry.get(&model.provider_name)?;
+        Some((provider, model.id.clone()))
+    }
+
     pub fn run_compaction(
         &mut self,
         _custom_instructions: Option<String>,
     ) -> Option<CompactionResult> {
-        let model = self.agent.state.model.as_ref()?;
-        let provider = self
-            .agent
-            .provider_registry
-            .read()
-            .unwrap()
-            .get(&model.provider_name)?;
-        let _messages = &self.agent.state.messages;
+        let config = NervConfig::load(crate::nerv_dir());
+        let (provider, model_id) =
+            self.resolve_utility_provider(config.compaction_model.as_deref())?;
 
         let entries = self.session_manager.entries();
         if entries.is_empty() {
@@ -520,7 +582,7 @@ impl AgentSession {
             .map(compaction::estimate_tokens)
             .sum::<usize>() as u32;
 
-        match generate_summary(&to_summarize, None, provider, &model.id) {
+        match generate_summary(&to_summarize, None, provider, &model_id) {
             Ok(summary) => {
                 let _ = self.session_manager.append_compaction(
                     summary.clone(),
@@ -660,6 +722,9 @@ impl AgentSession {
                     messages: self.agent.state.messages.clone(),
                 });
                 self.load_permission_cache();
+                // Don't re-name sessions that were already named (or have a preview we could use).
+                // We consider any loaded session as already handled.
+                self.session_named = true;
             }
             Err(e) => {
                 crate::log::error(&format!("failed to load session: {}", e));

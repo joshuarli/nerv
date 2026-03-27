@@ -6,6 +6,7 @@ use crate::tui::utils::{truncate_to_width, visible_width};
 pub struct FooterComponent {
     cwd: String,
     git_branch: Option<String>,
+    session_name: Option<String>,
     model_id: String,
     provider_name: String,
     thinking_level: ThinkingLevel,
@@ -46,6 +47,7 @@ impl FooterComponent {
         Self {
             cwd: Self::abbrev_cwd(cwd),
             git_branch,
+            session_name: None,
             model_id: String::new(),
             provider_name: String::new(),
             thinking_level: ThinkingLevel::Off,
@@ -89,6 +91,10 @@ impl FooterComponent {
         self.plan_mode = enabled;
     }
 
+    pub fn set_session_name(&mut self, name: Option<String>) {
+        self.session_name = name;
+    }
+
     pub fn set_thinking(&mut self, level: ThinkingLevel) {
         self.thinking_level = level;
     }
@@ -120,12 +126,20 @@ impl Component for FooterComponent {
         let label = theme::FOOTER_LABEL;
         let w = width as usize;
 
-        // Line 1: ~/path (branch) ... thinking level
+        // Line 1: ~/path (branch) [session name] ... thinking level
         let mut pwd = self.cwd.clone();
         if let Some(ref branch) = self.git_branch {
             pwd = format!("{} {}({}){}", pwd, theme::ACCENT, branch, r);
         }
-        let pwd_left = format!("{}{}{}", dim, pwd, r);
+        let pwd_left = if let Some(ref name) = self.session_name {
+            format!(
+                "{}{}{} {}\"{}\"{} ",
+                dim, pwd, r,
+                theme::FOOTER_LABEL, name, r,
+            )
+        } else {
+            format!("{}{}{}", dim, pwd, r)
+        };
 
         let plan_tag = if self.plan_mode {
             format!("{}PLAN{} ", theme::ACCENT_BOLD, r)
