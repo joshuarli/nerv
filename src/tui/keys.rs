@@ -17,6 +17,7 @@ pub fn parse_key(data: &[u8]) -> Option<KeyId> {
     if data.len() == 1 {
         return match data[0] {
             0x0D => Some("enter"),
+            0x0A => Some("ctrl+enter"), // ctrl flips bit 5: CR (0x0D) → LF (0x0A)
             0x09 => Some("tab"),
             0x7F => Some("backspace"),
             0x1B => Some("escape"),
@@ -105,8 +106,26 @@ pub fn parse_key(data: &[u8]) -> Option<KeyId> {
         }
 
         // Tilde keys: ESC [ N ~ (Insert, Delete, PgUp, PgDn)
+        // Also handles modifyOtherKeys: ESC [ 27 ; mod ; code ~
         if body.len() >= 2 && body[body.len() - 1] == b'~' {
             let num_str = std::str::from_utf8(&body[..body.len() - 1]).ok()?;
+
+            // modifyOtherKeys format: 27;modifier;keycode
+            if let Some(rest) = num_str.strip_prefix("27;") {
+                let parts: Vec<&str> = rest.split(';').collect();
+                if parts.len() == 2 {
+                    let modifier: u32 = parts[0].parse().ok()?;
+                    let keycode: u32 = parts[1].parse().ok()?;
+                    let shift = modifier == 2 || modifier == 6;
+                    let ctrl = modifier == 5 || modifier == 6;
+                    return match keycode {
+                        13 if ctrl => Some("ctrl+enter"),
+                        13 if shift => Some("shift+enter"),
+                        _ => None,
+                    };
+                }
+            }
+
             return match num_str {
                 "2" => Some("insert"),
                 "3" => Some("delete"),
