@@ -31,7 +31,7 @@ fn main() {
                 println!("  --resume <id>      Resume a specific session");
                 println!("  --print            Headless mode: read prompt from stdin, output JSON");
                 println!("  --max-turns <n>    Max agent turns in print mode (default 20)");
-                println!("  --model <name>     Select model for print mode (e.g. opus, sonnet)");
+                println!("  --model <name>     Select model (e.g. opus, sonnet, haiku)");
                 println!("  --json             JSON output in print mode (default)");
                 println!("  --list-models      List all configured models");
                 println!("  --log-level <lvl>  Set log level (debug, info, warn, error)");
@@ -74,6 +74,26 @@ fn main() {
     if args.iter().any(|a| a == "--version") {
         println!("nerv {}", env!("CARGO_PKG_VERSION"));
         return;
+    }
+
+    // Reject unknown flags early
+    {
+        let known = [
+            "--resume", "--model", "--log-level", "--version",
+        ];
+        let mut i = 1;
+        while i < args.len() {
+            let arg = &args[i];
+            if arg.starts_with('-') && !known.contains(&arg.as_str()) {
+                eprintln!("Unknown option: {}. Try nerv --help", arg);
+                std::process::exit(1);
+            }
+            // Skip the value for flags that take one
+            if matches!(arg.as_str(), "--resume" | "--model" | "--log-level") {
+                i += 1;
+            }
+            i += 1;
+        }
     }
 
     let nerv_dir = home_dir()
@@ -238,10 +258,30 @@ fn main() {
         });
     }
 
+    // Handle --model CLI flag (interactive mode)
+    if let Some(pos) = args.iter().position(|a| a == "--model") {
+        if let Some(name) = args.get(pos + 1) {
+            let found = if let Some((p, m)) = name.split_once('/') {
+                model_registry.get_model(p, m)
+            } else {
+                model_registry.find_model(name)
+            };
+            if let Some(m) = found {
+                let _ = interactive.cmd_tx().send(SessionCommand::SetModel {
+                    provider: m.provider_name.clone(),
+                    model_id: m.id.clone(),
+                });
+            } else {
+                eprintln!("Unknown model: {}", name);
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Handle --resume CLI flag
     let resume_pos = args.iter().position(|a| a == "--resume");
     if let Some(pos) = resume_pos {
-        if let Some(id) = args.get(pos + 1) {
+        if let Some(id) = args.get(pos + 1).filter(|s| !s.starts_with('-')) {
             // --resume <id> — load directly
             let _ = interactive
                 .cmd_tx()
