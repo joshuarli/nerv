@@ -343,9 +343,15 @@ fn parse_sse_event(event_type: &str, data: &str, state: &mut SseState) -> Vec<Pr
                 return vec![];
             };
             let u = ev.message.usage;
-            if u.input_tokens > 0 {
+            // input = total tokens in context window: non-cached + cache hits + cache writes.
+            // Anthropic splits these when prompt caching is active; we must sum all three or
+            // the context counter shows only the tiny non-cached slice (often just 1 token).
+            let total_input = u.input_tokens
+                + u.cache_read_input_tokens
+                + u.cache_creation_input_tokens;
+            if total_input > 0 || u.output_tokens > 0 {
                 vec![ProviderEvent::UsageUpdate(Usage {
-                    input: u.input_tokens,
+                    input: total_input,
                     output: u.output_tokens,
                     cache_read: u.cache_read_input_tokens,
                     cache_write: u.cache_creation_input_tokens,
@@ -409,7 +415,9 @@ fn parse_sse_event(event_type: &str, data: &str, state: &mut SseState) -> Vec<Pr
             vec![ProviderEvent::MessageStop {
                 stop_reason,
                 usage: Usage {
-                    input: ev.usage.input_tokens,
+                    input: ev.usage.input_tokens
+                        + ev.usage.cache_read_input_tokens
+                        + ev.usage.cache_creation_input_tokens,
                     output: ev.usage.output_tokens,
                     cache_read: ev.usage.cache_read_input_tokens,
                     cache_write: ev.usage.cache_creation_input_tokens,
