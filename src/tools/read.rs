@@ -24,6 +24,19 @@ impl ReadTool {
             cache: Mutex::new(std::collections::HashMap::new()),
         }
     }
+    fn update_cache(&self, abs_path: &Path, line_count: usize) {
+        if let Ok(meta) = std::fs::metadata(abs_path) {
+            if let Ok(mtime) = meta.modified() {
+                if let Ok(mut cache) = self.cache.lock() {
+                    cache.insert(
+                        abs_path.to_path_buf(),
+                        ReadCacheEntry { mtime, line_count },
+                    );
+                }
+            }
+        }
+    }
+
     fn resolve_path(&self, path: &str) -> PathBuf {
         let p = Path::new(path);
         if p.is_absolute() {
@@ -58,14 +71,12 @@ impl AgentTool for ReadTool {
         let explicit_limit = input.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize);
         let abs_path = self.resolve_path(path_str);
 
-        // Check mtime cache: if file unchanged since last read from the start,
-        // return short marker. Works with any limit since auto-size returns the
-        // full file for small files, and large files are cached at their full size.
         if offset == 0 {
             if let Ok(meta) = std::fs::metadata(&abs_path) {
                 if let Ok(mtime) = meta.modified() {
                     if let Ok(cache) = self.cache.lock() {
                         if let Some(entry) = cache.get(&abs_path) {
+                            // Unchanged — return short marker
                             if entry.mtime == mtime {
                                 let msg = format!(
                                     "[unchanged since last read: {} ({} lines)]",
@@ -76,6 +87,7 @@ impl AgentTool for ReadTool {
                                     serde_json::json!({"display": format!("{} (unchanged)", path_str)}),
                                 );
                             }
+                            // Changed — fall through to full read below
                         }
                     }
                 }
@@ -86,49 +98,14 @@ impl AgentTool for ReadTool {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
                 let line_count = text.lines().count();
-                // For small files (< 300 lines), return the whole file even if
-                // the model requested a smaller limit. Prevents multi-chunk reads.
-                let limit = if line_count <= 300 && offset == 0 {
-                    line_count
-                } else {
-                    explicit_limit.unwrap_or(DEFAULT_MAX_LINES)
-                };
-                let start = offset.min(line_count);
-                let end = (start + limit).min(line_count);
-                let n = end - start;
-                // Build numbered output in one allocation
-                let mut content = String::with_capacity(n * 40);
-                for (i, line) in text.lines().skip(start).take(n).enumerate() {
-                    use std::fmt::Write;
-                    if i > 0 {
-                        content.push('\n');
-                    }
-                    let _ = write!(content, "{:>6}\t{}", start + i + 1, line);
-                }
-                let (content, truncated) = truncate_head(&content, DEFAULT_MAX_LINES);
-                let display = if n == 0 {
-                    format!("{} (empty)", path_str)
-                } else if truncated {
-                    format!("{} (lines {}-{}, truncated)", path_str, start + 1, end)
-                } else {
-                    format!("{} ({} lines)", path_str, n)
-                };
+                let result = format_file_content(path_str, &text, offset, explicit_limit);
 
-                // Update cache with this file's mtime (reads from start only)
+                // Update cache (reads from start only)
                 if offset == 0 {
-                    if let Ok(meta) = std::fs::metadata(&abs_path) {
-                        if let Ok(mtime) = meta.modified() {
-                            if let Ok(mut cache) = self.cache.lock() {
-                                cache.insert(
-                                    abs_path,
-                                    ReadCacheEntry { mtime, line_count },
-                                );
-                            }
-                        }
-                    }
+                    self.update_cache(&abs_path, line_count);
                 }
 
-                ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
+                result
             }
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::NotFound {
@@ -139,6 +116,47 @@ impl AgentTool for ReadTool {
             }
         }
     }
+}
+
+/// Format file content with line numbers for the model.
+fn format_file_content(path_str: &str, text: &str, offset: usize, explicit_limit: Option<usize>) -> ToolResult {
+    let line_count = text.lines().count();
+    // For small files (< 300 lines), return the whole file even if
+    // the model requested a smaller limit. Prevents multi-chunk reads.
+    let limit = if line_count <= 300 && offset == 0 {
+        line_count
+    } else {
+        explicit_limit.unwrap_or(DEFAULT_MAX_LINES)
+    };
+    let start = offset.min(line_count);
+    let end = (start + limit).min(line_count);
+    let n = end - start;
+
+    let width = digit_width(line_count);
+    let mut content = String::with_capacity(n * 40);
+    for (i, line) in text.lines().skip(start).take(n).enumerate() {
+        use std::fmt::Write;
+        if i > 0 {
+            content.push('\n');
+        }
+        let _ = write!(content, "{:>w$}\t{}", start + i + 1, line, w = width);
+    }
+    let (content, truncated) = truncate_head(&content, DEFAULT_MAX_LINES);
+    let display = if n == 0 {
+        format!("{} (empty)", path_str)
+    } else if truncated {
+        format!("{} (lines {}-{}, truncated)", path_str, start + 1, end)
+    } else {
+        format!("{} ({} lines)", path_str, n)
+    };
+    ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
+}
+
+/// Minimum digit width for line numbers (e.g., 4 for files up to 9999 lines).
+fn digit_width(line_count: usize) -> usize {
+    if line_count < 1000 { 3 }
+    else if line_count < 10000 { 4 }
+    else { 6 }
 }
 
 #[cfg(test)]
@@ -229,6 +247,52 @@ mod tests {
         assert!(
             r.content.contains("line 49"),
             "auto-size should return full file for small files: last line missing"
+        );
+    }
+
+    #[test]
+    fn modified_file_returns_full_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("code.py");
+        let original: String = (0..30).map(|i| format!("line {}\n", i)).collect();
+        std::fs::write(&file, &original).unwrap();
+
+        let tool = make_tool(dir.path());
+
+        // First read — caches
+        let r1 = read_call(tool.as_ref(), "code.py");
+        assert!(r1.content.contains("line 0"));
+
+        // Modify line 15
+        let modified: String = (0..30)
+            .map(|i| {
+                if i == 15 { "MODIFIED\n".into() } else { format!("line {}\n", i) }
+            })
+            .collect();
+        std::fs::write(&file, &modified).unwrap();
+
+        // Second read — must return FULL new content (not cached, not partial)
+        let r2 = read_call(tool.as_ref(), "code.py");
+        assert!(!r2.is_error);
+        assert!(r2.content.contains("MODIFIED"), "should contain modified line");
+        assert!(r2.content.contains("line 0"), "should contain line 0");
+        assert!(r2.content.contains("line 29"), "should contain line 29");
+        assert!(!r2.content.contains("unchanged"), "should not say unchanged");
+    }
+
+    #[test]
+    fn compact_line_numbers() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("short.txt");
+        std::fs::write(&file, "hello\nworld\n").unwrap();
+
+        let tool = make_tool(dir.path());
+        let r = read_call(tool.as_ref(), "short.txt");
+        // File has 2 lines → digit_width = 3, so format is "  1\t..."
+        assert!(
+            r.content.starts_with("  1\t"),
+            "compact line numbers for small files: {:?}",
+            &r.content[..20.min(r.content.len())]
         );
     }
 }
