@@ -1,0 +1,6 @@
+{
+  "prompt": "The tests in test_http_client.py are failing. They expect HTTP status codes to be defined as named constants at the module level, not as magic numbers in function bodies. Refactor http_client.py to pass all tests.",
+  "verify": "python3 test_http_client.py",
+  "max_turns": 15,
+  "on_fail": "Some tests are still failing. Make sure every status code literal in function bodies is replaced with the constant name, and check the max retry delay too."
+}
