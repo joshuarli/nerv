@@ -354,6 +354,11 @@ impl SessionManager {
         path
     }
 
+    /// Get current branch entries as owned values (for use in AgentSession)
+    pub fn current_branch_entries(&self) -> Vec<SessionEntry> {
+        self.get_branch().iter().map(|e| (*e).clone()).collect()
+    }
+
     pub fn build_session_context(&self) -> SessionContext {
         let branch = self.get_branch();
         let mut messages = Vec::new();
@@ -685,6 +690,12 @@ fn summarize_entry(entry: &SessionEntry) -> (String, String, bool, bool) {
         }
         SessionEntry::SystemPrompt(_) => ("system_prompt".into(), String::new(), false, false),
         SessionEntry::CustomMessage(_) => ("custom_message".into(), String::new(), false, false),
+        SessionEntry::PermissionAccept(p) => (
+            "permission_accept".into(),
+            format!("{}({})", p.tool, truncate(&p.args, 40)),
+            false,
+            false,
+        ),
     }
 }
 
@@ -699,6 +710,7 @@ fn entry_timestamp(entry: &SessionEntry) -> String {
         SessionEntry::SessionInfo(e) => e.timestamp.clone(),
         SessionEntry::SystemPrompt(e) => e.timestamp.clone(),
         SessionEntry::CustomMessage(e) => e.timestamp.clone(),
+        SessionEntry::PermissionAccept(e) => e.timestamp.clone(),
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::agent::types::AgentMessage;
 use serde::{Deserialize, Serialize};
 
-pub const CURRENT_SESSION_VERSION: u32 = 3;
+pub const CURRENT_SESSION_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -24,6 +24,8 @@ pub enum SessionEntry {
     SessionInfo(SessionInfoEntry),
     #[serde(rename = "system_prompt")]
     SystemPrompt(SystemPromptEntry),
+    #[serde(rename = "permission_accept")]
+    PermissionAccept(PermissionAcceptEntry),
 }
 
 impl SessionEntry {
@@ -38,6 +40,7 @@ impl SessionEntry {
             Self::Label(e) => &e.id,
             Self::SessionInfo(e) => &e.id,
             Self::SystemPrompt(e) => &e.id,
+            Self::PermissionAccept(e) => &e.id,
         }
     }
 
@@ -52,6 +55,7 @@ impl SessionEntry {
             Self::Label(e) => e.parent_id.as_deref(),
             Self::SessionInfo(e) => e.parent_id.as_deref(),
             Self::SystemPrompt(e) => e.parent_id.as_deref(),
+            Self::PermissionAccept(e) => e.parent_id.as_deref(),
         }
     }
 }
@@ -142,6 +146,17 @@ pub struct SystemPromptEntry {
     pub timestamp: String,
     pub prompt: String,
     pub token_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionAcceptEntry {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub timestamp: String,
+    /// Tool name (e.g., "bash", "write")
+    pub tool: String,
+    /// Arguments to the tool (serialized as JSON for consistency)
+    pub args: String,
 }
 
 /// Tree node for `SessionManager::get_tree()`.

@@ -39,6 +39,8 @@ pub struct InteractiveMode {
     history_saved_text: String,
     /// Pending permission request — waiting for y/n from user.
     pub pending_permission: Option<crossbeam_channel::Sender<bool>>,
+    /// Current permission request details (tool, args) to record if accepted
+    pub pending_permission_details: Option<(String, serde_json::Value)>,
 }
 
 impl InteractiveMode {
@@ -70,6 +72,7 @@ impl InteractiveMode {
             history_index: None,
             history_saved_text: String::new(),
             pending_permission: None,
+            pending_permission_details: None,
         }
     }
 
@@ -122,6 +125,7 @@ impl InteractiveMode {
             },
             AgentSessionEvent::PermissionRequest {
                 tool,
+                args,
                 reason,
                 response_tx,
                 ..
@@ -132,6 +136,7 @@ impl InteractiveMode {
                 ));
                 self.status_is_error = true;
                 self.pending_permission = Some(response_tx);
+                self.pending_permission_details = Some((tool.clone(), args.clone()));
             }
             AgentSessionEvent::SessionStarted { id } => {
                 self.session_id = Some(id);

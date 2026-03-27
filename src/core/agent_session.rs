@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -107,6 +108,9 @@ pub struct AgentSession {
     session_cost: Cost,
     last_input_tokens: u32,
     pub permissions_enabled: bool,
+    /// Cache of accepted permissions: (tool, args_json) keyed by args hash
+    /// Shared arc for use in permission_fn closure
+    permission_cache: Arc<std::sync::Mutex<HashSet<String>>>,
 }
 
 impl AgentSession {
@@ -129,6 +133,7 @@ impl AgentSession {
             session_cost: Cost::default(),
             last_input_tokens: 0,
             permissions_enabled: false,
+            permission_cache: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
     }
 
@@ -170,8 +175,18 @@ impl AgentSession {
         if self.permissions_enabled {
             let repo_root = crate::find_repo_root(&self.cwd);
             let perm_tx = event_tx.clone();
+            let cache = self.permission_cache.clone();
+            let (perm_accept_tx, perm_accept_rx) = crossbeam_channel::unbounded();
+
             self.agent.state.permission_fn = Some(std::sync::Arc::new(
                 move |tool: &str, args: &serde_json::Value| {
+                    // Check cache first
+                    let args_json = serde_json::to_string(args).unwrap_or_default();
+                    let key = format!("{}:{}", tool, args_json);
+                    if cache.lock().unwrap().contains(&key) {
+                        return true;
+                    }
+
                     let perm = super::permissions::check(tool, args, repo_root.as_deref());
                     match perm {
                         super::permissions::Permission::Allow => true,
@@ -184,11 +199,32 @@ impl AgentSession {
                                 response_tx: resp_tx,
                             });
                             // Block until user responds
-                            resp_rx.recv().unwrap_or(false)
+                            let approved = resp_rx.recv().unwrap_or(false);
+                            if approved {
+                                // Record in cache
+                                cache.lock().unwrap().insert(key.clone());
+                                // Queue for DB recording
+                                let _ = perm_accept_tx.send((tool.to_string(), args_json.clone()));
+                            }
+                            approved
                         }
                     }
                 },
             ));
+            
+            // Process queued permission accepts after the prompt
+            while let Ok((tool, args)) = perm_accept_rx.try_recv() {
+                use crate::session::types::{gen_entry_id, now_iso, PermissionAcceptEntry, SessionEntry};
+                let entry = PermissionAcceptEntry {
+                    id: gen_entry_id(),
+                    parent_id: self.session_manager.leaf_id().map(|s| s.to_string()),
+                    timestamp: now_iso(),
+                    tool,
+                    args,
+                };
+                let _ = self.session_manager.append_entry(SessionEntry::PermissionAccept(entry));
+            }
+
         }
 
         let new_messages = self.run_agent_prompt(vec![user_msg], event_tx);
@@ -638,6 +674,7 @@ impl AgentSession {
                 let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
                     messages: self.agent.state.messages.clone(),
                 });
+                self.load_permission_cache();
             }
             Err(e) => {
                 crate::log::error(&format!("failed to load session: {}", e));
@@ -645,6 +682,44 @@ impl AgentSession {
                     message: format!("Failed to load session: {}", e),
                     is_error: true,
                 });
+            }
+        }
+    }
+
+    /// Check if a tool call with given arguments has been previously accepted in this session.
+    /// Args should be serialized to JSON for consistent hashing.
+    pub fn is_permission_cached(&self, tool: &str, args_json: &str) -> bool {
+        let key = format!("{}:{}", tool, args_json);
+        self.permission_cache.lock().unwrap().contains(&key)
+    }
+
+    /// Record a permission accept in the session. Writes to DB and updates in-memory cache.
+    pub fn accept_permission(&mut self, tool: &str, args_json: &str) {
+        let key = format!("{}:{}", tool, args_json);
+        self.permission_cache.lock().unwrap().insert(key);
+
+        // Write to session database
+        use crate::session::types::{gen_entry_id, now_iso, PermissionAcceptEntry, SessionEntry};
+        let entry = PermissionAcceptEntry {
+            id: gen_entry_id(),
+            parent_id: self.session_manager.leaf_id().map(|s| s.to_string()),
+            timestamp: now_iso(),
+            tool: tool.to_string(),
+            args: args_json.to_string(),
+        };
+        let _ = self.session_manager.append_entry(SessionEntry::PermissionAccept(entry));
+    }
+
+    /// Load permission accepts from session history into the cache.
+    /// Called after session is loaded to populate the cache with all previously accepted permissions.
+    pub fn load_permission_cache(&mut self) {
+        use crate::session::types::SessionEntry;
+        let entries = self.session_manager.current_branch_entries();
+        let mut cache = self.permission_cache.lock().unwrap();
+        for entry in entries {
+            if let SessionEntry::PermissionAccept(pe) = entry {
+                let key = format!("{}:{}", pe.tool, pe.args);
+                cache.insert(key);
             }
         }
     }
