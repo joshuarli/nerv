@@ -28,7 +28,9 @@ pub struct StatusBar {
     start: Option<std::time::Instant>,
     /// When the first output token arrived (for tok/s calculation).
     first_output: Option<std::time::Instant>,
+    /// Authoritative input token count from the API's message_start event.
     input_tokens: u32,
+    /// Live output token count (proxy during streaming, real value at MessageEnd).
     output_tokens: u32,
     /// Input tokens at end of previous turn — used to compute delta.
     prev_input_tokens: u32,
@@ -80,18 +82,13 @@ impl StatusBar {
         self.frame = 0;
     }
 
-    /// Add tokens from a completed message (accumulates across multiple messages in one turn).
-    pub fn add_tokens(&mut self, input: u32, output: u32) {
-        self.input_tokens += input;
-        self.output_tokens += output;
-    }
-
-    /// Update live input token count (from API usage events).
+    /// Update input token count. Only called from UsageUpdate (API's message_start value).
     pub fn set_input_tokens(&mut self, tokens: u32) {
         self.input_tokens = tokens;
     }
 
     /// Update live output token count during streaming.
+    /// `first_output` is set on the first nonzero call — seeds the tok/s timer.
     pub fn set_output_tokens(&mut self, tokens: u32) {
         if self.first_output.is_none() && tokens > 0 {
             self.first_output = Some(std::time::Instant::now());
@@ -147,6 +144,7 @@ impl Component for StatusBar {
         if self.streaming {
             self.render_spinner(&mut lines);
         } else if let Some(ref info) = self.completed {
+            // Completed summary: show both ↑ and ↓ together with tok/s
             let tps = info
                 .tok_per_sec
                 .map(|t| format!(" {}{:.1} t/s{}", theme::FOOTER_DIM, t, r))
@@ -213,33 +211,38 @@ impl StatusBar {
         let elapsed = self.start.map(|s| s.elapsed()).unwrap_or_default();
         let spinner = SPINNER_FRAMES[self.frame % SPINNER_FRAMES.len()];
 
-        // Highlight the active direction in yellow, show tok/s during output
-        let input_delta = self.input_tokens.saturating_sub(self.prev_input_tokens);
-        let tok = if input_delta > 0 || self.output_tokens > 0 {
-            let (up_color, down_color) = if self.output_tokens == 0 {
-                (theme::WARN, theme::FOOTER_DIM) // input phase
-            } else {
-                (theme::FOOTER_DIM, theme::WARN) // output phase
-            };
-            let tps = self.output_tok_per_sec();
-            let tps_str = if let Some(tps) = tps {
-                format!(" {}{:.1} t/s{}", theme::FOOTER_DIM, tps, r)
-            } else {
-                String::new()
-            };
+        // Phase-switch: show only the active direction while live.
+        //   Uploading / waiting (no output yet): show ↑N only.
+        //   Receiving output:                    show ↓N and tok/s only.
+        // This avoids showing a stale "other" counter during each phase.
+        let tok = if self.output_tokens > 0 {
+            // Output phase — show ↓ and tok/s, suppress ↑
+            let tps_str = self
+                .output_tok_per_sec()
+                .map(|t| format!(" {}{:.1} t/s{}", theme::FOOTER_DIM, t, r))
+                .unwrap_or_default();
             format!(
-                " {}·{} {}↑{}{} {}↓{}{}{}",
+                " {}·{} {}↓{}{}{}",
                 theme::DIM,
                 r,
-                up_color,
-                fmt_tok(input_delta),
-                r,
-                down_color,
+                theme::FOOTER_LABEL,
                 fmt_tok(self.output_tokens),
                 r,
                 tps_str,
             )
+        } else if self.input_tokens > 0 {
+            // Upload / waiting phase — show ↑ only (from API's message_start)
+            let input_delta = self.input_tokens.saturating_sub(self.prev_input_tokens);
+            format!(
+                " {}·{} {}↑{}{}",
+                theme::DIM,
+                r,
+                theme::FOOTER_LABEL,
+                fmt_tok(input_delta),
+                r,
+            )
         } else {
+            // No token data yet — plain spinner
             String::new()
         };
 

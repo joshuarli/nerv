@@ -245,45 +245,9 @@ impl Agent {
             cache: CacheConfig::default(),
         };
 
-        // Count input tokens and emit immediately so the UI can show them
-        let input_tokens = crate::compaction::count_tokens(&request.system_prompt)
-            + request
-                .messages
-                .iter()
-                .map(|m| match m {
-                    super::convert::LlmMessage::User { content }
-                    | super::convert::LlmMessage::Assistant { content } => content
-                        .iter()
-                        .map(|c| match c {
-                            super::convert::LlmContent::Text(t) => {
-                                crate::compaction::count_tokens(t)
-                            }
-                            super::convert::LlmContent::Thinking(t) => {
-                                crate::compaction::count_tokens(t)
-                            }
-                            super::convert::LlmContent::ToolCall { arguments, .. } => {
-                                crate::compaction::count_tokens(&arguments.to_string())
-                            }
-                            super::convert::LlmContent::Image(_) => 1200,
-                        })
-                        .sum::<usize>(),
-                    super::convert::LlmMessage::ToolResult { content, .. } => content
-                        .iter()
-                        .map(|c| match c {
-                            super::convert::LlmContent::Text(t) => {
-                                crate::compaction::count_tokens(t)
-                            }
-                            _ => 0,
-                        })
-                        .sum(),
-                })
-                .sum::<usize>();
-        on_event(AgentEvent::UsageUpdate {
-            usage: Usage {
-                input: input_tokens as u32,
-                ..Usage::default()
-            },
-        });
+        // Input token count is NOT estimated locally — we wait for the API's authoritative
+        // value from the `message_start` SSE event. Local tiktoken estimates diverge from
+        // Claude's tokenizer and don't account for message framing / tool schema overhead.
 
         // Accumulate streamed events into an AssistantMessage.
         let mut content_blocks: Vec<ContentBlock> = Vec::new();
