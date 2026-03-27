@@ -13,8 +13,10 @@ pub struct BashTool {
 
 impl BashTool {
     pub fn new(cwd: PathBuf) -> Self {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        Self { cwd, shell }
+        Self {
+            cwd,
+            shell: "/bin/bash".into(),
+        }
     }
 }
 
@@ -56,6 +58,17 @@ impl AgentTool for BashTool {
             }
         };
 
+        // Drain stderr on a background thread to avoid pipe deadlock:
+        // if the child fills the stderr buffer while we're blocked reading
+        // stdout, both sides stall forever.
+        let stderr_thread = child.stderr.take().map(|mut stderr| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = stderr.read_to_end(&mut buf);
+                buf
+            })
+        });
+
         let mut output = Vec::new();
         if let Some(mut stdout) = child.stdout.take() {
             let mut buf = [0u8; 8192];
@@ -70,12 +83,10 @@ impl AgentTool for BashTool {
                 }
             }
         }
-        if let Some(mut stderr) = child.stderr.take() {
-            let mut buf = Vec::new();
-            let _ = stderr.read_to_end(&mut buf);
-            if !buf.is_empty() {
+        if let Some(stderr_buf) = stderr_thread.and_then(|t| t.join().ok()) {
+            if !stderr_buf.is_empty() {
                 output.extend_from_slice(b"\n[stderr]\n");
-                output.extend_from_slice(&buf);
+                output.extend_from_slice(&stderr_buf);
             }
         }
 
