@@ -63,36 +63,17 @@ impl Default for NervConfig {
 impl NervConfig {
     pub fn load(nerv_dir: &Path) -> Self {
         let path = nerv_dir.join("config.json");
-        let defaults_value =
-            serde_json::to_value(Self::default()).unwrap_or(serde_json::Value::Object(Default::default()));
 
         if !path.exists() {
-            // Write defaults verbatim on first run.
-            let _ = write_json(&path, &defaults_value);
-            return Self::default();
-        }
-
-        // Merge: fill in any keys present in defaults but absent in the file.
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let stripped = strip_jsonc_comments(&text);
-        let mut existing: serde_json::Value =
-            serde_json::from_str(&stripped).unwrap_or(serde_json::Value::Object(Default::default()));
-
-        let mut changed = false;
-        if let (Some(obj), Some(defs)) = (existing.as_object_mut(), defaults_value.as_object()) {
-            for (k, v) in defs {
-                if !obj.contains_key(k) {
-                    obj.insert(k.clone(), v.clone());
-                    changed = true;
-                }
+            // Write defaults on first run, then return them.
+            let defaults = Self::default();
+            if let Ok(value) = serde_json::to_value(&defaults) {
+                let _ = write_json(&path, &value);
             }
+            return defaults;
         }
 
-        if changed {
-            let _ = write_json(&path, &existing);
-        }
-
-        serde_json::from_value(existing).unwrap_or_default()
+        read_jsonc(&path).unwrap_or_default()
     }
 
     pub fn save(&self, nerv_dir: &Path) -> anyhow::Result<()> {
