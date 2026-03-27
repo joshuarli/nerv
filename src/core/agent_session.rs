@@ -32,6 +32,8 @@ pub enum AgentSessionEvent {
     AutoCompactionEnd {
         summary: Option<String>,
         will_retry: bool,
+        /// Post-compaction messages (for UI rebuild). Empty when compaction failed/skipped.
+        messages: Vec<AgentMessage>,
     },
     RetryStart {
         attempt: u32,
@@ -353,13 +355,13 @@ impl AgentSession {
 
             match self.run_compaction(None) {
                 Ok(Some(result)) => {
+                    // Reload agent context from compacted session before notifying UI
+                    self.reload_agent_context();
                     let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                         summary: Some(result.summary),
                         will_retry: true,
+                        messages: self.agent.state.messages.clone(),
                     });
-
-                    // Reload agent context from compacted session
-                    self.reload_agent_context();
 
                     // Retry the original prompt
                     let retry_msg = AgentMessage::User {
@@ -373,6 +375,7 @@ impl AgentSession {
                     let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                         summary: None,
                         will_retry: false,
+                        messages: vec![],
                     });
                     let _ = event_tx.send(AgentSessionEvent::Status {
                         message: "Context overflow: nothing to compact. Try /new to start a fresh session.".into(),
@@ -383,6 +386,7 @@ impl AgentSession {
                     let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                         summary: None,
                         will_retry: false,
+                        messages: vec![],
                     });
                     let _ = event_tx.send(AgentSessionEvent::Status {
                         message: format!("Context overflow: {e}"),
@@ -415,6 +419,7 @@ impl AgentSession {
                         let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                             summary: Some(result.summary),
                             will_retry: false,
+                            messages: self.agent.state.messages.clone(),
                         });
                     }
                     Ok(None) | Err(_) => {
@@ -422,6 +427,7 @@ impl AgentSession {
                         let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                             summary: None,
                             will_retry: false,
+                            messages: vec![],
                         });
                     }
                 }
@@ -1050,12 +1056,14 @@ pub fn session_task(
                         let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                             summary: Some(result.summary),
                             will_retry: false,
+                            messages: session.agent.state.messages.clone(),
                         });
                     }
                     Ok(None) => {
                         let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                             summary: None,
                             will_retry: false,
+                            messages: vec![],
                         });
                         let _ = event_tx.send(AgentSessionEvent::Status {
                             message: "Nothing to compact — context is already short enough.".into(),
@@ -1066,6 +1074,7 @@ pub fn session_task(
                         let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                             summary: None,
                             will_retry: false,
+                            messages: vec![],
                         });
                         let _ = event_tx.send(AgentSessionEvent::Status {
                             message: e,

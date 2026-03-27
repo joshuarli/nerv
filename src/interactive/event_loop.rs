@@ -356,13 +356,129 @@ impl InteractiveMode {
             AgentSessionEvent::AutoCompactionEnd {
                 summary,
                 will_retry,
+                messages,
             } => {
                 if will_retry {
                     self.status_message = Some("Compacted. Retrying...".into());
                 } else if summary.is_some() {
                     self.status_message = Some("Context compacted.".into());
                 }
-                let _ = summary; // summary available if needed for display
+
+                // Rebuild the UI whenever compaction succeeded (messages non-empty)
+                if !messages.is_empty() {
+                    // Dump pre-compaction history to scrollback, then show recent tail in chat
+                    let mut scrollback = String::new();
+                    for msg in &messages {
+                        match msg {
+                            AgentMessage::User { content, .. } => {
+                                let text: String = content
+                                    .iter()
+                                    .filter_map(|c| match c {
+                                        ContentItem::Text { text } => Some(text.as_str()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("");
+                                scrollback.push_str(&format!("> {}\n\n", text));
+                            }
+                            AgentMessage::Assistant(a) => {
+                                for block in &a.content {
+                                    match block {
+                                        ContentBlock::Thinking { thinking }
+                                            if !thinking.is_empty() =>
+                                        {
+                                            for line in thinking.lines() {
+                                                scrollback.push_str(&format!("│ {}\n", line));
+                                            }
+                                            scrollback.push('\n');
+                                        }
+                                        ContentBlock::Text { text } if !text.is_empty() => {
+                                            scrollback.push_str(text);
+                                            scrollback.push_str("\n\n");
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !scrollback.is_empty() {
+                        tui.dump_scrollback(&scrollback);
+                    }
+
+                    layout.chat.clear();
+                    let recent = if messages.len() > 6 {
+                        &messages[messages.len() - 6..]
+                    } else {
+                        &messages
+                    };
+                    for msg in recent {
+                        match msg {
+                            AgentMessage::User { content, .. } => {
+                                let text: String = content
+                                    .iter()
+                                    .filter_map(|c| match c {
+                                        ContentItem::Text { text } => Some(text.as_str()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("");
+                                layout.chat.push_user(&text);
+                            }
+                            AgentMessage::Assistant(a) => {
+                                for block in &a.content {
+                                    match block {
+                                        ContentBlock::Thinking { thinking }
+                                            if !thinking.is_empty() =>
+                                        {
+                                            layout.chat.push_styled(
+                                                theme::THINKING,
+                                                &format!(
+                                                    "│ {}",
+                                                    thinking
+                                                        .lines()
+                                                        .collect::<Vec<_>>()
+                                                        .join("\n│ ")
+                                                ),
+                                            );
+                                        }
+                                        ContentBlock::Text { text } if !text.is_empty() => {
+                                            layout.chat.push_markdown_source(text);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            AgentMessage::ToolResult {
+                                content, is_error, ..
+                            } => {
+                                let text: String = content
+                                    .iter()
+                                    .filter_map(|c| match c {
+                                        ContentItem::Text { text } => Some(text.as_str()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("");
+                                if !text.is_empty() {
+                                    layout.chat.push_tool_result(&text, *is_error);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Update footer context estimate from post-compaction messages
+                    let context_tokens: usize = messages
+                        .iter()
+                        .map(crate::compaction::estimate_tokens)
+                        .sum();
+                    layout.footer.reset_context();
+                    layout.footer.set_context_used(context_tokens as u32);
+
+                    tui.request_render(true); // full redraw — context replaced
+                }
             }
             AgentSessionEvent::ProviderHealth { provider, online } => {
                 layout.footer.set_provider_online(&provider, online);
