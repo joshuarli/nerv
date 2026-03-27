@@ -533,6 +533,13 @@ fn main() {
                                 unsafe { libc::raise(libc::SIGSTOP) };
                                 tui.resume(); tui.maybe_render(&layout); continue;
                             }
+                            if keys::matches_key(seq, "shift+tab") {
+                                let enabled = interactive.toggle_plan_mode();
+                                layout.footer.set_plan_mode(enabled);
+                                let label = if enabled { "Plan mode on" } else { "Plan mode off" };
+                                push_status(&mut layout, label, false);
+                                tui.request_render(false); tui.maybe_render(&layout); continue;
+                            }
                             if keys::matches_key(seq, "ctrl+t") {
                                 let next = interactive.cycle_thinking();
                                 let _ = interactive.cmd_tx().try_send(SessionCommand::SetThinkingLevel { level: next });

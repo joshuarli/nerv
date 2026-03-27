@@ -13,6 +13,7 @@ pub struct FooterComponent {
     context_used: u32,
     total_cost: f64,
     provider_online: Option<bool>,
+    plan_mode: bool,
 }
 
 impl FooterComponent {
@@ -51,6 +52,7 @@ impl FooterComponent {
             context_used: 0,
             total_cost: 0.0,
             provider_online: None,
+            plan_mode: false,
         }
     }
 
@@ -91,6 +93,10 @@ impl FooterComponent {
         }
     }
 
+    pub fn set_plan_mode(&mut self, enabled: bool) {
+        self.plan_mode = enabled;
+    }
+
     pub fn set_thinking(&mut self, level: ThinkingLevel) {
         self.thinking_level = level;
     }
@@ -129,6 +135,12 @@ impl Component for FooterComponent {
         }
         let pwd_left = format!("{}{}{}", dim, pwd, r);
 
+        let plan_tag = if self.plan_mode {
+            format!("{}PLAN{} ", theme::ACCENT_BOLD, r)
+        } else {
+            String::new()
+        };
+
         let think_right = match self.thinking_level {
             ThinkingLevel::Off => format!("{}thinking off{}", dim, r),
             ThinkingLevel::Minimal | ThinkingLevel::Low => {
@@ -145,7 +157,8 @@ impl Component for FooterComponent {
             }
         };
 
-        let line1 = right_align(&pwd_left, &think_right, w);
+        let mode_right = format!("{}{}", plan_tag, think_right);
+        let line1 = right_align(&pwd_left, &mode_right, w);
 
         // Line 2: full-width hexagon progress bar
         let context_pct = if self.context_window > 0 {

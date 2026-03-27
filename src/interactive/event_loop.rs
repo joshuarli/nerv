@@ -43,6 +43,8 @@ pub struct InteractiveMode {
     pub pending_permission: Option<crossbeam_channel::Sender<bool>>,
     /// Current permission request details (tool, args) to record if accepted
     pub pending_permission_details: Option<(String, serde_json::Value)>,
+    /// Plan mode: read-only research mode, no file mutations.
+    pub plan_mode: bool,
 }
 
 impl InteractiveMode {
@@ -76,6 +78,7 @@ impl InteractiveMode {
             history_saved_text: String::new(),
             pending_permission: None,
             pending_permission_details: None,
+            plan_mode: false,
         }
     }
 
@@ -96,6 +99,12 @@ impl InteractiveMode {
             AgentSessionEvent::ThinkingLevelChanged { level } => {
                 self.current_thinking = level;
                 layout.footer.set_thinking(level);
+            }
+            AgentSessionEvent::PlanModeChanged { enabled } => {
+                self.plan_mode = enabled;
+                layout.footer.set_plan_mode(enabled);
+                let label = if enabled { "Plan mode on" } else { "Plan mode off" };
+                self.status_message = Some(label.into());
             }
             AgentSessionEvent::Status { message, is_error } => {
                 self.status_message = Some(message);
@@ -431,6 +440,13 @@ impl InteractiveMode {
             return;
         }
 
+        // Bare "plan" enables plan mode
+        if text.trim().eq_ignore_ascii_case("plan") && !self.plan_mode {
+            self.plan_mode = true;
+            let _ = self.cmd_tx.try_send(SessionCommand::SetPlanMode { enabled: true });
+            return;
+        }
+
         // Record in history (avoid consecutive duplicates)
         if self.message_history.last().map(|s| s.as_str()) != Some(text.as_str()) {
             self.message_history.push(text.clone());
@@ -543,6 +559,11 @@ impl InteractiveMode {
                 self.current_thinking = next;
                 self.status_message = Some(format!("Thinking: {:?}", next));
             }
+            "/plan" => {
+                let enabled = !self.plan_mode;
+                self.plan_mode = enabled;
+                let _ = self.cmd_tx.try_send(SessionCommand::SetPlanMode { enabled });
+            }
             "/session" => {
                 self.status_message = Some(format!(
                     "Model: {} | Thinking: {:?} | Cost: ${:.4}",
@@ -650,6 +671,7 @@ impl InteractiveMode {
                      /tree           — browse/switch session branches\n\
                      /wt <branch>    — create git worktree for session\n\
                      /wt merge       — merge worktree back and clean up\n\
+                     /plan           — toggle plan mode (read-only research)\n\
                      /new            — start new session\n\
                      /quit           — quit nerv\n\
                      /help           — this message",
@@ -660,7 +682,7 @@ impl InteractiveMode {
                         help.push_str(&format!("\n /{}  — {}", skill.name, skill.description));
                     }
                 }
-                help.push_str("\n\nKeys: Enter=send  Shift/Ctrl+Enter=newline  Esc/^C=quit  ^G=$EDITOR");
+                help.push_str("\n\nKeys: Enter=send  Shift/Ctrl+Enter=newline  Shift+Tab=plan  Esc/^C=quit  ^G=$EDITOR");
                 self.status_message = Some(help);
             }
             _ => {
@@ -734,6 +756,7 @@ impl InteractiveMode {
             "/export".into(),
             "/resume".into(),
             "/tree".into(),
+            "/plan".into(),
             "/wt".into(),
             "/login".into(),
             "/logout".into(),
@@ -794,6 +817,15 @@ impl InteractiveMode {
             }
             self.editing_queue_idx = None;
         }
+    }
+
+    pub fn toggle_plan_mode(&mut self) -> bool {
+        let enabled = !self.plan_mode;
+        self.plan_mode = enabled;
+        let _ = self
+            .cmd_tx
+            .try_send(SessionCommand::SetPlanMode { enabled });
+        enabled
     }
 
     pub fn current_thinking(&self) -> ThinkingLevel {

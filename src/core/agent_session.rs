@@ -84,6 +84,9 @@ pub enum AgentSessionEvent {
         online: bool,
     },
     /// Permission request — agent blocks until response is sent back.
+    PlanModeChanged {
+        enabled: bool,
+    },
     PermissionRequest {
         tool: String,
         args: serde_json::Value,
@@ -109,6 +112,7 @@ pub enum SessionCommand {
     SwitchBranch { entry_id: String },
     CreateWorktree { branch_name: String, nerv_dir: PathBuf },
     MergeWorktree,
+    SetPlanMode { enabled: bool },
 }
 
 pub struct AgentSession {
@@ -127,6 +131,8 @@ pub struct AgentSession {
     permission_cache: Arc<std::sync::Mutex<HashSet<String>>>,
     /// Worktree path tied to this session (set via --wt or /wt).
     worktree: Option<PathBuf>,
+    /// Plan mode: restrict tools to read-only, steer model toward planning.
+    plan_mode: bool,
 }
 
 impl AgentSession {
@@ -151,7 +157,19 @@ impl AgentSession {
             permissions_enabled: false,
             permission_cache: Arc::new(std::sync::Mutex::new(HashSet::new())),
             worktree: None,
+            plan_mode: false,
         }
+    }
+
+    pub fn set_plan_mode(&mut self, enabled: bool, event_tx: &Sender<AgentSessionEvent>) {
+        self.plan_mode = enabled;
+        if enabled {
+            self.tool_registry
+                .set_active(&["read", "bash", "grep", "find", "ls", "memory"]);
+        } else {
+            self.tool_registry.set_active(&[]);
+        }
+        let _ = event_tx.send(AgentSessionEvent::PlanModeChanged { enabled });
     }
 
     pub fn set_worktree(&mut self, path: PathBuf) {
@@ -337,6 +355,16 @@ impl AgentSession {
             &guidelines,
             model_id,
         );
+
+        if self.plan_mode {
+            self.agent.state.system_prompt.push_str(
+                "\n\n# Plan Mode\n\n\
+                 You are in plan mode. Research the codebase and outline an implementation plan. \
+                 Do not modify any files — the edit and write tools are unavailable. \
+                 Focus on: identifying relevant files, understanding existing patterns, \
+                 and producing a clear step-by-step plan.",
+            );
+        }
     }
 
     /// Run agent.prompt() with event forwarding and persistence. Returns new messages.
@@ -800,6 +828,9 @@ pub fn session_task(
             }
             SessionCommand::SetThinkingLevel { level } => {
                 session.set_thinking_level(level, &event_tx)
+            }
+            SessionCommand::SetPlanMode { enabled } => {
+                session.set_plan_mode(enabled, &event_tx);
             }
             SessionCommand::Compact {
                 custom_instructions,
