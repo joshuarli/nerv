@@ -1085,9 +1085,10 @@ pub fn session_task(
             }
             SessionCommand::ExportJsonl => {
                 let sid = session.session_manager.session_id().to_string();
+                let sid_short = if sid.len() >= 8 { &sid[..8] } else { &sid };
                 let exports_dir = crate::nerv_dir().join("exports");
                 let _ = std::fs::create_dir_all(&exports_dir);
-                let path = exports_dir.join(format!("{sid}.jsonl"));
+                let path = exports_dir.join(format!("{sid_short}.jsonl"));
                 let result = if let Some(content) = session.session_manager.export_jsonl() {
                     std::fs::write(&path, content)
                         .map(|_| path.to_string_lossy().to_string())
@@ -1099,9 +1100,10 @@ pub fn session_task(
             }
             SessionCommand::ExportHtml => {
                 let sid = session.session_manager.session_id().to_string();
+                let sid_short = if sid.len() >= 8 { &sid[..8] } else { &sid };
                 let exports_dir = crate::nerv_dir().join("exports");
                 let _ = std::fs::create_dir_all(&exports_dir);
-                let path = exports_dir.join(format!("{sid}.html"));
+                let path = exports_dir.join(format!("{sid_short}.html"));
                 let result = crate::export::export_entries_html(
                     session.session_manager.entries(),
                     &session.agent.state.messages,
