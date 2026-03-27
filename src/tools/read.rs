@@ -61,10 +61,17 @@ impl AgentTool for ReadTool {
                     }
                     let _ = write!(content, "{:>6}\t{}", start + i + 1, line);
                 }
-                let (content, _) = truncate_head(&content, DEFAULT_MAX_LINES);
+                let (content, truncated) = truncate_head(&content, DEFAULT_MAX_LINES);
+                let display = if n == 0 {
+                    format!("{} (empty)", path_str)
+                } else if truncated {
+                    format!("{} (lines {}-{}, truncated)", path_str, start + 1, end)
+                } else {
+                    format!("{} ({} lines)", path_str, n)
+                };
                 ToolResult {
                     content,
-                    details: None,
+                    details: Some(serde_json::json!({"display": display})),
                     is_error: false,
                 }
             }

@@ -56,9 +56,15 @@ impl AgentTool for GrepTool {
                     };
                 }
                 let tr = truncate_tail(&output.stdout, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
+                let match_count = tr.content.lines().count();
+                let display = if tr.truncated {
+                    format!("{} matches (truncated)", match_count)
+                } else {
+                    format!("{} matches", match_count)
+                };
                 ToolResult {
                     content: tr.content,
-                    details: Some(serde_json::json!({"truncated": tr.truncated})),
+                    details: Some(serde_json::json!({"truncated": tr.truncated, "display": display})),
                     is_error: false,
                 }
             }

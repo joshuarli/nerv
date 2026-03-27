@@ -39,9 +39,11 @@ impl AgentTool for LsTool {
         {
             Ok(output) => {
                 let tr = truncate_tail(&output.stdout, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
+                let entry_count = tr.content.lines().count();
+                let display = format!("{} ({} entries)", path, entry_count);
                 ToolResult {
                     content: tr.content,
-                    details: None,
+                    details: Some(serde_json::json!({"display": display})),
                     is_error: false,
                 }
             }

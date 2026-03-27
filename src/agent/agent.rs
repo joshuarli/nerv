@@ -440,10 +440,15 @@ impl Agent {
                     }
                 };
 
+                let display = result.details.as_ref().and_then(|d| {
+                    d.get("display").and_then(|v| v.as_str()).map(|s| s.to_string())
+                });
+
                 on_event(AgentEvent::ToolExecutionEnd {
                     id: id.clone(),
                     result: ToolResultData {
                         content: result.content.clone(),
+                        display,
                         is_error: result.is_error,
                     },
                 });

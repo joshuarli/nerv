@@ -51,9 +51,11 @@ impl AgentTool for FindTool {
                         is_error: false,
                     }
                 } else {
+                    let file_count = tr.content.lines().count();
+                    let display = format!("{} files", file_count);
                     ToolResult {
                         content: tr.content,
-                        details: None,
+                        details: Some(serde_json::json!({"display": display})),
                         is_error: false,
                     }
                 }

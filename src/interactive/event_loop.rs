@@ -386,9 +386,8 @@ impl InteractiveMode {
                 tui.request_render(false);
             }
             AgentEvent::ToolExecutionEnd { result, .. } => {
-                layout
-                    .chat
-                    .push_tool_result(&result.content, result.is_error);
+                let text = result.display.as_deref().unwrap_or(&result.content);
+                layout.chat.push_tool_result(text, result.is_error);
                 tui.request_render(false);
             }
             AgentEvent::TurnStart | AgentEvent::TurnEnd => {}

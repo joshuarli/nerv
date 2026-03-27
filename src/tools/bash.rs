@@ -98,9 +98,19 @@ impl AgentTool for BashTool {
         } else {
             tr.content
         };
+        let line_count = content.lines().count();
+        let display = if exit_code != Some(0) {
+            format!("exit {} ({} lines)", exit_code.unwrap_or(-1), line_count)
+        } else if line_count > 5 {
+            // Show first 3 lines + count for long output
+            let preview: String = content.lines().take(3).collect::<Vec<_>>().join("\n");
+            format!("{}\n  ... ({} lines)", preview, line_count)
+        } else {
+            content.clone()
+        };
         ToolResult {
             content,
-            details: Some(serde_json::json!({"exit_code": exit_code, "truncated": tr.truncated})),
+            details: Some(serde_json::json!({"exit_code": exit_code, "truncated": tr.truncated, "display": display})),
             is_error: exit_code != Some(0),
         }
     }

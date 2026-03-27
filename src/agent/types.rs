@@ -273,6 +273,9 @@ pub enum StreamDelta {
 #[derive(Debug, Clone)]
 pub struct ToolResultData {
     pub content: String,
+    /// Short summary for TUI display. If set, the TUI shows this
+    /// instead of the full content. Content still goes to the LLM.
+    pub display: Option<String>,
     pub is_error: bool,
 }
 
