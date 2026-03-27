@@ -86,9 +86,7 @@ impl AgentTool for EditTool {
                     if let Err(e) = std::fs::write(&abs_path, &final_content) {
                         return ToolResult { content: format!("Error writing {}: {}", path_str, e), details: None, is_error: true };
                     }
-                    let original_str: &str = &content;
-                    let diff = similar::TextDiff::from_lines(original_str, &final_content);
-                    let diff_str = diff.unified_diff().header(&format!("a/{}", path_str), &format!("b/{}", path_str)).to_string();
+                    let diff_str = super::diff::unified_diff(&content, &final_content, &format!("a/{}", path_str), &format!("b/{}", path_str));
                     return ToolResult { content: format!("(fuzzy match applied)\n{}", diff_str), details: Some(serde_json::json!({"diff": diff_str, "path": path_str, "fuzzy": true})), is_error: false };
                 }
             }
@@ -103,9 +101,7 @@ impl AgentTool for EditTool {
         if let Err(e) = std::fs::write(&abs_path, &final_content) {
             return ToolResult { content: format!("Error writing {}: {}", path_str, e), details: None, is_error: true };
         }
-        let original_str: &str = &content;
-        let diff = similar::TextDiff::from_lines(original_str, &final_content);
-        let diff_str = diff.unified_diff().header(&format!("a/{}", path_str), &format!("b/{}", path_str)).to_string();
+        let diff_str = super::diff::unified_diff(&content, &final_content, &format!("a/{}", path_str), &format!("b/{}", path_str));
         ToolResult { content: diff_str.clone(), details: Some(serde_json::json!({"diff": diff_str, "path": path_str})), is_error: false }
         }) // close mutation_queue.with
     }
