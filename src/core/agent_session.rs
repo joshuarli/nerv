@@ -369,6 +369,15 @@ impl AgentSession {
             model_id,
         );
 
+        if let Some(ref wt) = self.worktree {
+            self.agent.state.system_prompt.push_str(&format!(
+                "\n\nYou are working in a git worktree at {}. \
+                 All file paths and commands run from this directory, not the original repo. \
+                 Do not cd to other directories.",
+                wt.display()
+            ));
+        }
+
         if self.plan_mode {
             self.agent.state.system_prompt.push_str(
                 "\n\n# Plan Mode\n\n\
