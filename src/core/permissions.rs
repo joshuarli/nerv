@@ -148,6 +148,11 @@ fn extract_path_tokens(cmd: &str) -> Vec<String> {
         // Strip quotes
         let t = token.trim_matches(|c| c == '\'' || c == '"');
         if t.starts_with('/') || t.starts_with("~/") {
+            // Skip tokens that contain regex metacharacters or glob wildcards —
+            // they're patterns/arguments, not filesystem paths (e.g. `//.*Value`).
+            if t.contains(|c: char| matches!(c, '*' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | '|' | '^')) {
+                continue;
+            }
             tokens.push(t.to_string());
         }
     }
@@ -338,5 +343,19 @@ mod tests {
             check("bash", &args, Some(&repo())),
             Permission::Ask(_)
         ));
+    }
+
+    #[test]
+    fn bash_regex_pattern_double_slash_allowed() {
+        // A regex argument like `//.*Value` starts with `/` but is not a path.
+        // It must not trigger a permission prompt.
+        let args = serde_json::json!({"command": r#"rg --color=never --no-heading -n "//.*Value" src/"#});
+        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn bash_rg_search_in_src_allowed() {
+        let args = serde_json::json!({"command": r#"rg --color=never --no-heading -n "serde_json" src/ --type rust | sort | head -12"#});
+        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
     }
 }
