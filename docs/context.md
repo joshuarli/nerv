@@ -90,28 +90,24 @@ the model doesn't need the full payload to understand what was changed.
 
 These are applied at tool execution time, not in `transform_context`.
 
-### 8. Read tool mtime caching (`src/tools/read.rs`)
+### 8. Read tool: whole-file with mtime cache (`src/tools/read.rs`)
 
-The `ReadTool` maintains an in-memory cache of `path → (mtime, line_count)`.
-When the model reads a file it already read and the file's mtime hasn't
-changed, the tool returns `[unchanged since last read: path (N lines)]`
-instead of the full content. The cache is invalidated automatically when
-a write/edit modifies the file (new mtime).
+The read tool always returns the entire file (no offset/limit parameters).
+For specific line ranges, the model uses `bash` + `sed -n '100,200p'`.
+This eliminates the chunked-read problem where models read 1000-line files
+in 120-line slices (10+ API calls).
 
-**Savings**: 200-12k+ tokens per redundant re-read of an unmodified file.
+An in-memory mtime cache tracks `path → (mtime, line_count)`. When the
+model reads a file it already read and the mtime hasn't changed, the tool
+returns `[unchanged since last read: path (N lines)]` instead of the full
+content. Cache invalidates automatically when writes change the file.
 
-### 9. Read auto-size for small files
+Line number width adapts to file size (3/4/6 digits). Truncation at 3000
+lines for truly massive files.
 
-Files under 300 lines are returned in full regardless of the model's
-requested `limit`. Prevents multi-chunk reads where the model asks for
-`limit=120` then `offset=120 limit=50` etc.
+**Savings**: eliminates redundant re-reads (200-12k+ tokens each).
 
-### 10. Compact line numbers
-
-Line number prefix width adapts to file size: 3 digits for <1000 lines,
-4 for <10000, 6 for larger. Was always 6-digit padded. Saves ~2 chars/line.
-
-### 11. Grep context lines (`src/tools/grep.rs`)
+### 9. Grep context lines (`src/tools/grep.rs`)
 
 The grep tool passes `--context=3` to ripgrep, so the model gets surrounding
 lines with each match. Reduces follow-up read calls for understanding call

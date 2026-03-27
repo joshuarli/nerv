@@ -32,7 +32,7 @@ src/
 │   ├── openai_compat.rs       # OpenAI-compatible (llama-server, Ollama)
 │   └── agent.rs               # Agentic loop: stream → tool calls → permissions → context gate → loop
 ├── tools/
-│   ├── read.rs                # File read with offset/limit, line numbers, mtime cache
+│   ├── read.rs                # Whole-file read with line numbers + mtime cache
 │   ├── edit.rs                # Single + multi-edit, fuzzy match, BOM/CRLF
 │   ├── write.rs               # File write with mkdir -p
 │   ├── bash.rs                # /bin/bash -c, stderr on background thread
