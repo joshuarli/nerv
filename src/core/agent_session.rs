@@ -352,8 +352,8 @@ impl AgentSession {
 
     fn prepare_system_prompt(&mut self) {
         // Reload memory in case it was updated by a tool call
-        let nerv_dir = crate::home_dir().unwrap_or_default().join(".nerv");
-        self.resources.memory = std::fs::read_to_string(nerv_dir.join("memory.md")).ok();
+        self.resources.memory =
+            std::fs::read_to_string(crate::nerv_dir().join("memory.md")).ok();
 
         self.agent.state.tools = self.tool_registry.active_tools();
         let tool_names: Vec<&str> = self.agent.state.tools.iter().map(|t| t.name()).collect();
@@ -553,10 +553,10 @@ impl AgentSession {
                 model: model.clone(),
             });
             // Persist as default for next startup
-            let nerv_dir = crate::home_dir().unwrap_or_default().join(".nerv");
-            let mut cfg = super::config::NervConfig::load(&nerv_dir);
+            let nerv_dir = crate::nerv_dir();
+            let mut cfg = super::config::NervConfig::load(nerv_dir);
             cfg.default_model = Some(model_id.to_string());
-            let _ = cfg.save(&nerv_dir);
+            let _ = cfg.save(nerv_dir);
         }
     }
 
@@ -595,8 +595,7 @@ impl AgentSession {
                         self.set_model(&provider, &model_id, event_tx);
                     } else {
                         // Model not in registry — check if it's a custom provider we can re-register
-                        let nerv_dir = crate::home_dir().unwrap_or_default().join(".nerv");
-                        let config = crate::core::config::NervConfig::load(&nerv_dir);
+                        let config = crate::core::config::NervConfig::load(crate::nerv_dir());
                         if let Some(pcfg) =
                             config.custom_providers.iter().find(|p| p.name == provider)
                         {
@@ -737,13 +736,13 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
 
             match result {
                 Ok(creds) => {
-                    let nerv_dir = crate::home_dir().unwrap_or_default().join(".nerv");
-                    let mut auth = super::auth::AuthStorage::load(&nerv_dir);
+                    let nerv_dir = crate::nerv_dir();
+                    let mut auth = super::auth::AuthStorage::load(nerv_dir);
                     let api_key = creds.access.clone();
                     auth.set("anthropic", super::auth::Credential::OAuth(creds));
 
                     // Register the provider (OAuth uses Bearer auth)
-                    let nerv_config = super::config::NervConfig::load(&nerv_dir);
+                    let nerv_config = super::config::NervConfig::load(nerv_dir);
                     let extra_headers: Vec<(String, String)> = nerv_config
                         .headers
                         .get("anthropic")

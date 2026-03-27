@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nerv::core::*;
-use nerv::home_dir;
+use nerv::{home_dir, nerv_dir};
 use nerv::interactive::event_loop::InteractiveMode;
 use nerv::interactive::footer::FooterComponent;
 use nerv::interactive::layout::AppLayout;
@@ -60,11 +60,9 @@ fn main() {
                 return;
             }
             "add" | "load" | "models" | "unload" => {
-                let nerv_dir = home_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join(".nerv");
-                std::fs::create_dir_all(&nerv_dir).ok();
-                handle_subcommand(cmd, &args[2..], &nerv_dir);
+                let nerv_dir = nerv_dir();
+                std::fs::create_dir_all(nerv_dir).ok();
+                handle_subcommand(cmd, &args[2..], nerv_dir);
                 return;
             }
             _ => {}
@@ -95,10 +93,8 @@ fn main() {
         }
     }
 
-    let nerv_dir = home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".nerv");
-    std::fs::create_dir_all(&nerv_dir).ok();
+    let nerv_dir = nerv_dir();
+    std::fs::create_dir_all(nerv_dir).ok();
 
     nerv::log::init(&nerv_dir.join("debug.log"));
     if let Some(pos) = args.iter().position(|a| a == "--log-level") {
@@ -718,11 +714,9 @@ fn push_status(layout: &mut AppLayout, msg: &str, is_error: bool) {
 }
 
 fn list_all_models() {
-    let nerv_dir = home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".nerv");
-    let config = nerv::core::NervConfig::load(&nerv_dir);
-    let mut auth = nerv::core::auth::AuthStorage::load(&nerv_dir);
+    let nerv_dir = nerv_dir();
+    let config = nerv::core::NervConfig::load(nerv_dir);
+    let mut auth = nerv::core::auth::AuthStorage::load(nerv_dir);
     let registry = nerv::core::model_registry::ModelRegistry::new(&config, &mut auth);
 
     let available = registry.available_models();
@@ -930,10 +924,8 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
 fn print_mode(args: &[String]) {
     use std::io::Read;
 
-    let nerv_dir = home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".nerv");
-    std::fs::create_dir_all(&nerv_dir).ok();
+    let nerv_dir = nerv_dir();
+    std::fs::create_dir_all(nerv_dir).ok();
 
     nerv::log::init(&nerv_dir.join("debug.log"));
     if let Ok(level) = std::env::var("NERV_LOG").unwrap_or_default().parse() {

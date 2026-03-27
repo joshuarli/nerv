@@ -604,7 +604,7 @@ impl InteractiveMode {
                 } else if args.is_empty() {
                     self.status_message = Some("Usage: /wt <branch-name> | /wt merge".into());
                 } else {
-                    let nerv_dir = crate::home_dir().unwrap_or_default().join(".nerv");
+                    let nerv_dir = crate::nerv_dir().to_path_buf();
                     let _ = self.cmd_tx.send(SessionCommand::CreateWorktree {
                         branch_name: args.to_string(),
                         nerv_dir,
@@ -627,8 +627,8 @@ impl InteractiveMode {
             }
             "/logout" => {
                 let provider = if args.is_empty() { "anthropic" } else { args };
-                let nerv_dir = crate::home_dir().unwrap_or_default().join(".nerv");
-                let mut auth = crate::core::auth::AuthStorage::load(&nerv_dir);
+                let nerv_dir = crate::nerv_dir();
+                let mut auth = crate::core::auth::AuthStorage::load(nerv_dir);
                 auth.remove(provider);
                 self.status_message = Some(format!("Logged out from {}.", provider));
             }

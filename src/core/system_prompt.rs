@@ -52,8 +52,7 @@ pub fn build_system_prompt_for_model(
 
     // 1. Base system prompt: per-model → global override → compiled default
     let model_prompt = model_id.and_then(|id| {
-        let nerv_dir = crate::home_dir()?.join(".nerv");
-        let path = nerv_dir.join("prompts").join(format!("{}.md", id));
+        let path = crate::nerv_dir().join("prompts").join(format!("{}.md", id));
         if path.is_file() {
             crate::log::info(&format!("loaded per-model prompt: {}", path.display()));
             std::fs::read_to_string(&path).ok()

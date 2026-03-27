@@ -17,18 +17,19 @@ pub struct FooterComponent {
 }
 
 impl FooterComponent {
-    pub fn new(cwd: &str) -> Self {
-        let home = crate::home_dir().map(|h| h.to_string_lossy().to_string());
-        let display_cwd = if let Some(ref h) = home {
-            if cwd.starts_with(h.as_str()) {
-                format!("~{}", &cwd[h.len()..])
-            } else {
-                cwd.to_string()
+    fn abbrev_cwd(cwd: &str) -> String {
+        // Replace the home prefix with ~ for display.
+        // home_dir() is a OnceLock cache hit after the first call.
+        if let Some(h) = crate::home_dir() {
+            let h = h.to_string_lossy();
+            if cwd.starts_with(h.as_ref()) {
+                return format!("~{}", &cwd[h.len()..]);
             }
-        } else {
-            cwd.to_string()
-        };
+        }
+        cwd.to_string()
+    }
 
+    pub fn new(cwd: &str) -> Self {
         let git_branch = std::process::Command::new("git")
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(cwd)
@@ -43,7 +44,7 @@ impl FooterComponent {
             });
 
         Self {
-            cwd: display_cwd,
+            cwd: Self::abbrev_cwd(cwd),
             git_branch,
             model_id: String::new(),
             provider_name: String::new(),
@@ -57,16 +58,7 @@ impl FooterComponent {
     }
 
     pub fn set_cwd(&mut self, cwd: &str) {
-        let home = crate::home_dir().map(|h| h.to_string_lossy().to_string());
-        self.cwd = if let Some(ref h) = home {
-            if cwd.starts_with(h.as_str()) {
-                format!("~{}", &cwd[h.len()..])
-            } else {
-                cwd.to_string()
-            }
-        } else {
-            cwd.to_string()
-        };
+        self.cwd = Self::abbrev_cwd(cwd);
         self.git_branch = std::process::Command::new("git")
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(cwd)
