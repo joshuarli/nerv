@@ -309,7 +309,7 @@ function toggleTool(header) {
                                 let args_str = serde_json::to_string_pretty(arguments)
                                     .unwrap_or_else(|_| arguments.to_string());
                                 let args_preview = if args_str.len() > 120 {
-                                    format!("{}...", &args_str[..120])
+                                    format!("{}...", &args_str[..args_str.floor_char_boundary(120)])
                                 } else {
                                     args_str.clone()
                                 };

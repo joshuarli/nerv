@@ -264,8 +264,12 @@ impl InteractiveMode {
                         AgentMessage::ToolResult { content, .. } => {
                             for item in content {
                                 if let ContentItem::Text { text } = item {
-                                    let preview =
-                                        if text.len() > 200 { &text[..200] } else { text };
+                                    let preview = if text.len() > 200 {
+                                        let end = text.floor_char_boundary(200);
+                                        &text[..end]
+                                    } else {
+                                        text.as_str()
+                                    };
                                     scrollback.push_str(&format!("  {}\n", preview));
                                 }
                             }

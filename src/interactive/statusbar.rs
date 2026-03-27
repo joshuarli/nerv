@@ -192,7 +192,7 @@ impl Component for StatusBar {
                     theme::DIM
                 };
                 let preview = if msg.len() > 60 {
-                    &msg[..60]
+                    &msg[..msg.floor_char_boundary(60)]
                 } else {
                     msg.as_str()
                 };

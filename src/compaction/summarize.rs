@@ -36,7 +36,8 @@ pub fn serialize_conversation(messages: &[AgentMessage]) -> String {
                 for item in content {
                     if let ContentItem::Text { text } = item {
                         if text.len() > 500 {
-                            out.push_str(&text[..500]);
+                            let end = text.floor_char_boundary(500);
+                            out.push_str(&text[..end]);
                             out.push_str("...[truncated]");
                         } else {
                             out.push_str(text);
@@ -101,7 +102,8 @@ pub fn generate_session_name(
 ) -> anyhow::Result<String> {
     // Truncate long messages so the naming call stays cheap.
     let snippet = if first_user_message.len() > 400 {
-        &first_user_message[..400]
+        let end = first_user_message.floor_char_boundary(400);
+        &first_user_message[..end]
     } else {
         first_user_message
     };

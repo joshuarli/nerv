@@ -1218,7 +1218,7 @@ fn print_mode(args: &[String]) {
                     .join("");
                 // Truncate long tool results in the trace
                 let text = if text.len() > 500 {
-                    format!("{}...[truncated {}b]", &text[..500], text.len())
+                    format!("{}...[truncated {}b]", &text[..text.floor_char_boundary(500)], text.len())
                 } else {
                     text
                 };
