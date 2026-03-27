@@ -324,7 +324,7 @@ def main():
                 print(
                     f"PASS{att}{hint}  ({result.turns} turns, {result.total_tool_calls} tools, "
                     f"{result.tokens_in}+{result.tokens_out} tok, "
-                    f"{result.wall_time_s}s)",
+                    f"${result.cost:.4f}, {result.wall_time_s}s)",
                     file=sys.stderr,
                 )
             else:
