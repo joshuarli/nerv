@@ -69,6 +69,15 @@ pub enum AgentSessionEvent {
     SessionLoaded {
         messages: Vec<AgentMessage>,
     },
+    /// A worktree was created (via /wt). UI should update cwd display.
+    WorktreeCreated {
+        path: PathBuf,
+    },
+    /// Worktree was merged and removed. UI should update cwd back.
+    WorktreeMerged {
+        original_path: PathBuf,
+        message: String,
+    },
     /// Provider health check result (from background thread on startup).
     ProviderHealth {
         provider: String,
@@ -98,6 +107,8 @@ pub enum SessionCommand {
     SearchSessions { query: String },
     GetTree,
     SwitchBranch { entry_id: String },
+    CreateWorktree { branch_name: String, nerv_dir: PathBuf },
+    MergeWorktree,
 }
 
 pub struct AgentSession {
@@ -114,6 +125,8 @@ pub struct AgentSession {
     /// Cache of accepted permissions: (tool, args_json) keyed by args hash
     /// Shared arc for use in permission_fn closure
     permission_cache: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Worktree path tied to this session (set via --wt or /wt).
+    worktree: Option<PathBuf>,
 }
 
 impl AgentSession {
@@ -137,7 +150,13 @@ impl AgentSession {
             last_input_tokens: 0,
             permissions_enabled: false,
             permission_cache: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            worktree: None,
         }
+    }
+
+    pub fn set_worktree(&mut self, path: PathBuf) {
+        self.cwd = path.clone();
+        self.worktree = Some(path);
     }
 
     pub fn cost(&self) -> &Cost {
@@ -147,7 +166,9 @@ impl AgentSession {
     pub fn prompt(&mut self, text: String, event_tx: &Sender<AgentSessionEvent>) {
         // Lazily create session on first prompt (not on startup)
         if !self.session_manager.has_session() {
-            let _ = self.session_manager.new_session(&self.cwd);
+            let _ = self
+                .session_manager
+                .new_session(&self.cwd, self.worktree.as_deref());
             let _ = event_tx.send(AgentSessionEvent::SessionStarted {
                 id: self.session_manager.session_id().to_string(),
             });
@@ -567,6 +588,22 @@ impl AgentSession {
                     }
                 }
 
+                // Restore worktree cwd if session was tied to one
+                if let Some(wt_path) = self.session_manager.session_worktree() {
+                    if !wt_path.exists() {
+                        let _ = event_tx.send(AgentSessionEvent::Status {
+                            message: format!(
+                                "Session worktree no longer exists: {}",
+                                wt_path.display()
+                            ),
+                            is_error: true,
+                        });
+                        return;
+                    }
+                    self.set_worktree(wt_path.clone());
+                    let _ = event_tx.send(AgentSessionEvent::WorktreeCreated { path: wt_path });
+                }
+
                 let _ = event_tx.send(AgentSessionEvent::SessionStarted {
                     id: self.session_manager.session_id().to_string(),
                 });
@@ -751,7 +788,9 @@ pub fn session_task(
             SessionCommand::Prompt { text } => session.prompt(text, &event_tx),
             SessionCommand::Abort => session.abort(),
             SessionCommand::NewSession => {
-                let _ = session.session_manager.new_session(&session.cwd);
+                let _ = session
+                    .session_manager
+                    .new_session(&session.cwd, session.worktree.as_deref());
                 session.agent.state.messages.clear();
                 session.session_cost = Cost::default();
             }
@@ -829,6 +868,78 @@ pub fn session_task(
                 let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
                     messages: session.agent.state.messages.clone(),
                 });
+            }
+            SessionCommand::CreateWorktree {
+                branch_name,
+                nerv_dir,
+            } => {
+                if session.session_manager.has_session() {
+                    let _ = event_tx.send(AgentSessionEvent::Status {
+                        message: "/wt only works before the first prompt. Use --wt for new sessions.".into(),
+                        is_error: true,
+                    });
+                    continue;
+                }
+                let repo_root = match crate::find_repo_root(&session.cwd) {
+                    Some(r) => r,
+                    None => {
+                        let _ = event_tx.send(AgentSessionEvent::Status {
+                            message: "Not in a git repository.".into(),
+                            is_error: true,
+                        });
+                        continue;
+                    }
+                };
+                // Generate session ID prefix for branch naming
+                let prefix = &crate::session::types::gen_session_id()[..8];
+                match crate::worktree::create_worktree(
+                    &repo_root,
+                    &nerv_dir,
+                    &branch_name,
+                    prefix,
+                ) {
+                    Ok(wt_path) => {
+                        session.set_worktree(wt_path.clone());
+                        let _ = event_tx.send(AgentSessionEvent::WorktreeCreated {
+                            path: wt_path,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = event_tx.send(AgentSessionEvent::Status {
+                            message: format!("Worktree creation failed: {}", e),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+            SessionCommand::MergeWorktree => {
+                let wt_path = match session.worktree.as_ref() {
+                    Some(p) => p.clone(),
+                    None => {
+                        let _ = event_tx.send(AgentSessionEvent::Status {
+                            message: "No worktree attached to this session.".into(),
+                            is_error: true,
+                        });
+                        continue;
+                    }
+                };
+                match crate::worktree::merge_worktree(&wt_path) {
+                    Ok(main_wt) => {
+                        session.cwd = main_wt.clone();
+                        session.worktree = None;
+                        session.session_manager.clear_worktree();
+                        let _ = event_tx.send(AgentSessionEvent::WorktreeMerged {
+                            original_path: main_wt,
+                            message: "Worktree merged and removed.".into(),
+                        });
+                    }
+                    Err(e) => {
+                        let _ = event_tx.send(AgentSessionEvent::Status {
+                            message: format!("Merge failed: {}", e),
+                            is_error: true,
+                        });
+                    }
+                }
             }
         }
     }

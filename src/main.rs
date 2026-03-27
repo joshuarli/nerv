@@ -32,6 +32,7 @@ fn main() {
                 println!("  --json             JSON output in print mode (default)");
                 println!("  --list-models      List all configured models");
                 println!("  --log-level <lvl>  Set log level (debug, info, warn, error)");
+                println!("  --wt <branch>      Create git worktree for session");
                 println!("  --export-html <id> Export session to HTML (optional: output path)");
                 println!("  -h, --help         Show this help");
                 println!("  --version          Show version");
@@ -77,7 +78,7 @@ fn main() {
     // Reject unknown flags early
     {
         let known = [
-            "--resume", "--model", "--log-level", "--version", "--export-html",
+            "--resume", "--model", "--log-level", "--version", "--export-html", "--wt",
         ];
         let mut i = 1;
         while i < args.len() {
@@ -87,7 +88,7 @@ fn main() {
                 std::process::exit(1);
             }
             // Skip the value for flags that take one
-            if matches!(arg.as_str(), "--resume" | "--model" | "--log-level" | "--export-html") {
+            if matches!(arg.as_str(), "--resume" | "--model" | "--log-level" | "--export-html" | "--wt") {
                 i += 1;
             }
             i += 1;
@@ -137,7 +138,30 @@ fn main() {
         }
     }
 
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut worktree_path: Option<PathBuf> = None;
+
+    if let Some(pos) = args.iter().position(|a| a == "--wt") {
+        let branch = args.get(pos + 1).unwrap_or_else(|| {
+            eprintln!("Usage: nerv --wt <branch-name>");
+            std::process::exit(1);
+        });
+        let repo_root = nerv::find_repo_root(&cwd).unwrap_or_else(|| {
+            eprintln!("--wt requires a git repository");
+            std::process::exit(1);
+        });
+        let prefix = &nerv::session::types::gen_session_id()[..8];
+        match nerv::worktree::create_worktree(&repo_root, &nerv_dir, branch, prefix) {
+            Ok(wt) => {
+                cwd = wt.clone();
+                worktree_path = Some(wt);
+            }
+            Err(e) => {
+                eprintln!("Failed to create worktree: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     let b = nerv::bootstrap::bootstrap(
         &cwd,
@@ -193,7 +217,10 @@ fn main() {
         nerv::compaction::count_tokens(&tool_text)
     };
 
-    let session = b.session;
+    let mut session = b.session;
+    if let Some(ref wt) = worktree_path {
+        session.set_worktree(wt.clone());
+    }
 
     // Channels (crossbeam)
     let (cmd_tx, cmd_rx) = crossbeam_channel::bounded::<SessionCommand>(32);

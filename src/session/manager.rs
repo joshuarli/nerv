@@ -52,6 +52,9 @@ impl SessionManager {
         db.execute("CREATE INDEX IF NOT EXISTS idx_entries_session ON entries(session_id, seq)")
             .ok();
 
+        // Migration: add worktree column
+        db.execute("ALTER TABLE sessions ADD COLUMN worktree TEXT").ok();
+
         db.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
                 text,
@@ -75,18 +78,22 @@ impl SessionManager {
         }
     }
 
-    pub fn new_session(&mut self, cwd: &Path) -> anyhow::Result<()> {
+    pub fn new_session(&mut self, cwd: &Path, worktree: Option<&Path>) -> anyhow::Result<()> {
         let id = gen_session_id();
         let now = now_iso();
         let cwd_str = cwd.to_string_lossy().to_string();
 
         let mut stmt = self.db.prepare(
-            "INSERT INTO sessions (id, cwd, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO sessions (id, cwd, created_at, updated_at, worktree) VALUES (?, ?, ?, ?, ?)",
         )?;
         stmt.bind((1, id.as_str()))?;
         stmt.bind((2, cwd_str.as_str()))?;
         stmt.bind((3, now.as_str()))?;
         stmt.bind((4, now.as_str()))?;
+        match worktree {
+            Some(wt) => stmt.bind((5, wt.to_string_lossy().as_ref()))?,
+            None => stmt.bind((5, sqlite::Value::Null))?,
+        };
         stmt.next()?;
 
         self.session_id = Some(id);
@@ -477,6 +484,39 @@ impl SessionManager {
 
     pub fn session_id(&self) -> &str {
         self.session_id.as_deref().unwrap_or("")
+    }
+
+    /// Clear the worktree association for the current session.
+    pub fn clear_worktree(&self) {
+        if let Some(ref sid) = self.session_id {
+            if let Ok(mut stmt) = self
+                .db
+                .prepare("UPDATE sessions SET worktree = NULL WHERE id = ?")
+            {
+                stmt.bind((1, sid.as_str())).ok();
+                stmt.next().ok();
+            }
+        }
+    }
+
+    /// Get the worktree path for the current session, if any.
+    pub fn session_worktree(&self) -> Option<std::path::PathBuf> {
+        let sid = self.session_id.as_ref()?;
+        let mut stmt = self
+            .db
+            .prepare("SELECT worktree FROM sessions WHERE id = ?")
+            .ok()?;
+        stmt.bind((1, sid.as_str())).ok()?;
+        if stmt.next().ok()? == sqlite::State::Row {
+            let wt: String = stmt.read("worktree").ok()?;
+            if wt.is_empty() {
+                None
+            } else {
+                Some(std::path::PathBuf::from(wt))
+            }
+        } else {
+            None
+        }
     }
 
     pub fn entry_count(&self) -> usize {

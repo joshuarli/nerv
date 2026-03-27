@@ -10,6 +10,7 @@ pub mod log;
 pub mod session;
 pub mod tools;
 pub mod tui;
+pub mod worktree;
 
 /// Get the user's home directory from $HOME.
 pub fn home_dir() -> Option<std::path::PathBuf> {

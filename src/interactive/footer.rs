@@ -54,6 +54,31 @@ impl FooterComponent {
         }
     }
 
+    pub fn set_cwd(&mut self, cwd: &str) {
+        let home = crate::home_dir().map(|h| h.to_string_lossy().to_string());
+        self.cwd = if let Some(ref h) = home {
+            if cwd.starts_with(h.as_str()) {
+                format!("~{}", &cwd[h.len()..])
+            } else {
+                cwd.to_string()
+            }
+        } else {
+            cwd.to_string()
+        };
+        self.git_branch = std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(cwd)
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            });
+    }
+
     pub fn set_model(&mut self, model: &Model) {
         self.model_id = model.id.clone();
         self.provider_name = model.provider_name.clone();

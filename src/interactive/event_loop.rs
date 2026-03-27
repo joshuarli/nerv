@@ -142,6 +142,18 @@ impl InteractiveMode {
                 self.pending_permission = Some(response_tx);
                 self.pending_permission_details = Some((tool.clone(), args.clone()));
             }
+            AgentSessionEvent::WorktreeCreated { path } => {
+                layout.footer.set_cwd(&path.to_string_lossy());
+                self.status_message =
+                    Some(format!("Worktree created: {}", path.display()));
+            }
+            AgentSessionEvent::WorktreeMerged {
+                original_path,
+                message,
+            } => {
+                layout.footer.set_cwd(&original_path.to_string_lossy());
+                self.status_message = Some(message);
+            }
             AgentSessionEvent::SessionStarted { id } => {
                 self.session_id = Some(id);
             }
@@ -565,6 +577,23 @@ impl InteractiveMode {
                     });
                 }
             }
+            "/wt" => {
+                if args == "merge" {
+                    let _ = self.cmd_tx.send(SessionCommand::MergeWorktree);
+                } else if args.is_empty() {
+                    self.status_message = Some("Usage: /wt <branch-name> | /wt merge".into());
+                } else if self.session_id.is_some() {
+                    self.status_message =
+                        Some("/wt only works before the first prompt. Start a /new session first.".into());
+                    self.status_is_error = true;
+                } else {
+                    let nerv_dir = crate::home_dir().unwrap_or_default().join(".nerv");
+                    let _ = self.cmd_tx.send(SessionCommand::CreateWorktree {
+                        branch_name: args.to_string(),
+                        nerv_dir,
+                    });
+                }
+            }
             "/tree" => {
                 if self.session_id.is_none() {
                     self.status_message = Some("No active session.".into());
@@ -623,6 +652,8 @@ impl InteractiveMode {
                      /copy           — copy last response to clipboard\n\
                      /resume [id]    — list/load sessions\n\
                      /tree           — browse/switch session branches\n\
+                     /wt <branch>    — create git worktree for session\n\
+                     /wt merge       — merge worktree back and clean up\n\
                      /new            — start new session\n\
                      /quit           — quit nerv\n\
                      /help           — this message",
@@ -707,6 +738,7 @@ impl InteractiveMode {
             "/export".into(),
             "/resume".into(),
             "/tree".into(),
+            "/wt".into(),
             "/login".into(),
             "/logout".into(),
             "/new".into(),

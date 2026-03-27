@@ -1,0 +1,157 @@
+use std::path::{Path, PathBuf};
+
+/// Create a git worktree with a new branch.
+///
+/// Branch name: `nerv/<session_prefix>/<slug>`
+/// Worktree dir: `<nerv_dir>/worktrees/<repo>-<session_prefix>-<slug>`
+pub fn create_worktree(
+    repo_root: &Path,
+    nerv_dir: &Path,
+    branch_name: &str,
+    session_prefix: &str,
+) -> anyhow::Result<PathBuf> {
+    let slug = slugify(branch_name);
+    if slug.is_empty() {
+        anyhow::bail!("branch name is empty after sanitization");
+    }
+
+    let repo_name = repo_root
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "repo".into());
+
+    let dir_name = format!("{}-{}-{}", slugify(&repo_name), session_prefix, slug);
+    let wt_path = nerv_dir.join("worktrees").join(&dir_name);
+    let git_branch = format!("nerv/{}/{}", session_prefix, slug);
+
+    std::fs::create_dir_all(nerv_dir.join("worktrees"))?;
+
+    let output = std::process::Command::new("git")
+        .args([
+            "worktree",
+            "add",
+            &wt_path.to_string_lossy(),
+            "-b",
+            &git_branch,
+        ])
+        .current_dir(repo_root)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git worktree add failed: {}", stderr.trim());
+    }
+
+    Ok(wt_path)
+}
+
+/// Merge worktree branch into its upstream, then remove the worktree and branch.
+///
+/// Returns the path to the main worktree (original repo) on success.
+pub fn merge_worktree(wt_path: &Path) -> anyhow::Result<PathBuf> {
+    // Get current branch in the worktree
+    let branch = git_output(wt_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if branch == "HEAD" {
+        anyhow::bail!("worktree is in detached HEAD state");
+    }
+
+    // Get upstream (parent) branch
+    let upstream = git_output(
+        wt_path,
+        &[
+            "for-each-ref",
+            "--format=%(upstream:short)",
+            &format!("refs/heads/{}", branch),
+        ],
+    )?;
+    if upstream.is_empty() {
+        anyhow::bail!(
+            "branch '{}' has no upstream — cannot determine merge target",
+            branch
+        );
+    }
+
+    // Find the main worktree (first entry in `git worktree list --porcelain`)
+    let list_output = git_output(wt_path, &["worktree", "list", "--porcelain"])?;
+    let main_wt = list_output
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("could not determine main worktree"))?;
+
+    // Check for uncommitted changes in the worktree
+    let status = git_output(wt_path, &["status", "--porcelain"])?;
+    if !status.is_empty() {
+        anyhow::bail!("worktree has uncommitted changes — commit or stash first");
+    }
+
+    // Merge from the main worktree
+    let merge_out = std::process::Command::new("git")
+        .args(["merge", &branch])
+        .current_dir(&main_wt)
+        .output()?;
+    if !merge_out.status.success() {
+        let stderr = String::from_utf8_lossy(&merge_out.stderr);
+        anyhow::bail!("merge failed: {}", stderr.trim());
+    }
+
+    // Remove the worktree
+    let rm_out = std::process::Command::new("git")
+        .args(["worktree", "remove", &wt_path.to_string_lossy()])
+        .current_dir(&main_wt)
+        .output()?;
+    if !rm_out.status.success() {
+        let stderr = String::from_utf8_lossy(&rm_out.stderr);
+        anyhow::bail!("worktree remove failed: {}", stderr.trim());
+    }
+
+    // Delete the branch
+    let del_out = std::process::Command::new("git")
+        .args(["branch", "-d", &branch])
+        .current_dir(&main_wt)
+        .output()?;
+    if !del_out.status.success() {
+        // Non-fatal — branch might have already been cleaned up
+        let stderr = String::from_utf8_lossy(&del_out.stderr);
+        crate::log::warn(&format!("branch delete warning: {}", stderr.trim()));
+    }
+
+    Ok(main_wt)
+}
+
+fn git_output(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git {} failed: {}", args[0], stderr.trim());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Sanitize a string into a URL/path-safe slug.
+fn slugify(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_slugify() {
+        assert_eq!(slugify("feat/foo-bar"), "feat-foo-bar");
+        assert_eq!(slugify("My Feature!!!"), "my-feature");
+        assert_eq!(slugify("--a--b--"), "a-b");
+        assert_eq!(slugify("UPPER_CASE"), "upper-case");
+    }
+}
