@@ -35,7 +35,7 @@ than code optimizations:
 | "Read files directly, don't find/ls first" | -2 turns per task |
 | "Use python3 not python" | -1 wasted turn per Python task |
 | "All tools run from project root, never cd" | -50 tokens per bash call |
-| "Use the read tool's offset/limit, not bash+sed" | -1 subprocess per read |
+| "Read tool returns full file; use sed for ranges" | eliminated chunked-read storm |
 
 Per-model prompts matter. Haiku ignores nuanced guidelines but follows
 numbered rules. Sonnet follows nuance. `~/.nerv/prompts/{model_id}.md`
@@ -101,3 +101,61 @@ work of diagnosis, not the hint.
 Efficiency goals (max_edit_calls, max_turns, min_multi_edits) per task
 let you compare models on *how* they solve, not just *if* they solve.
 Sonnet hit 6/6 goals. Haiku passed all tasks but missed turns/edit goals.
+
+## The read tool simplification (a war story)
+
+The read tool originally had `offset` and `limit` parameters so the model
+could request specific line ranges. This caused a cascade of problems that
+took multiple rounds of optimization to diagnose — and the fix was to delete
+the feature entirely.
+
+**The problem.** Sonnet developed a habit of reading files in 120-line chunks.
+A 1180-line file became 10 sequential reads, each a separate API call. Each
+call resent the growing conversation (~20k+ tokens). A single file read that
+should have cost one API call cost ten, ballooning total input tokens from
+~20k to ~200k. Session 99f63ffb showed 55 API calls and $3.67 for what
+should have been a $0.30 task.
+
+**The optimization spiral.** We tried to fix this with increasingly complex
+heuristics:
+1. *Auto-size* (300-line threshold): return the full file if it's small
+   enough, ignoring the model's limit. But 300 was too low for most source
+   files, so we raised it to 2000.
+2. *Auto-size with offset override*: ignore offset too for files under the
+   threshold. But this broke targeted reads — the model asked for 68 lines
+   and got 1200.
+3. *Mtime cache with auto-size interaction*: cache hits needed to work for
+   offset reads of auto-sized files. Edge cases multiplied.
+4. *System prompt guidance*: "Read whole files by default, don't pass
+   offset or limit unless the file is 2000+ lines." The model still passed
+   `limit=120` out of habit.
+
+Each fix introduced new edge cases. Auto-size at 2000 lines meant a
+targeted `sed -n '828,895p'` through bash was more efficient than using
+the read tool — the tool would return 1200 lines when the model wanted 68.
+We were about to add bash command rejection (detect sed/cat and force the
+model through the read tool) when we realized that would cause *worse*
+context bloat.
+
+**The insight.** The offset/limit API was solving a problem that bash
+already solves elegantly. `sed -n '100,200p' file` is natural, precise,
+and self-documenting. The model already knows sed. There's nothing to
+learn, no threshold to tune, no interaction bugs.
+
+The read tool's actual value was never line-range selection — it was the
+mtime cache (`[unchanged since last read]` saves 10k+ tokens on redundant
+re-reads) and consistent line-number formatting. Those features don't need
+offset or limit.
+
+**The fix.** Remove offset and limit entirely. The read tool does one thing:
+return the entire file with line numbers, cached by mtime. For specific
+ranges, the model uses bash + sed. The tool went from 421 lines to 215.
+The system prompt went from a paragraph of read-tool guidance to one line:
+"The read tool returns the entire file. For specific line ranges, use
+bash: `sed -n '100,200p' file`."
+
+**The lesson.** When you're building heuristics to compensate for an API
+the model doesn't want to use correctly, consider whether the API is wrong.
+The model's preference for bash wasn't a compliance problem to fix with
+prompt engineering — it was signal that the tool's abstraction didn't match
+how the model thinks about file reading.
