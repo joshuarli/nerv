@@ -305,7 +305,8 @@ def main():
     # Create report directory
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     model_tag = model or "default"
-    report_dir = REPORT_DIR / f"{timestamp}_{model_tag}"
+    task_tag = task_dirs[0].name if len(task_dirs) == 1 else f"{len(task_dirs)}-tasks"
+    report_dir = REPORT_DIR / f"{timestamp}_{model_tag}_{task_tag}"
     report_dir.mkdir(parents=True, exist_ok=True)
 
     results: list[EvalResult] = []
