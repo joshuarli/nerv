@@ -163,6 +163,389 @@ fn edit_tool_preserves_crlf_line_endings() {
     assert!(String::from_utf8_lossy(&content).contains("replaced"));
 }
 
+// ── Multi-edit tests ──
+
+#[test]
+fn edit_multi_basic() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.rs");
+    std::fs::write(&file, "fn alpha() {}\nfn beta() {}\nfn gamma() {}\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.rs",
+            "edits": [
+                {"old_text": "fn alpha()", "new_text": "fn one()"},
+                {"old_text": "fn beta()", "new_text": "fn two()"},
+                {"old_text": "fn gamma()", "new_text": "fn three()"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "multi-edit failed: {}", result.content);
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert!(content.contains("fn one()"));
+    assert!(content.contains("fn two()"));
+    assert!(content.contains("fn three()"));
+    assert!(!content.contains("fn alpha()"));
+}
+
+#[test]
+fn edit_multi_out_of_order() {
+    // Edits listed in reverse file order — should still work
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "aaa\nbbb\nccc\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "ccc", "new_text": "CCC"},
+                {"old_text": "aaa", "new_text": "AAA"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "failed: {}", result.content);
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(content, "AAA\nbbb\nCCC\n");
+}
+
+#[test]
+fn edit_multi_overlap_rejected() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "abcdef\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "abcd", "new_text": "ABCD"},
+                {"old_text": "cdef", "new_text": "CDEF"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(result.is_error);
+    assert!(result.content.contains("overlap"), "expected overlap error: {}", result.content);
+    // File should be unchanged
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(content, "abcdef\n");
+}
+
+#[test]
+fn edit_multi_not_found() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "hello world\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "hello", "new_text": "hi"},
+                {"old_text": "does not exist", "new_text": "x"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(result.is_error);
+    assert!(result.content.contains("not found"), "{}", result.content);
+    // File should be unchanged — preflight catches it
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(content, "hello world\n");
+}
+
+#[test]
+fn edit_multi_preserves_crlf() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "aaa\r\nbbb\r\nccc\r\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "aaa", "new_text": "AAA"},
+                {"old_text": "ccc", "new_text": "CCC"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "failed: {}", result.content);
+    let bytes = std::fs::read(&file).unwrap();
+    let content = String::from_utf8_lossy(&bytes);
+    assert!(content.contains("AAA\r\n"));
+    assert!(content.contains("CCC\r\n"));
+}
+
+#[test]
+fn edit_multi_returns_diff() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "foo\nbar\nbaz\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "foo", "new_text": "FOO"},
+                {"old_text": "baz", "new_text": "BAZ"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error);
+    assert!(result.content.contains("-foo"), "diff missing -foo: {}", result.content);
+    assert!(result.content.contains("+FOO"), "diff missing +FOO: {}", result.content);
+    assert!(result.content.contains("-baz"), "diff missing -baz: {}", result.content);
+    assert!(result.content.contains("+BAZ"), "diff missing +BAZ: {}", result.content);
+    assert!(result.content.contains("Applied 2 edits"));
+}
+
+#[test]
+fn edit_multi_single_edit_in_array() {
+    // Single edit via the edits array should work identically to old_text/new_text
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "hello world\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "hello", "new_text": "goodbye"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "failed: {}", result.content);
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(content, "goodbye world\n");
+}
+
+#[test]
+fn edit_multi_adjacent_edits() {
+    // Edits on consecutive lines, no overlap
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "line1\nline2\nline3\nline4\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "line1\n", "new_text": "LINE1\n"},
+                {"old_text": "line2\n", "new_text": "LINE2\n"},
+                {"old_text": "line4\n", "new_text": "LINE4\n"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "failed: {}", result.content);
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(content, "LINE1\nLINE2\nline3\nLINE4\n");
+}
+
+#[test]
+fn edit_multi_multiline_replacements() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.rs");
+    std::fs::write(
+        &file,
+        "fn foo() {\n    old_body_1();\n}\n\nfn bar() {\n    old_body_2();\n}\n",
+    )
+    .unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.rs",
+            "edits": [
+                {"old_text": "    old_body_1();", "new_text": "    new_body_1();\n    extra_line();"},
+                {"old_text": "    old_body_2();", "new_text": "    new_body_2();"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "failed: {}", result.content);
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert!(content.contains("new_body_1();\n    extra_line();"));
+    assert!(content.contains("new_body_2();"));
+}
+
+#[test]
+fn edit_validates_both_modes_rejected() {
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(PathBuf::from("/tmp"), mq);
+    let result = tool.validate(&serde_json::json!({
+        "path": "test.txt",
+        "old_text": "a",
+        "new_text": "b",
+        "edits": [{"old_text": "c", "new_text": "d"}]
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn edit_validates_empty_edits_rejected() {
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(PathBuf::from("/tmp"), mq);
+    let result = tool.validate(&serde_json::json!({
+        "path": "test.txt",
+        "edits": []
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn edit_validates_missing_new_text_in_edits() {
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(PathBuf::from("/tmp"), mq);
+    let result = tool.validate(&serde_json::json!({
+        "path": "test.txt",
+        "edits": [{"old_text": "a"}]
+    }));
+    assert!(result.is_err());
+}
+
+// ── Single-edit additional coverage ──
+
+#[test]
+fn edit_single_fuzzy_match_smart_quotes() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "say \u{201C}hello\u{201D}\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "old_text": "say \"hello\"",
+            "new_text": "say \"world\""
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "fuzzy match failed: {}", result.content);
+    assert!(result.content.contains("fuzzy"));
+}
+
+#[test]
+fn edit_single_nonexistent_file() {
+    let tmp = TempDir::new().unwrap();
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "nonexistent.txt",
+            "old_text": "a",
+            "new_text": "b"
+        }),
+        noop_update(),
+    );
+    assert!(result.is_error);
+    assert!(result.content.contains("Error reading"));
+}
+
+#[test]
+fn edit_single_empty_replacement() {
+    // Deletion: replace text with empty string
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "keep\ndelete_me\nkeep\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "old_text": "delete_me\n",
+            "new_text": ""
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "failed: {}", result.content);
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(content, "keep\nkeep\n");
+}
+
+#[test]
+fn edit_single_absolute_path() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "old\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": file.to_str().unwrap(),
+            "old_text": "old",
+            "new_text": "new"
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "failed: {}", result.content);
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(content, "new\n");
+}
+
+#[test]
+fn edit_multi_deletion_and_insertion() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "aaa\nbbb\nccc\nddd\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "bbb\n", "new_text": ""},
+                {"old_text": "ddd", "new_text": "DDD\neee"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "failed: {}", result.content);
+    let content = std::fs::read_to_string(&file).unwrap();
+    assert_eq!(content, "aaa\nccc\nDDD\neee\n");
+}
+
 #[test]
 fn bash_tool_runs_command() {
     let tmp = TempDir::new().unwrap();
