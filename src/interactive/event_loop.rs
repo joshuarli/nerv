@@ -41,8 +41,6 @@ pub struct InteractiveMode {
     pub pending_permission: Option<crossbeam_channel::Sender<bool>>,
     /// Current permission request details (tool, args) to record if accepted
     pub pending_permission_details: Option<(String, serde_json::Value)>,
-    /// Input tokens from previous turn (for calculating accurate deltas).
-    previous_input_tokens: u32,
 }
 
 impl InteractiveMode {
@@ -75,7 +73,6 @@ impl InteractiveMode {
             history_saved_text: String::new(),
             pending_permission: None,
             pending_permission_details: None,
-            previous_input_tokens: 0,
         }
     }
 
@@ -329,20 +326,8 @@ impl InteractiveMode {
                 }
             }
             AgentEvent::UsageUpdate { usage } => {
-                // For hosted models, calculate the actual delta.
-                // usage.input is the total context sent to the API for this turn,
-                // but we need to show how much *new* tokens were added.
-                // This is only accurate for hosted models (Anthropic, OpenAI);
-                // local models typically don't report reliable usage.
-                let input_delta = if usage.input >= self.previous_input_tokens {
-                    usage.input - self.previous_input_tokens
-                } else {
-                    // Fallback: context window was compacted, show the full amount
-                    usage.input
-                };
-                layout.statusbar.set_input_tokens(input_delta);
+                layout.statusbar.set_input_tokens(usage.input);
                 layout.footer.set_context_used(usage.input);
-                self.previous_input_tokens = usage.input;
             }
             AgentEvent::MessageUpdate { delta } => {
                 match delta {
