@@ -916,6 +916,8 @@ fn print_mode(args: &[String]) {
         tokens_cache_read: u32,
         cost: nerv::agent::types::Cost,
         current_tool: Option<(String, std::time::Instant)>,
+        last_usage: Option<nerv::agent::types::Usage>,
+        usages: Vec<nerv::agent::types::Usage>,
     }
 
     let metrics = RefCell::new(Metrics {
@@ -926,6 +928,8 @@ fn print_mode(args: &[String]) {
         tokens_cache_read: 0,
         cost: nerv::agent::types::Cost::default(),
         current_tool: None,
+        last_usage: None,
+        usages: Vec::new(),
     });
 
     let model_ref = model.clone();
@@ -973,6 +977,8 @@ fn print_mode(args: &[String]) {
                     if let Some(ref model) = model_ref {
                         m.cost.add_usage(usage, &model.pricing);
                     }
+                    m.last_usage = Some(usage.clone());
+                    m.usages.push(usage.clone());
                 }
             }
             _ => {}
@@ -997,6 +1003,7 @@ fn print_mode(args: &[String]) {
         .unwrap_or_default();
 
     // Build message trace for debugging
+    let mut usage_idx = 0;
     let trace: Vec<serde_json::Value> = new_messages
         .iter()
         .filter_map(|msg| match msg {
@@ -1031,6 +1038,14 @@ fn print_mode(args: &[String]) {
                     entry["tool_calls"] = serde_json::Value::Array(tools);
                 }
                 entry["stop_reason"] = serde_json::Value::String(format!("{:?}", a.stop_reason));
+                if let Some(usage) = m.usages.get(usage_idx) {
+                    entry["usage"] = serde_json::json!({
+                        "input": usage.input,
+                        "output": usage.output,
+                        "cache_read": usage.cache_read,
+                    });
+                    usage_idx += 1;
+                }
                 Some(entry)
             }
             nerv::agent::types::AgentMessage::ToolResult {
