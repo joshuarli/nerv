@@ -54,6 +54,7 @@ impl AgentTool for GrepTool {
         cmd.arg("--no-heading")
             .arg("--line-number")
             .arg("--color=never")
+            .arg("--context=3")
             .arg(pattern)
             .arg(&resolved_path)
             .current_dir(&self.cwd);

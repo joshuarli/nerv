@@ -192,10 +192,29 @@ fn merge_into(existing: &mut LlmMessage, new: LlmMessage) {
 /// 2. Strip thinking blocks (never referenced by the model)
 /// 3. Strip args from denied tool calls (is_error + "denied")
 /// 4. Truncate stale tool results to save tokens
+/// 5. Replace superseded read results (same file read again later)
 const RECENT_TURNS: usize = 10;
 const TRUNCATED_MAX_CHARS: usize = 200;
 
 pub fn transform_context(messages: Vec<AgentMessage>, _context_window: u32) -> Vec<AgentMessage> {
+    // Pass 0: find superseded reads — walk backwards, track latest read per path.
+    // Earlier reads of the same file are replaced with a short marker.
+    let superseded_ids = find_superseded_reads(&messages);
+
+    // Pass 0b: map tool_call_id → tool name for bash success detection
+    let tool_names: std::collections::HashMap<String, String> = messages
+        .iter()
+        .filter_map(|m| match m {
+            AgentMessage::Assistant(a) => Some(a),
+            _ => None,
+        })
+        .flat_map(|a| &a.content)
+        .filter_map(|b| match b {
+            ContentBlock::ToolCall { id, name, .. } => Some((id.clone(), name.clone())),
+            _ => None,
+        })
+        .collect();
+
     // Pass 1: collect tool_call_ids that have a ToolResult
     let answered_ids: std::collections::HashSet<String> = messages
         .iter()
@@ -273,6 +292,52 @@ pub fn transform_context(messages: Vec<AgentMessage>, _context_window: u32) -> V
             }
             AgentMessage::ToolResult {
                 tool_call_id,
+                content: _,
+                is_error,
+                timestamp,
+            } if superseded_ids.contains(&tool_call_id) => {
+                Some(AgentMessage::ToolResult {
+                    tool_call_id,
+                    content: vec![ContentItem::Text {
+                        text: "[superseded by later read]".into(),
+                    }],
+                    is_error,
+                    timestamp,
+                })
+            }
+            AgentMessage::ToolResult {
+                tool_call_id,
+                content,
+                is_error: false,
+                timestamp,
+            } if tool_names.get(&tool_call_id).map(|n| n.as_str()) == Some("bash") => {
+                let text = content_text(&content);
+                if let Some(compressed) = compress_bash_success(&text) {
+                    Some(AgentMessage::ToolResult {
+                        tool_call_id,
+                        content: vec![ContentItem::Text { text: compressed }],
+                        is_error: false,
+                        timestamp,
+                    })
+                } else if i < cutoff {
+                    let summary = summarize_tool_content(&content);
+                    Some(AgentMessage::ToolResult {
+                        tool_call_id,
+                        content: vec![ContentItem::Text { text: summary }],
+                        is_error: false,
+                        timestamp,
+                    })
+                } else {
+                    Some(AgentMessage::ToolResult {
+                        tool_call_id,
+                        content,
+                        is_error: false,
+                        timestamp,
+                    })
+                }
+            }
+            AgentMessage::ToolResult {
+                tool_call_id,
                 content,
                 is_error,
                 timestamp,
@@ -319,6 +384,91 @@ fn summarize_tool_content(content: &[ContentItem]) -> String {
         "{}\n[truncated: {} lines, {} chars]",
         preview, line_count, char_count
     )
+}
+
+fn content_text(content: &[ContentItem]) -> String {
+    content
+        .iter()
+        .filter_map(|c| match c {
+            ContentItem::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// Detect bash success patterns and return a one-line summary.
+/// Returns None if the output doesn't match a known success pattern.
+fn compress_bash_success(text: &str) -> Option<String> {
+    // cargo check / cargo build with no errors
+    if (text.contains("Compiling") || text.contains("Checking") || text.contains("Finished"))
+        && !text.contains("error[")
+        && !text.contains("error:")
+    {
+        if text.contains("Finished") {
+            // Extract the "Finished" line
+            if let Some(line) = text.lines().rfind(|l| l.contains("Finished")) {
+                return Some(line.trim().to_string());
+            }
+        }
+    }
+
+    // cargo test with all passing
+    if let Some(line) = text.lines().rfind(|l| l.starts_with("test result:")) {
+        if line.contains("0 failed") {
+            return Some(line.trim().to_string());
+        }
+    }
+
+    None
+}
+
+/// Walk backwards through messages. For each "read" tool call, track the path.
+/// If an earlier read targeted the same path, mark its tool_call_id as superseded.
+/// Only supersede successful reads (not errors) — the model may need error context.
+fn find_superseded_reads(messages: &[AgentMessage]) -> std::collections::HashSet<String> {
+    let mut latest_read_path: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut superseded = std::collections::HashSet::new();
+
+    // Walk backwards: the first read we see for a path is the latest
+    for msg in messages.iter().rev() {
+        if let AgentMessage::Assistant(a) = msg {
+            for block in &a.content {
+                if let ContentBlock::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                } = block
+                {
+                    if name == "read" {
+                        if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+                            if let Some(_latest_id) = latest_read_path.get(path) {
+                                // This is an earlier read of the same path — supersede it
+                                superseded.insert(id.clone());
+                            } else {
+                                latest_read_path.insert(path.to_string(), id.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Don't supersede reads whose results were errors (model may need to see the error)
+    for msg in messages {
+        if let AgentMessage::ToolResult {
+            tool_call_id,
+            is_error: true,
+            ..
+        } = msg
+        {
+            superseded.remove(tool_call_id);
+        }
+    }
+
+    superseded
 }
 
 #[cfg(test)]
@@ -1037,5 +1187,70 @@ mod tests {
             recent_result, 1000,
             "recent result should be preserved in full"
         );
+    }
+
+    #[test]
+    fn superseded_reads_replaced() {
+        let msgs = vec![
+            user("refactor the module"),
+            // First read of main.rs
+            assistant_tool_call("r1", "read", serde_json::json!({"path": "src/main.rs"})),
+            tool_result("r1", &"fn main() {}\n".repeat(100)),
+            // Edit
+            assistant_tool_call("e1", "edit", serde_json::json!({"path": "src/main.rs", "old_text": "a", "new_text": "b"})),
+            tool_result("e1", "Applied edit"),
+            // Second read of same file (supersedes first)
+            assistant_tool_call("r2", "read", serde_json::json!({"path": "src/main.rs"})),
+            tool_result("r2", &"fn main() { updated }\n".repeat(100)),
+            assistant_text("Done."),
+        ];
+
+        let result = transform_context(msgs, 200_000);
+
+        // First read result should be superseded
+        let first_read = match &result[2] {
+            AgentMessage::ToolResult { content, .. } => content_text(content),
+            _ => panic!("expected tool result"),
+        };
+        assert!(
+            first_read.contains("superseded"),
+            "first read should be superseded: {}",
+            first_read
+        );
+
+        // Second read should be preserved
+        let second_read = match &result[6] {
+            AgentMessage::ToolResult { content, .. } => content_text(content),
+            _ => panic!("expected tool result"),
+        };
+        assert!(
+            second_read.contains("updated"),
+            "second read should be preserved"
+        );
+    }
+
+    #[test]
+    fn bash_success_compressed() {
+        let cargo_check_output = "\
+   Compiling nerv v0.1.0 (/tmp/nerv)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.2s";
+
+        let cargo_test_output = "\
+running 25 tests
+.........................
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s";
+
+        assert_eq!(
+            compress_bash_success(cargo_check_output),
+            Some("Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.2s".into())
+        );
+        assert_eq!(
+            compress_bash_success(cargo_test_output),
+            Some("test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s".into())
+        );
+
+        // Error output should NOT be compressed
+        let error_output = "error[E0308]: mismatched types";
+        assert_eq!(compress_bash_success(error_output), None);
     }
 }

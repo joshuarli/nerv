@@ -53,6 +53,25 @@ Recent results are preserved in full because the model may reference them.
 
 **Savings**: varies, but large file reads (2k+ chars) become ~200 chars.
 
+### 5. Superseded read deduplication
+
+When the model reads the same file multiple times (common in edit-verify cycles),
+earlier reads are replaced with `[superseded by later read]`. Walk backwards
+through messages tracking `(tool="read", path)` pairs; earlier reads of the same
+path are marked as superseded. Error reads are preserved.
+
+**Savings**: 200-2k+ tokens per redundant read. In a typical mass-edit session
+with 8 redundant reads, saves ~4-8k tokens.
+
+### 6. Bash success pattern compression
+
+Successful bash tool results matching known patterns are compressed to a
+single summary line regardless of age:
+- `cargo check` with no errors → the `Finished ...` line only
+- `cargo test` with 0 failures → the `test result: ok. ...` line only
+
+**Savings**: 100-2k tokens per successful build/test output.
+
 ## Compaction (`src/compaction/`)
 
 Separate from `transform_context`. Compaction summarizes and removes old

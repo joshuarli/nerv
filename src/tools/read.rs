@@ -43,12 +43,19 @@ impl AgentTool for ReadTool {
     fn execute(&self, input: serde_json::Value, _update: UpdateCallback) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");
         let offset = input["offset"].as_u64().unwrap_or(0) as usize;
-        let limit = input["limit"].as_u64().unwrap_or(DEFAULT_MAX_LINES as u64) as usize;
+        let explicit_limit = input.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize);
         let abs_path = self.resolve_path(path_str);
         match std::fs::read(&abs_path) {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
                 let line_count = text.lines().count();
+                // For small files (< 300 lines), return the whole file even if
+                // the model requested a smaller limit. Prevents multi-chunk reads.
+                let limit = if line_count <= 300 && offset == 0 {
+                    line_count
+                } else {
+                    explicit_limit.unwrap_or(DEFAULT_MAX_LINES)
+                };
                 let start = offset.min(line_count);
                 let end = (start + limit).min(line_count);
                 let n = end - start;

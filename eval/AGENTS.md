@@ -114,6 +114,22 @@ to discover the rules, then implement them. This requires genuine reasoning
 about input-output examples, not code comprehension. The first model to
 consistently pass this without the on_fail hint is genuinely capable.
 
+### mass-rename (Context Efficiency)
+
+Rename `fetch_data` → `retrieve_data` (and 6 derived names) across **8 Python
+files** with 7 function definitions and ~25 call sites. 19 tests verify the rename.
+
+**What this tests**: Context efficiency under mass edits. The ideal approach:
+grep for all occurrences → read all 8 files → rename in each with multi-edit →
+run tests once (~12 turns). The inefficient approach interleaves read-edit-check
+per file, re-reads files already seen, and runs `python3 test_project.py` after
+every edit (~25+ turns). This task directly measures the impact of:
+- Superseded read deduplication (re-reading a file you already read)
+- Grep context lines (reducing follow-up reads)
+- Bash success pattern compression (repeated test runs)
+- Small file auto-sizing (all files are < 50 lines)
+- System prompt batch guidance (read all first, then edit)
+
 ## Task structure
 
 ```

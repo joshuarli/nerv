@@ -30,19 +30,15 @@ Done:
 - [x] ANSI-safe prefix splitting
 - [x] Event-per-render (no batching, ChatWriter makes it cheap)
 
-Planned:
-- [ ] Deduplicate reads — keep only latest result per file
-- [ ] Collapse edit cycles — read+edit+verify → outcome summary
-- [ ] Active file tracking — truncate non-recent file results
-- [ ] Semantic compression — tool chains → natural language outcome
-- [ ] Tool result caching — skip re-execution if file unchanged
-
-## Agentic Session Observability
-
-- [ ] Read tool: include context lines in grep output to reduce follow-up reads
-- [ ] Batch edit heuristic: when grep shows many call sites, read all files upfront before editing
-- [ ] Read tool: raise default limit for small files to avoid multi-chunk reading
-- [ ] Deduplicate reads — track which files/ranges already read, skip re-reads of same content
+Planned (implementation order):
+- [ ] 1. Superseded read dedup — replace earlier read results when same file read again
+- [ ] 2. Grep context lines — add -C3 to rg so model doesn't need follow-up reads
+- [ ] 3. Success-pattern bash truncation — cargo check ok → 1 line, cargo test summary only
+- [ ] 4. Read auto-size — return whole file if < 300 lines, skip chunked reading
+- [ ] 5. Collapse edit cycles — read+edit+verify(ok) → single outcome summary
+- [ ] 6. System prompt batch guidance — "read all files first, then edit, then verify"
+- [ ] 7. Tool result caching — skip re-read if file mtime unchanged since last read
+- [ ] 8. Context budget injection — show cost/calls in context so model can self-regulate
 
 ## Shell Hooks
 
