@@ -576,18 +576,12 @@ impl InteractiveMode {
                 ));
             }
             "/export" | "/share" => {
-                if args.is_empty() {
-                    self.status_message =
-                        Some("Usage: /export path.jsonl or /export path.html".into());
+                if args == "jsonl" {
+                    let _ = self.cmd_tx.send(SessionCommand::ExportJsonl);
+                    self.status_message = Some("Exporting JSONL...".into());
                 } else {
-                    let path = std::path::PathBuf::from(args);
-                    if args.ends_with(".html") {
-                        let _ = self.cmd_tx.send(SessionCommand::ExportHtml { path });
-                        self.status_message = Some(format!("Exporting HTML to {}...", args));
-                    } else {
-                        let _ = self.cmd_tx.send(SessionCommand::ExportJsonl { path });
-                        self.status_message = Some(format!("Exporting JSONL to {}...", args));
-                    }
+                    let _ = self.cmd_tx.send(SessionCommand::ExportHtml);
+                    self.status_message = Some("Exporting HTML...".into());
                 }
             }
             "/resume" => {
@@ -668,7 +662,7 @@ impl InteractiveMode {
                      /logout [provider] — remove stored credentials\n\
                      /compact        — compact context\n\
                      /session        — show session info\n\
-                     /export <path>  — export to .jsonl or .html\n\
+                     /export [jsonl]  — export session to ~/.nerv/exports/ (html by default)\n\
                      /copy           — copy last response to clipboard\n\
                      /resume [id]    — list/load sessions\n\
                      /tree           — browse/switch session branches\n\
