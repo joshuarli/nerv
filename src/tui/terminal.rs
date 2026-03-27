@@ -67,7 +67,7 @@ impl Terminal for ProcessTerminal {
         // Position cursor at bottom-left so shell prompt appears cleanly
         let rows = terminal_size().1;
         let _ = write!(self.stdout, "\x1b[{};1H\x1b[J", rows);
-        let _ = self.stdout.write_all(b"\x1b[?25h\x1b[?2004l\x1b[?7h");
+        let _ = self.stdout.write_all(b"\x1b[0 q\x1b[?25h\x1b[?2004l\x1b[?7h");
         let _ = self.stdout.flush();
 
         // Restore original termios, flushing pending input to avoid ^C echo

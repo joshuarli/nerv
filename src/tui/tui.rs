@@ -221,10 +221,10 @@ impl TUI {
             );
         }
 
-        // Position hardware cursor
+        // Position hardware cursor (block style)
         if let Some((row, col)) = cursor_pos {
             let _ = write!(buf, "\x1b[{};{}H", row + 1, col + 1);
-            buf.extend_from_slice(b"\x1b[?25h");
+            buf.extend_from_slice(b"\x1b[2 q\x1b[?25h"); // steady block + show
         } else {
             buf.extend_from_slice(b"\x1b[?25l");
         }
