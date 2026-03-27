@@ -169,6 +169,8 @@ pub struct SessionTreeNode {
     pub entry_type: String,
     /// First ~80 chars of meaningful content.
     pub summary: String,
+    /// Full raw text (for user messages — placed into editor when selected in /tree).
+    pub raw_text: String,
     pub timestamp: String,
     pub children: Vec<SessionTreeNode>,
     /// True if this is a user message entry.

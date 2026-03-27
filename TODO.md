@@ -2,11 +2,14 @@
 
 - [ ] Image input — paste/drag screenshots
 - [ ] MCP server support — external tool providers
-- [ ] Session tree browser (`/tree`) — in progress
-  - [ ] v2: node folding (collapse subtrees)
-  - [ ] v2: filter modes (user-only, no-tools, labeled-only)
-  - [ ] v2: search within tree
-  - [ ] v2: label editing from tree view
+- [x] Session tree browser (`/tree`)
+  - [x] ↑/↓ navigate, ←/→ page, Enter select, Esc cancel
+  - [x] Ctrl+U user-only filter, Ctrl+O show-all filter
+  - [x] Ctrl+←/Alt+← fold; Ctrl+→/Alt+→ unfold/jump
+  - [x] ⊟/⊞ fold indicators, `← active` marker, `•` active-path dot
+  - [x] User selection: leaf→parent, text placed in editor for re-submission
+  - [x] Root user selection: leaf reset to null, text in editor
+  - [x] Non-user selection: leaf set to node
   - [ ] v2: branch summary on fork (LLM-generated context for abandoned path)
 
 ## Shell Hooks

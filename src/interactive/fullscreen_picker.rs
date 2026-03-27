@@ -23,6 +23,8 @@ pub trait FullscreenList {
 
     fn move_up(&mut self);
     fn move_down(&mut self);
+    fn move_page_up(&mut self) {}
+    fn move_page_down(&mut self) {}
     fn push_char(&mut self, ch: char);
     fn pop_char(&mut self);
     fn clear_query(&mut self);
@@ -30,6 +32,12 @@ pub trait FullscreenList {
     /// Called when Enter is pressed.  Returns the selected ID string, or `None`
     /// if nothing is selected (list is empty, etc.).
     fn enter(&self) -> Option<String>;
+
+    /// Handle a raw key sequence that wasn't handled by the generic loop.
+    /// Returns `true` if the key was consumed and a redraw is needed.
+    fn handle_extra_key(&mut self, _seq: &[u8]) -> bool {
+        false
+    }
 }
 
 // ─────────────────────────── runner ─────────────────────────────────────────
@@ -94,11 +102,19 @@ pub fn run_fullscreen_picker(list: &mut dyn FullscreenList) -> Option<String> {
                     } else if keys::matches_key(&seq, "down") {
                         list.move_down();
                         needs_redraw = true;
+                    } else if keys::matches_key(&seq, "left") || keys::matches_key(&seq, "page_up") {
+                        list.move_page_up();
+                        needs_redraw = true;
+                    } else if keys::matches_key(&seq, "right") || keys::matches_key(&seq, "page_down") {
+                        list.move_page_down();
+                        needs_redraw = true;
                     } else if keys::matches_key(&seq, "ctrl+u") {
                         list.clear_query();
                         needs_redraw = true;
                     } else if keys::matches_key(&seq, "backspace") {
                         list.pop_char();
+                        needs_redraw = true;
+                    } else if list.handle_extra_key(&seq) {
                         needs_redraw = true;
                     } else {
                         // Printable chars (including multi-byte UTF-8).

@@ -560,7 +560,7 @@ fn main() {
                                 if !text.is_empty() {
                                     let req = interactive.handle_submit(text);
                                     if let Some(req) = req {
-                                        launch_picker(req, &mut interactive, &stdin_paused);
+                                        launch_picker(req, &mut interactive, &mut layout, &stdin_paused);
                                         tui.request_render(true); tui.maybe_render(&layout); continue;
                                     }
                                     if interactive.quit_requested { tui.terminal_mut().stop(); should_quit = true; break; }
@@ -671,7 +671,7 @@ fn process_event(
     stdin_paused: &Arc<std::sync::atomic::AtomicBool>,
 ) {
     if let Some(req) = interactive.handle_event(event, layout, tui) {
-        launch_picker(req, interactive, stdin_paused);
+        launch_picker(req, interactive, layout, stdin_paused);
         tui.request_render(true);
         return;
     }
@@ -686,17 +686,26 @@ fn process_event(
 fn launch_picker(
     req: nerv::interactive::event_loop::PickerRequest,
     interactive: &mut InteractiveMode,
+    layout: &mut AppLayout,
     stdin_paused: &Arc<std::sync::atomic::AtomicBool>,
 ) {
     use nerv::interactive::fullscreen_picker::run_fullscreen_picker;
     use nerv::interactive::event_loop::PickerRequest;
+    use nerv::interactive::tree_selector::TreeSelection;
 
     // Pause the stdin reader so the picker owns stdin bytes exclusively.
     // Wait longer than the poll(100ms) timeout so the thread quiesces.
     stdin_paused.store(true, std::sync::atomic::Ordering::SeqCst);
     std::thread::sleep(std::time::Duration::from_millis(150));
 
-    let selected = match req {
+    enum PickResult {
+        Session(String),
+        Tree(TreeSelection),
+        Model(String),
+        None,
+    }
+
+    let result = match req {
         PickerRequest::SessionPicker { sessions, repo_root } => {
             let nerv_dir = nerv_dir();
             let search_fn: Box<dyn Fn(&str) -> Vec<nerv::session::manager::SearchResult>> = {
@@ -708,33 +717,61 @@ fn launch_picker(
             let mut picker = nerv::interactive::session_picker::SessionPicker::new(
                 sessions, search_fn, repo_root,
             );
-            run_fullscreen_picker(&mut picker).map(|id| ("session", id))
+            run_fullscreen_picker(&mut picker)
+                .map(PickResult::Session)
+                .unwrap_or(PickResult::None)
         }
         PickerRequest::TreeSelector { tree, current_leaf } => {
             let mut selector = nerv::interactive::tree_selector::TreeSelector::new(
                 tree, current_leaf,
             );
-            run_fullscreen_picker(&mut selector).map(|id| ("tree", id))
+            if run_fullscreen_picker(&mut selector).is_some() {
+                selector.selected_node()
+                    .map(PickResult::Tree)
+                    .unwrap_or(PickResult::None)
+            } else {
+                PickResult::None
+            }
         }
         PickerRequest::ModelPicker => {
             let models = interactive.model_registry().available_models()
                 .into_iter().cloned().collect::<Vec<_>>();
             let current = interactive.model_name().to_owned();
             let mut picker = nerv::interactive::model_picker::ModelPicker::new(models, current);
-            run_fullscreen_picker(&mut picker).map(|id| ("model", id))
+            run_fullscreen_picker(&mut picker)
+                .map(PickResult::Model)
+                .unwrap_or(PickResult::None)
         }
     };
 
     stdin_paused.store(false, std::sync::atomic::Ordering::SeqCst);
 
-    match selected {
-        Some(("session", id)) => {
+    match result {
+        PickResult::Session(id) => {
             let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::LoadSession { id });
         }
-        Some(("tree", id)) => {
-            let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::SwitchBranch { entry_id: id });
+        PickResult::Tree(sel) => {
+            if sel.is_user {
+                // User message selected: set leaf to parent so next prompt branches from there.
+                // Place the message text in the editor for re-submission.
+                let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::SwitchBranch {
+                    entry_id: sel.entry_id,
+                    use_parent: !sel.is_root,
+                    reset_leaf: sel.is_root,
+                });
+                if !sel.raw_text.is_empty() {
+                    layout.editor.set_text(&sel.raw_text);
+                }
+            } else {
+                // Non-user: set leaf directly to selected node, editor stays empty.
+                let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::SwitchBranch {
+                    entry_id: sel.entry_id,
+                    use_parent: false,
+                    reset_leaf: false,
+                });
+            }
         }
-        Some(("model", token)) => {
+        PickResult::Model(token) => {
             // token is "provider_name/model_id" encoded by ModelPicker
             if let Some((provider, model_id)) = token.split_once('/') {
                 let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::SetModel {
@@ -743,7 +780,7 @@ fn launch_picker(
                 });
             }
         }
-        _ => {}
+        PickResult::None => {}
     }
 }
 

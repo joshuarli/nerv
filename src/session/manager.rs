@@ -650,13 +650,14 @@ impl SessionManager {
 
         // Create nodes
         for entry in &self.entries {
-            let (entry_type, summary, is_user, has_tool_calls) = summarize_entry(entry);
+            let (entry_type, summary, raw_text, is_user, has_tool_calls) = summarize_entry(entry);
             nodes.insert(
                 entry.id(),
                 SessionTreeNode {
                     entry_id: entry.id().to_string(),
                     entry_type,
                     summary,
+                    raw_text,
                     timestamp: entry_timestamp(entry),
                     children: Vec::new(),
                     is_user,
@@ -918,13 +919,13 @@ fn ymd_to_days(y: u64, m: u64, d: u64) -> u64 {
     era * 146097 + doe - 719468
 }
 
-/// Extract type string, summary text, is_user, has_tool_calls from an entry.
-fn summarize_entry(entry: &SessionEntry) -> (String, String, bool, bool) {
+/// Extract type string, summary text, raw_text, is_user, has_tool_calls from an entry.
+fn summarize_entry(entry: &SessionEntry) -> (String, String, String, bool, bool) {
     match entry {
         SessionEntry::Message(e) => match &e.message {
             AgentMessage::User { content, .. } => {
                 let text = content_text(content);
-                ("message".into(), truncate(&text, 80), true, false)
+                ("message".into(), truncate(&text, 80), text, true, false)
             }
             AgentMessage::Assistant(a) => {
                 let text = a.text_content();
@@ -932,34 +933,35 @@ fn summarize_entry(entry: &SessionEntry) -> (String, String, bool, bool) {
                     .content
                     .iter()
                     .any(|b| matches!(b, ContentBlock::ToolCall { .. }));
-                ("message".into(), truncate(&text, 80), false, has_tools)
+                ("message".into(), truncate(&text, 80), String::new(), false, has_tools)
             }
             AgentMessage::ToolResult { .. } => {
-                ("tool_result".into(), String::new(), false, false)
+                ("tool_result".into(), String::new(), String::new(), false, false)
             }
-            _ => ("message".into(), String::new(), false, false),
+            _ => ("message".into(), String::new(), String::new(), false, false),
         },
         SessionEntry::Compaction(c) => {
-            ("compaction".into(), truncate(&c.summary, 60), false, false)
+            ("compaction".into(), truncate(&c.summary, 60), String::new(), false, false)
         }
         SessionEntry::BranchSummary(b) => {
-            ("branch_summary".into(), truncate(&b.summary, 60), false, false)
+            ("branch_summary".into(), truncate(&b.summary, 60), String::new(), false, false)
         }
         SessionEntry::ModelChange(m) => {
-            ("model_change".into(), m.model_id.clone(), false, false)
+            ("model_change".into(), m.model_id.clone(), String::new(), false, false)
         }
         SessionEntry::ThinkingLevelChange(t) => {
-            ("thinking_change".into(), t.thinking_level.clone(), false, false)
+            ("thinking_change".into(), t.thinking_level.clone(), String::new(), false, false)
         }
-        SessionEntry::Label(l) => ("label".into(), l.label.clone(), false, false),
+        SessionEntry::Label(l) => ("label".into(), l.label.clone(), String::new(), false, false),
         SessionEntry::SessionInfo(s) => {
-            ("session_info".into(), s.name.clone().unwrap_or_default(), false, false)
+            ("session_info".into(), s.name.clone().unwrap_or_default(), String::new(), false, false)
         }
-        SessionEntry::SystemPrompt(_) => ("system_prompt".into(), String::new(), false, false),
-        SessionEntry::CustomMessage(_) => ("custom_message".into(), String::new(), false, false),
+        SessionEntry::SystemPrompt(_) => ("system_prompt".into(), String::new(), String::new(), false, false),
+        SessionEntry::CustomMessage(_) => ("custom_message".into(), String::new(), String::new(), false, false),
         SessionEntry::PermissionAccept(p) => (
             "permission_accept".into(),
             format!("{}({})", p.tool, truncate(&p.args, 40)),
+            String::new(),
             false,
             false,
         ),

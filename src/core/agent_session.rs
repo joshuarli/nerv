@@ -131,7 +131,13 @@ pub enum SessionCommand {
     Login { provider: String },
     ListSessions { repo_root: Option<String> },
     GetTree,
-    SwitchBranch { entry_id: String },
+    SwitchBranch {
+        entry_id: String,
+        /// If true, set leaf to the *parent* of entry_id instead (user message re-submission).
+        use_parent: bool,
+        /// If true, reset leaf to None (root user message selected).
+        reset_leaf: bool,
+    },
     CreateWorktree { branch_name: String, nerv_dir: PathBuf },
     MergeWorktree,
     SetPlanMode { enabled: bool },
@@ -1127,8 +1133,25 @@ pub fn session_task(
                 let current_leaf = session.session_manager.leaf_id().map(|s| s.to_string());
                 let _ = event_tx.send(AgentSessionEvent::TreeData { tree, current_leaf });
             }
-            SessionCommand::SwitchBranch { entry_id } => {
-                session.session_manager.branch(&entry_id);
+            SessionCommand::SwitchBranch { entry_id, use_parent, reset_leaf } => {
+                if reset_leaf {
+                    session.session_manager.reset_leaf();
+                } else if use_parent {
+                    // Find the parent of entry_id and branch to it
+                    let parent = session.session_manager.entries()
+                        .iter()
+                        .find(|e| e.id() == entry_id)
+                        .and_then(|e| e.parent_id())
+                        .map(|s| s.to_string());
+                    if let Some(ref pid) = parent {
+                        session.session_manager.branch(pid);
+                    } else {
+                        // No parent — treat as reset (root node)
+                        session.session_manager.reset_leaf();
+                    }
+                } else {
+                    session.session_manager.branch(&entry_id);
+                }
                 let ctx = session.session_manager.build_session_context();
                 session.agent.state.messages = ctx.messages;
                 session.agent.state.thinking_level = ctx.thinking_level;

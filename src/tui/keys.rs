@@ -230,6 +230,20 @@ pub fn parse_key(data: &[u8]) -> Option<KeyId> {
         };
     }
 
+    // Alt+arrow: ESC [ 1;3 D/C/A/B (modifier=3 = Alt)
+    if data.len() >= 6 && data[0] == 0x1B && data[1] == b'[' {
+        let body = &data[2..];
+        if body.len() >= 4 && body[0] == b'1' && body[1] == b';' && body[2] == b'3' {
+            return match body[3] {
+                b'D' => Some("alt+left"),
+                b'C' => Some("alt+right"),
+                b'A' => Some("alt+up"),
+                b'B' => Some("alt+down"),
+                _ => None,
+            };
+        }
+    }
+
     None
 }
 
