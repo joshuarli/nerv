@@ -1,5 +1,5 @@
 {
-  "prompt": "There is a bug in sum.py — the sum_to function has an off-by-one error. Fix it so all tests pass. Run python3 test_sum.py to verify.",
+  "prompt": "The tests in test_sum.py are failing. Diagnose and fix the bug.",
   "verify": "python3 test_sum.py",
   "max_turns": 10
 }
