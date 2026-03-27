@@ -3,6 +3,87 @@
 use crate::agent::types::*;
 use crate::session::types::SessionEntry;
 
+/// Aggregate token stats across all API calls in a session.
+struct SessionStats {
+    api_calls: u32,
+    total_input: u64,
+    total_output: u64,
+    total_cache_read: u64,
+    total_cache_write: u64,
+    max_context: u32,
+    context_window: u32,
+}
+
+impl SessionStats {
+    fn from_entries(entries: &[SessionEntry]) -> Self {
+        let mut s = Self {
+            api_calls: 0,
+            total_input: 0,
+            total_output: 0,
+            total_cache_read: 0,
+            total_cache_write: 0,
+            max_context: 0,
+            context_window: 0,
+        };
+        for entry in entries {
+            if let SessionEntry::Message(me) = entry
+                && matches!(me.message, AgentMessage::Assistant(_))
+                && let Some(ref tok) = me.tokens
+            {
+                s.api_calls += 1;
+                s.total_input += tok.input as u64;
+                s.total_output += tok.output as u64;
+                s.total_cache_read += tok.cache_read as u64;
+                s.total_cache_write += tok.cache_write as u64;
+                if tok.context_used > s.max_context {
+                    s.max_context = tok.context_used;
+                }
+                if tok.context_window > 0 {
+                    s.context_window = tok.context_window;
+                }
+            }
+        }
+        s
+    }
+
+    fn cache_hit_rate(&self) -> f64 {
+        let total_cacheable = self.total_cache_read + self.total_cache_write;
+        if total_cacheable == 0 {
+            return 0.0;
+        }
+        self.total_cache_read as f64 / total_cacheable as f64 * 100.0
+    }
+
+    /// Per-call cache hit details: how many calls had >50% cache reads.
+    fn cache_hit_calls(entries: &[SessionEntry]) -> (u32, u32) {
+        let mut good = 0u32;
+        let mut total = 0u32;
+        for entry in entries {
+            if let SessionEntry::Message(me) = entry
+                && matches!(me.message, AgentMessage::Assistant(_))
+                && let Some(ref tok) = me.tokens
+            {
+                total += 1;
+                let cacheable = tok.cache_read + tok.cache_write;
+                if cacheable > 0 && tok.cache_read > cacheable / 2 {
+                    good += 1;
+                }
+            }
+        }
+        (good, total)
+    }
+}
+
+fn fmt_tokens(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
 /// Export a session from the database by ID as JSONL.
 pub fn export_session_jsonl(
     session_id: &str,
@@ -13,9 +94,33 @@ pub fn export_session_jsonl(
     session_manager
         .load_session(session_id)
         .map_err(|e| e.to_string())?;
-    let content = session_manager
+    let mut content = session_manager
         .export_jsonl()
         .ok_or_else(|| "no session content".to_string())?;
+
+    // Append session summary line
+    let entries = session_manager.entries().to_vec();
+    let stats = SessionStats::from_entries(&entries);
+    if stats.api_calls > 0 {
+        let (good_calls, _) = SessionStats::cache_hit_calls(&entries);
+        let summary = serde_json::json!({
+            "type": "summary",
+            "api_calls": stats.api_calls,
+            "total_input": stats.total_input,
+            "total_output": stats.total_output,
+            "cache_read": stats.total_cache_read,
+            "cache_write": stats.total_cache_write,
+            "cache_hit_rate": (stats.cache_hit_rate() * 10.0).round() / 10.0,
+            "cache_hit_calls": good_calls,
+            "max_context": stats.max_context,
+            "context_window": stats.context_window,
+        });
+        if let Ok(line) = serde_json::to_string(&summary) {
+            content.push('\n');
+            content.push_str(&line);
+        }
+    }
+
     std::fs::write(path, content).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
 }
@@ -274,6 +379,30 @@ function toggleTool(header) {
                 _ => {}
             }
         }
+    }
+
+    // Session summary
+    let stats = SessionStats::from_entries(entries);
+    if stats.api_calls > 0 {
+        let (good_calls, total_calls) = SessionStats::cache_hit_calls(entries);
+        html.push_str("<hr>\n<div class='meta' style='font-size:0.8rem;line-height:1.8'>");
+        html.push_str(&format!(
+            "<strong>Session</strong>: {} API calls · ↑{} ↓{} · Rc {} · Wc {} · cache hit {:.0}% ({}/{})<br>",
+            stats.api_calls,
+            fmt_tokens(stats.total_input),
+            fmt_tokens(stats.total_output),
+            fmt_tokens(stats.total_cache_read),
+            fmt_tokens(stats.total_cache_write),
+            stats.cache_hit_rate(),
+            good_calls,
+            total_calls,
+        ));
+        html.push_str(&format!(
+            "peak context {}/{}\n",
+            fmt_tokens(stats.max_context as u64),
+            fmt_tokens(stats.context_window as u64),
+        ));
+        html.push_str("</div>\n");
     }
 
     html.push_str("</body>\n</html>\n");
