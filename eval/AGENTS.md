@@ -80,6 +80,24 @@ a 4-slot buffer) exposes any race condition or deadlock. A single
 notify/wait protocol mistake causes hangs or data loss that only
 manifests under concurrent execution. This is the hardest task.
 
+### event-system (Expert+)
+
+An event bus where **handlers can mutate the handler list during dispatch,
+emit cascading events, and unregister themselves or others**. 17 tests
+that exercise subtle interactions: priority ordering, off-during-dispatch
+(removed handler must not run later in the same cycle), reentrant cascading
+emits (inner emit sees live handler registry, not the outer snapshot),
+once-in-cascade, and dynamic registration during dispatch.
+
+**What this tests**: The naive implementation (iterate handlers, call each)
+passes ~60% of tests. The dispatch-mutation tests require snapshotting the
+handler list but checking a removed set during iteration. The cascade tests
+require reentrant emit with live registry access. The once-in-cascade test
+requires unregistering before calling the inner handler. Each individually
+seems simple; together they tightly constrain the implementation to one
+correct algorithm. This is the hardest task in the suite — getting all 17
+tests right in one shot requires understanding the full interaction model.
+
 ## Task structure
 
 ```
