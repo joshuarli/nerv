@@ -352,35 +352,43 @@ def main():
 
     results: list[EvalResult] = []
 
-    for task_dir in task_dirs:
+    def flush_results():
+        """Write whatever results we have so far."""
+        with open(report_dir / "results.json", "w") as f:
+            json.dump([asdict(r) for r in results], f, indent=2)
+
+    try:
+        for task_dir in task_dirs:
+            if not json_output:
+                print(f"  {task_dir.name} ... ", end="", flush=True, file=sys.stderr)
+
+            result = run_task(task_dir, binary, report_dir, model=model)
+
+            if not json_output:
+                if result.passed:
+                    hint = " +hint" if result.hint_used else ""
+                    att = f" ({result.attempts} attempts)" if result.attempts > 1 else ""
+                    ctx = result.tokens_in + result.tokens_cache_read
+                    print(
+                        f"PASS{att}{hint}  ({result.turns} turns, {result.total_tool_calls} tools, "
+                        f"{ctx}+{result.tokens_out} tok, "
+                        f"${result.cost:.4f}, {result.wall_time_s}s)",
+                        file=sys.stderr,
+                    )
+                    for g in result.goal_results:
+                        print(f"    {g}", file=sys.stderr)
+                else:
+                    err = result.error or "verification failed"
+                    att = f" after {result.attempts} attempts" if result.attempts > 1 else ""
+                    print(f"FAIL{att}  {err}", file=sys.stderr)
+
+            results.append(result)
+            flush_results()
+
+    except KeyboardInterrupt:
         if not json_output:
-            print(f"  {task_dir.name} ... ", end="", flush=True, file=sys.stderr)
-
-        result = run_task(task_dir, binary, report_dir, model=model)
-
-        if not json_output:
-            if result.passed:
-                hint = " +hint" if result.hint_used else ""
-                att = f" ({result.attempts} attempts)" if result.attempts > 1 else ""
-                ctx = result.tokens_in + result.tokens_cache_read
-                print(
-                    f"PASS{att}{hint}  ({result.turns} turns, {result.total_tool_calls} tools, "
-                    f"{ctx}+{result.tokens_out} tok, "
-                    f"${result.cost:.4f}, {result.wall_time_s}s)",
-                    file=sys.stderr,
-                )
-                for g in result.goal_results:
-                    print(f"    {g}", file=sys.stderr)
-            else:
-                err = result.error or "verification failed"
-                att = f" after {result.attempts} attempts" if result.attempts > 1 else ""
-                print(f"FAIL{att}  {err}", file=sys.stderr)
-
-        results.append(result)
-
-    # Write overall results
-    with open(report_dir / "results.json", "w") as f:
-        json.dump([asdict(r) for r in results], f, indent=2)
+            print("\n  interrupted", file=sys.stderr)
+        flush_results()
 
     if json_output:
         print(json.dumps([asdict(r) for r in results], indent=2))
