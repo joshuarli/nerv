@@ -29,6 +29,11 @@ fn main() {
                 println!("Options:");
                 println!("  --resume           Open session picker immediately");
                 println!("  --resume <id>      Resume a specific session");
+                println!("  --print            Headless mode: read prompt from stdin, output JSON");
+                println!("  --max-turns <n>    Max agent turns in print mode (default 20)");
+                println!("  --model <name>     Select model for print mode (e.g. opus, sonnet)");
+                println!("  --json             JSON output in print mode (default)");
+                println!("  --list-models      List all configured models");
                 println!("  --log-level <lvl>  Set log level (debug, info, warn, error)");
                 println!("  -h, --help         Show this help");
                 println!("  --version          Show version");
@@ -45,6 +50,14 @@ fn main() {
             }
             "--version" => {
                 println!("nerv {}", env!("CARGO_PKG_VERSION"));
+                return;
+            }
+            "--print" => {
+                print_mode(&args);
+                return;
+            }
+            "--list-models" => {
+                list_all_models();
                 return;
             }
             "add" | "load" | "models" | "unload" => {
@@ -596,6 +609,38 @@ fn push_status(layout: &mut AppLayout, msg: &str, is_error: bool) {
     layout.chat.push_styled(style, msg);
 }
 
+fn list_all_models() {
+    let nerv_dir = home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".nerv");
+    let config = nerv::core::NervConfig::load(&nerv_dir);
+    let mut auth = nerv::core::auth::AuthStorage::load(&nerv_dir);
+    let registry = nerv::core::model_registry::ModelRegistry::new(&config, &mut auth);
+
+    let available = registry.available_models();
+    let all = registry.all_models();
+
+    if all.is_empty() {
+        println!("No models configured. Run `nerv --login` or set ANTHROPIC_API_KEY.");
+        return;
+    }
+
+    let mut last_provider = String::new();
+    for m in &all {
+        if m.provider_name != last_provider {
+            println!("\n  [{}]", m.provider_name);
+            last_provider = m.provider_name.clone();
+        }
+        let online = available.iter().any(|a| a.id == m.id);
+        let marker = if online { "●" } else { "○" };
+        println!(
+            "    {} {:<30} ctx:{}  {}",
+            marker, m.id, m.context_window, m.name
+        );
+    }
+    println!();
+}
+
 fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
     use nerv::core::local_models::*;
 
@@ -766,4 +811,205 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
             std::process::exit(1);
         }
     }
+}
+
+/// Headless print mode: read prompt from stdin, run agent, output JSON.
+/// No TUI, no sessions, no memory, no permissions.
+fn print_mode(args: &[String]) {
+    use std::io::Read;
+
+    let nerv_dir = home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".nerv");
+    std::fs::create_dir_all(&nerv_dir).ok();
+
+    nerv::log::init(&nerv_dir.join("debug.log"));
+    if let Ok(level) = std::env::var("NERV_LOG").unwrap_or_default().parse() {
+        nerv::log::set_level(level);
+    }
+
+    let max_turns: u32 = args
+        .iter()
+        .position(|a| a == "--max-turns")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
+
+    // Read prompt from stdin
+    let mut prompt = String::new();
+    std::io::stdin().read_to_string(&mut prompt).unwrap_or(0);
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        let err = serde_json::json!({"error": "no prompt provided on stdin"});
+        println!("{}", err);
+        std::process::exit(1);
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let config = nerv::core::NervConfig::load(&nerv_dir);
+    let mut auth = nerv::core::auth::AuthStorage::load(&nerv_dir);
+    let model_registry = Arc::new(nerv::core::model_registry::ModelRegistry::new(
+        &config, &mut auth,
+    ));
+    let resources = nerv::core::resource_loader::load_resources(&cwd, &nerv_dir);
+
+    let mutation_queue = Arc::new(FileMutationQueue::new());
+    let mut tool_registry = nerv::core::tool_registry::ToolRegistry::new();
+    for tool in [
+        Arc::new(ReadTool::new(cwd.clone())) as Arc<dyn nerv::agent::agent::AgentTool>,
+        Arc::new(BashTool::new(cwd.clone())),
+        Arc::new(EditTool::new(cwd.clone(), mutation_queue.clone())),
+        Arc::new(WriteTool::new(cwd.clone())),
+        Arc::new(GrepTool::new(cwd.clone())),
+        Arc::new(FindTool::new(cwd.clone())),
+        Arc::new(LsTool::new(cwd.clone())),
+    ] {
+        tool_registry.register(nerv::core::tool_registry::ToolDefinition { tool });
+    }
+
+    let provider_registry = Arc::new(std::sync::RwLock::new(
+        model_registry.provider_registry.clone(),
+    ));
+    let mut agent = nerv::agent::agent::Agent::new(provider_registry);
+
+    // Select model: --model <name> or default
+    let model_arg = args
+        .iter()
+        .position(|a| a == "--model")
+        .and_then(|i| args.get(i + 1));
+    let model = if let Some(name) = model_arg {
+        if let Some((p, m)) = name.split_once('/') {
+            model_registry.get_model(p, m).cloned()
+        } else {
+            model_registry.find_model(name).cloned()
+        }
+    } else {
+        model_registry.default_model(&config).cloned()
+    };
+    if let Some(ref m) = model {
+        agent.state.model = Some(m.clone());
+        eprintln!("model: {}/{}", m.provider_name, m.id);
+    } else {
+        let err = serde_json::json!({"error": "no model configured (use --model or set default)"});
+        println!("{}", err);
+        std::process::exit(1);
+    }
+
+    // Build system prompt
+    agent.state.tools = tool_registry.active_tools();
+    let tool_names: Vec<&str> = agent.state.tools.iter().map(|t| t.name()).collect();
+    let snippets = tool_registry.prompt_snippets();
+    let guidelines = tool_registry.prompt_guidelines();
+    agent.state.system_prompt = nerv::core::system_prompt::build_system_prompt(
+        &cwd, &resources, &tool_names, &snippets, &guidelines,
+    );
+
+    // Collect metrics via the event callback (using RefCell since Fn closure)
+    use std::cell::RefCell;
+
+    struct Metrics {
+        turns: u32,
+        tool_calls: Vec<serde_json::Value>,
+        tokens_in: u32,
+        tokens_out: u32,
+        tokens_cache_read: u32,
+        cost: nerv::agent::types::Cost,
+        current_tool: Option<(String, std::time::Instant)>,
+    }
+
+    let metrics = RefCell::new(Metrics {
+        turns: 0,
+        tool_calls: Vec::new(),
+        tokens_in: 0,
+        tokens_out: 0,
+        tokens_cache_read: 0,
+        cost: nerv::agent::types::Cost::default(),
+        current_tool: None,
+    });
+
+    let model_ref = model.clone();
+    let start = std::time::Instant::now();
+
+    // Build prompt messages
+    let user_msg = nerv::agent::types::AgentMessage::User {
+        content: vec![nerv::agent::types::ContentItem::Text { text: prompt }],
+        timestamp: nerv::now_millis(),
+    };
+
+    let cancel = agent.cancel.clone();
+
+    let new_messages = agent.prompt(vec![user_msg], &|event| {
+        use nerv::agent::types::AgentEvent;
+        let mut m = metrics.borrow_mut();
+        match &event {
+            AgentEvent::TurnStart => {
+                m.turns += 1;
+                if m.turns > max_turns {
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            AgentEvent::ToolExecutionStart { name, .. } => {
+                m.current_tool = Some((name.clone(), std::time::Instant::now()));
+            }
+            AgentEvent::ToolExecutionEnd { result, .. } => {
+                if let Some((name, start)) = m.current_tool.take() {
+                    m.tool_calls.push(serde_json::json!({
+                        "name": name,
+                        "duration_ms": start.elapsed().as_millis() as u64,
+                        "is_error": result.is_error,
+                    }));
+                }
+            }
+            AgentEvent::MessageEnd { message } => {
+                if let Some(ref usage) = message.usage {
+                    if usage.input > m.tokens_in {
+                        m.tokens_in = usage.input;
+                    }
+                    m.tokens_out += usage.output;
+                    if usage.cache_read > m.tokens_cache_read {
+                        m.tokens_cache_read = usage.cache_read;
+                    }
+                    if let Some(ref model) = model_ref {
+                        m.cost.add_usage(usage, &model.pricing);
+                    }
+                }
+            }
+            _ => {}
+        }
+    });
+
+    let wall_time = start.elapsed();
+    let m = metrics.into_inner();
+
+    // Extract final assistant text
+    let final_text: String = new_messages
+        .iter()
+        .filter_map(|msg| {
+            if let nerv::agent::types::AgentMessage::Assistant(a) = msg {
+                let text = a.text_content();
+                if text.is_empty() { None } else { Some(text) }
+            } else {
+                None
+            }
+        })
+        .last()
+        .unwrap_or_default();
+
+    let output = serde_json::json!({
+        "success": !new_messages.iter().any(|msg| matches!(msg,
+            nerv::agent::types::AgentMessage::Assistant(a) if a.stop_reason.is_error()
+        )),
+        "final_text": final_text,
+        "metrics": {
+            "turns": m.turns,
+            "tool_calls": m.tool_calls,
+            "tokens_in": m.tokens_in,
+            "tokens_out": m.tokens_out,
+            "tokens_cache_read": m.tokens_cache_read,
+            "cost": (m.cost.total * 10000.0).round() / 10000.0,
+            "wall_time_ms": wall_time.as_millis() as u64,
+        }
+    });
+
+    println!("{}", serde_json::to_string_pretty(&output).unwrap());
 }

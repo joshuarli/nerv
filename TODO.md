@@ -5,7 +5,7 @@
 - [x] Local model management (nerv add/load/models)
 - [x] Memory tool
 - [ ] Permission system — per-tool approval (allow/deny/always-allow)
-- [ ] Print mode — `echo "fix" | nerv` non-interactive piped usage
+- [x] Print mode — `echo "fix" | nerv --print` headless JSON output
 - [ ] Image input — paste/drag screenshots
 - [ ] MCP server support — external tool providers
 - [ ] Session tree browser (`/tree`) — in progress

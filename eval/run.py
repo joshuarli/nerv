@@ -67,10 +67,20 @@ def setup_workdir(task_dir: Path, work_dir: Path):
         )
 
 
-def run_nerv(binary: Path, prompt: str, work_dir: Path, max_turns: int = 20, timeout: int = 120) -> dict:
+def run_nerv(
+    binary: Path,
+    prompt: str,
+    work_dir: Path,
+    max_turns: int = 20,
+    timeout: int = 120,
+    model: str | None = None,
+) -> dict:
     """Run nerv in print mode, return parsed JSON output."""
+    cmd = [str(binary), "--print", "--max-turns", str(max_turns)]
+    if model:
+        cmd.extend(["--model", model])
     result = subprocess.run(
-        [str(binary), "--print", "--max-turns", str(max_turns), "--json"],
+        cmd,
         input=prompt,
         capture_output=True,
         text=True,
@@ -101,7 +111,7 @@ def verify(command: str, work_dir: Path, expected_exit: int = 0) -> bool:
         return False
 
 
-def run_task(task_dir: Path, binary: Path) -> EvalResult:
+def run_task(task_dir: Path, binary: Path, model: str | None = None) -> EvalResult:
     task_name = task_dir.name
     config = load_task(task_dir)
 
@@ -115,6 +125,7 @@ def run_task(task_dir: Path, binary: Path) -> EvalResult:
             config["prompt"],
             work_dir,
             max_turns=config.get("max_turns", 20),
+            model=model,
         )
         wall_time = time.monotonic() - start
 
@@ -158,9 +169,13 @@ def main():
     json_output = "--json" in args
     binary = NERV_BINARY
 
+    model = None
     if "--binary" in args:
         idx = args.index("--binary")
         binary = Path(args[idx + 1])
+    if "--model" in args:
+        idx = args.index("--model")
+        model = args[idx + 1]
 
     if not binary.exists():
         print(f"nerv binary not found at {binary}", file=sys.stderr)
@@ -192,7 +207,7 @@ def main():
         if not json_output:
             print(f"  {task_dir.name} ... ", end="", flush=True, file=sys.stderr)
 
-        result = run_task(task_dir, binary)
+        result = run_task(task_dir, binary, model=model)
 
         if not json_output:
             if result.passed:
