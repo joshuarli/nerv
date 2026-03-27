@@ -303,18 +303,20 @@ impl AgentSession {
             let gate_tx = event_tx.clone();
             self.agent.state.context_gate_fn = Some(std::sync::Arc::new(
                 move |info: crate::agent::agent::ContextGateInfo| {
-                    // Skip gate for small contexts (< 10k tokens)
-                    if info.estimated_tokens < 10_000 {
+                    // Need at least a few rounds to establish a baseline — early calls
+                    // always show huge growth from initial file reads.
+                    if info.tool_rounds < 4 || info.prev_tokens == 0 {
                         return true;
                     }
-                    // Skip on first call (no previous baseline)
-                    if info.prev_tokens == 0 {
-                        return true;
-                    }
-                    // Trigger if context grew by > 10%
                     let delta = info.estimated_tokens.saturating_sub(info.prev_tokens);
-                    let threshold = info.prev_tokens / 10;
-                    if delta <= threshold {
+                    // Only trigger when the absolute growth is significant (>20k tokens,
+                    // roughly a 500-line file) AND represents >30% growth. Small deltas
+                    // from normal tool use (reads, edits) should never prompt.
+                    if delta < 20_000 {
+                        return true;
+                    }
+                    let pct = (delta as f64 / info.prev_tokens as f64) * 100.0;
+                    if pct <= 30.0 {
                         return true;
                     }
                     // Ask user
