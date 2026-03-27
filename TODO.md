@@ -31,14 +31,14 @@ Done:
 - [x] Event-per-render (no batching, ChatWriter makes it cheap)
 
 Planned (implementation order):
-- [ ] 1. Superseded read dedup — replace earlier read results when same file read again
-- [ ] 2. Grep context lines — add -C3 to rg so model doesn't need follow-up reads
-- [ ] 3. Success-pattern bash truncation — cargo check ok → 1 line, cargo test summary only
-- [ ] 4. Read auto-size — return whole file if < 300 lines, skip chunked reading
-- [ ] 5. Collapse edit cycles — read+edit+verify(ok) → single outcome summary
-- [ ] 6. System prompt batch guidance — "read all files first, then edit, then verify"
-- [ ] 7. Tool result caching — skip re-read if file mtime unchanged since last read
-- [ ] 8. Context budget injection — show cost/calls in context so model can self-regulate
+- [x] 1. Superseded read dedup — replace earlier read results when same file read again
+- [x] 2. Grep context lines — add -C3 to rg so model doesn't need follow-up reads
+- [x] 3. Success-pattern bash truncation — cargo check ok → 1 line, cargo test summary only
+- [x] 4. Read auto-size — return whole file if < 300 lines, skip chunked reading
+- [x] 5. Collapse edit cycles — strip bulky edit/write args (old_text, new_text) from stale turns
+- [x] 6. System prompt batch guidance — "read all files first, then edit, then verify"
+- [x] 7. Tool result caching — skip re-read if file mtime unchanged since last read
+- [x] 8. Context budget injection — append [Context: ~Nk/Mk tokens, T turns] to system prompt
 
 ## Shell Hooks
 

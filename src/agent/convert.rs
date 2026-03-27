@@ -268,7 +268,8 @@ pub fn transform_context(messages: Vec<AgentMessage>, _context_window: u32) -> V
                 a.content
                     .retain(|block| !matches!(block, ContentBlock::Thinking { .. }));
 
-                // Strip args from denied tool calls
+                // Strip args from denied tool calls.
+                // For stale turns, also strip bulky edit/write args (keep only path).
                 a.content = a
                     .content
                     .into_iter()
@@ -278,6 +279,21 @@ pub fn transform_context(messages: Vec<AgentMessage>, _context_window: u32) -> V
                                 id,
                                 name,
                                 arguments: serde_json::json!({}),
+                            }
+                        }
+                        ContentBlock::ToolCall {
+                            id,
+                            ref name,
+                            ref arguments,
+                        } if i < cutoff && (name == "edit" || name == "write") => {
+                            let path = arguments
+                                .get("path")
+                                .cloned()
+                                .unwrap_or(serde_json::json!(""));
+                            ContentBlock::ToolCall {
+                                id,
+                                name: name.clone(),
+                                arguments: serde_json::json!({"path": path}),
                             }
                         }
                         other => other,
@@ -1252,5 +1268,49 @@ test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
         // Error output should NOT be compressed
         let error_output = "error[E0308]: mismatched types";
         assert_eq!(compress_bash_success(error_output), None);
+    }
+
+    #[test]
+    fn stale_edit_args_stripped() {
+        let big_content = "x".repeat(3000);
+        let mut msgs = vec![
+            user("refactor"),
+            assistant_tool_call(
+                "e1",
+                "edit",
+                serde_json::json!({
+                    "path": "src/lib.rs",
+                    "old_text": big_content,
+                    "new_text": "replaced"
+                }),
+            ),
+            tool_result("e1", "Edited src/lib.rs"),
+        ];
+
+        // Pad to push the edit past cutoff
+        for i in 0..12 {
+            msgs.push(user(&format!("q{}", i)));
+            msgs.push(assistant_text(&format!("a{}", i)));
+        }
+
+        let result = transform_context(msgs, 200_000);
+        let edit_msg = get_assistant(&result[1]);
+        if let ContentBlock::ToolCall { arguments, .. } = &edit_msg.content[0] {
+            // Should only have path, not old_text/new_text
+            assert!(
+                arguments.get("path").is_some(),
+                "path should be preserved"
+            );
+            assert!(
+                arguments.get("old_text").is_none(),
+                "old_text should be stripped from stale edit"
+            );
+            assert!(
+                arguments.get("new_text").is_none(),
+                "new_text should be stripped from stale edit"
+            );
+        } else {
+            panic!("expected tool call");
+        }
     }
 }

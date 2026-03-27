@@ -214,6 +214,26 @@ impl Agent {
         };
 
         let transformed = transform_context(self.state.messages.clone(), model.context_window);
+
+        // Estimate current context usage and inject budget note so the model
+        // can self-regulate (batch more aggressively when context is growing).
+        let estimated_tokens: usize = transformed.iter().map(crate::compaction::estimate_tokens).sum();
+        let turn_count = transformed
+            .iter()
+            .filter(|m| matches!(m, AgentMessage::User { .. }))
+            .count();
+        let system_prompt = if turn_count > 1 {
+            format!(
+                "{}\n\n[Context: ~{}k/{}k tokens, {} turns]",
+                self.state.system_prompt,
+                estimated_tokens / 1000,
+                model.context_window / 1000,
+                turn_count,
+            )
+        } else {
+            self.state.system_prompt.clone()
+        };
+
         let llm_messages = convert_to_llm(&transformed);
 
         let wire_tools: Vec<WireTool> = self
@@ -237,7 +257,7 @@ impl Agent {
 
         let request = CompletionRequest {
             model_id: model.id.clone(),
-            system_prompt: self.state.system_prompt.clone(),
+            system_prompt,
             messages: llm_messages,
             tools: wire_tools,
             max_tokens,

@@ -72,6 +72,32 @@ single summary line regardless of age:
 
 **Savings**: 100-2k tokens per successful build/test output.
 
+### 7. Strip stale edit/write arguments
+
+For tool calls in stale turns (before the `RECENT_TURNS` cutoff), edit and
+write tool call arguments are reduced to just the `path` field. The `old_text`,
+`new_text`, and `content` fields are stripped — the edit already happened and
+the model doesn't need the full payload to understand what was changed.
+
+**Savings**: 100-5k tokens per stale edit (depends on payload size).
+
+### 8. Read tool mtime caching (`src/tools/read.rs`)
+
+The `ReadTool` maintains an in-memory cache of `path → (mtime, line_count)`.
+When the model reads a file it already read and the file's mtime hasn't
+changed, the tool returns `[unchanged since last read: path (N lines)]`
+instead of the full content. The cache is invalidated automatically when
+a write/edit modifies the file (new mtime).
+
+**Savings**: 200-2k+ tokens per redundant re-read of an unmodified file.
+
+### 9. Context budget injection (`src/agent/agent.rs`)
+
+Before each API call, a `[Context: ~Nk/Mk tokens, T turns]` note is appended
+to the system prompt (after the first turn). This gives the model awareness of
+how much context it's consuming, encouraging it to batch operations when
+context is growing. Only shown after the first turn to avoid noise.
+
 ## Compaction (`src/compaction/`)
 
 Separate from `transform_context`. Compaction summarizes and removes old
