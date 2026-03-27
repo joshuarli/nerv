@@ -107,6 +107,7 @@ impl InteractiveMode {
             AgentSessionEvent::ModelChanged { model } => {
                 layout.footer.set_model(&model);
                 self.current_model = Some(model);
+                tui.request_render(false);
             }
             AgentSessionEvent::ThinkingLevelChanged { level } => {
                 self.current_thinking = level;
