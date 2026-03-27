@@ -447,11 +447,7 @@ impl InteractiveMode {
                 self.status_message = Some("Compacting...".into());
             }
             "/model" => {
-                if args == "add local" || args == "add" {
-                    self.status_message =
-                        Some("Connecting to local server (http://localhost:1234/v1)...".into());
-                    let _ = self.cmd_tx.send(SessionCommand::AddLocal);
-                } else if !args.is_empty() {
+                if !args.is_empty() {
                     let found = if let Some((p, m)) = args.split_once('/') {
                         self.model_registry.get_model(p, m)
                     } else {
@@ -473,7 +469,7 @@ impl InteractiveMode {
                             "No models available.\n\
                              /login            — login to Anthropic (Claude)\n\
                              ANTHROPIC_API_KEY — set env var for API key auth\n\
-                             /model add local  — connect to local server (localhost:1234)"
+                             Configure a custom provider in ~/.nerv/config.jsonc"
                                 .into(),
                         );
                     } else {
@@ -490,7 +486,6 @@ impl InteractiveMode {
                         }
                         lines.push(String::new());
                         lines.push("/model <id> — switch model".into());
-                        lines.push("/model add local — connect to local server".into());
                         self.status_message = Some(lines.join("\n"));
                     }
                 }
@@ -597,7 +592,6 @@ impl InteractiveMode {
                 let mut help = String::from(
                     "Commands:\n\
                      /model          — list/switch models\n\
-                     /model add local — connect to local server\n\
                      /think [level]  — set thinking (off/low/medium/high/xhigh)\n\
                      /login [provider] — OAuth login (default: anthropic)\n\
                      /logout [provider] — remove stored credentials\n\

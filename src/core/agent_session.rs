@@ -90,7 +90,6 @@ pub enum SessionCommand {
     Compact { custom_instructions: Option<String> },
     ExportJsonl { path: PathBuf },
     ExportHtml { path: PathBuf },
-    AddLocal,
     Login { provider: String },
     ListSessions { repo_root: Option<String> },
     GetTree,
@@ -500,112 +499,6 @@ impl AgentSession {
         self.agent.abort();
     }
 
-    pub fn add_local(&mut self, event_tx: &Sender<AgentSessionEvent>) {
-        let base_url = "http://localhost:1234/v1";
-        let models_url = format!("{}/models", base_url);
-
-        let response = match crate::http::agent().get(&models_url).call() {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = event_tx.send(AgentSessionEvent::Status {
-                    message: format!("Cannot reach local server at {} — is it running?", base_url),
-                    is_error: true,
-                });
-                crate::log::error(&format!("local server connection error: {}", e));
-                return;
-            }
-        };
-
-        let body: serde_json::Value = match response.into_body().read_json() {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = event_tx.send(AgentSessionEvent::Status {
-                    message: format!("Failed to parse local server response: {}", e),
-                    is_error: true,
-                });
-                return;
-            }
-        };
-
-        let models = body["data"].as_array();
-        let first_id = models
-            .and_then(|a| a.first())
-            .and_then(|m| m["id"].as_str());
-
-        let Some(first_model) = first_id else {
-            let _ = event_tx.send(AgentSessionEvent::Status {
-                message: "local server has no models loaded.".into(),
-                is_error: true,
-            });
-            return;
-        };
-
-        let model = Model {
-            id: first_model.to_string(),
-            name: first_model.to_string(),
-            provider_name: "local".to_string(),
-            context_window: 128_000,
-            max_output_tokens: 32_000,
-            reasoning: false,
-            supports_adaptive_thinking: false,
-            supports_xhigh: false,
-            pricing: ModelPricing {
-                input: 0.0,
-                output: 0.0,
-                cache_read: 0.0,
-                cache_write: 0.0,
-            },
-        };
-
-        let provider = std::sync::Arc::new(crate::agent::OpenAICompatProvider::new(
-            "local".into(),
-            base_url.into(),
-            None,
-        ));
-        self.agent
-            .provider_registry
-            .write()
-            .unwrap()
-            .register("local", provider);
-        self.agent.state.model = Some(model.clone());
-        let _ = event_tx.send(AgentSessionEvent::ModelChanged { model });
-        let _ = event_tx.send(AgentSessionEvent::Status {
-            message: format!("Connected to local server — model: {}", first_model),
-            is_error: false,
-        });
-
-        let nerv_dir = crate::home_dir().unwrap_or_default().join(".nerv");
-        let mut config = crate::core::config::NervConfig::load(&nerv_dir);
-        config.custom_providers.retain(|p| p.name != "local");
-        let custom_models: Vec<_> = models
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|m| {
-                        m["id"]
-                            .as_str()
-                            .map(|id| crate::core::config::CustomModelConfig {
-                                id: id.into(),
-                                name: Some(id.into()),
-                                context_window: Some(128_000),
-                                reasoning: None,
-                            })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        config
-            .custom_providers
-            .push(crate::core::config::CustomProviderConfig {
-                name: "local".into(),
-                base_url: base_url.into(),
-                api_key: None,
-                models: custom_models,
-            });
-        // Persist as default for next startup
-        config.default_model = Some(first_model.to_string());
-        let _ = config.save(&nerv_dir);
-    }
-
     pub fn load_session(&mut self, session_id: &str, event_tx: &Sender<AgentSessionEvent>) {
         match self.session_manager.load_session(session_id) {
             Ok(ctx) => {
@@ -898,7 +791,6 @@ pub fn session_task(
                 );
                 let _ = event_tx.send(AgentSessionEvent::ExportDone { result });
             }
-            SessionCommand::AddLocal => session.add_local(&event_tx),
             SessionCommand::Login { provider } => {
                 handle_login(&provider, &mut session, &event_tx);
             }
