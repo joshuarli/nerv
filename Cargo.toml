@@ -39,6 +39,10 @@ harness = false
 name = "tools"
 harness = false
 
+[[bench]]
+name = "sse_parsing"
+harness = false
+
 [profile.dev]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"

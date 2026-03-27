@@ -1,11 +1,68 @@
 use std::io::BufRead;
 use std::sync::atomic::Ordering;
 
+use serde::Deserialize;
+
 use crate::errors::ProviderError;
 
 use super::convert::{LlmContent, LlmMessage};
 use super::provider::*;
 use super::types::*;
+
+// ---------------------------------------------------------------------------
+// Typed SSE structs for OpenAI-compatible streaming
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct OaiUsage {
+    #[serde(default)]
+    prompt_tokens: u32,
+    #[serde(default)]
+    completion_tokens: u32,
+}
+
+#[derive(Deserialize)]
+struct OaiFunction {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OaiToolCall {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<OaiFunction>,
+}
+
+#[derive(Deserialize)]
+struct OaiDelta {
+    #[serde(default)]
+    content: Option<String>,
+    // Reasoning from local models (QwQ, DeepSeek-R1, etc.)
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<OaiToolCall>,
+}
+
+#[derive(Deserialize)]
+struct OaiChoice {
+    delta: OaiDelta,
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OaiChunk {
+    #[serde(default)]
+    choices: Vec<OaiChoice>,
+    #[serde(default)]
+    usage: Option<OaiUsage>,
+}
 
 pub struct OpenAICompatProvider {
     api_key: Option<String>,
@@ -221,61 +278,49 @@ impl Provider for OpenAICompatProvider {
             let Some(data) = line.strip_prefix("data: ") else {
                 continue;
             };
-            let Ok(json) = serde_json::from_str::<serde_json::Value>(data) else {
+            let Ok(chunk) = serde_json::from_str::<OaiChunk>(data) else {
                 continue;
             };
 
-            if let Some(u) = json.get("usage").filter(|u| u.is_object()) {
-                usage.input = u["prompt_tokens"].as_u64().unwrap_or(0) as u32;
-                usage.output = u["completion_tokens"].as_u64().unwrap_or(0) as u32;
-                if usage.input > 0 {
-                    on_event(ProviderEvent::UsageUpdate(usage.clone()));
-                }
+            if let Some(u) = chunk.usage.filter(|u| u.prompt_tokens > 0) {
+                usage.input = u.prompt_tokens;
+                usage.output = u.completion_tokens;
+                on_event(ProviderEvent::UsageUpdate(usage.clone()));
             }
-            let Some(choices) = json["choices"].as_array() else {
+            let Some(choice) = chunk.choices.into_iter().next() else {
                 continue;
             };
-            let Some(choice) = choices.first() else {
-                continue;
-            };
+            let delta = choice.delta;
 
-            if let Some(text) = choice["delta"]["content"].as_str()
-                && !text.is_empty()
-            {
-                on_event(ProviderEvent::TextDelta(text.to_string()));
+            if let Some(text) = delta.content.filter(|t| !t.is_empty()) {
+                on_event(ProviderEvent::TextDelta(text));
             }
             // Reasoning/thinking content from local models (QwQ, DeepSeek-R1, etc.)
-            if let Some(thinking) = choice["delta"]["reasoning_content"]
-                .as_str()
-                .or_else(|| choice["delta"]["reasoning"].as_str())
-                && !thinking.is_empty()
+            if let Some(thinking) = delta
+                .reasoning_content
+                .or(delta.reasoning)
+                .filter(|t| !t.is_empty())
             {
-                on_event(ProviderEvent::ThinkingDelta(thinking.to_string()));
+                on_event(ProviderEvent::ThinkingDelta(thinking));
             }
-            if let Some(tcs) = choice["delta"]["tool_calls"].as_array() {
-                for tc in tcs {
-                    let id = tc["id"].as_str().unwrap_or("").to_string();
-                    if let Some(func) = tc["function"].as_object() {
-                        if let Some(name) = func.get("name").and_then(|n| n.as_str())
-                            && !name.is_empty()
-                        {
-                            on_event(ProviderEvent::ToolCallStart {
-                                id: id.clone(),
-                                name: name.to_string(),
-                            });
-                        }
-                        if let Some(args) = func.get("arguments").and_then(|a| a.as_str())
-                            && !args.is_empty()
-                        {
-                            on_event(ProviderEvent::ToolCallArgsDelta {
-                                id: id.clone(),
-                                delta: args.to_string(),
-                            });
-                        }
+            for tc in delta.tool_calls {
+                let id = tc.id.unwrap_or_default();
+                if let Some(func) = tc.function {
+                    if let Some(name) = func.name.filter(|n| !n.is_empty()) {
+                        on_event(ProviderEvent::ToolCallStart {
+                            id: id.clone(),
+                            name,
+                        });
+                    }
+                    if let Some(args) = func.arguments.filter(|a| !a.is_empty()) {
+                        on_event(ProviderEvent::ToolCallArgsDelta {
+                            id: id.clone(),
+                            delta: args,
+                        });
                     }
                 }
             }
-            if let Some(reason) = choice["finish_reason"].as_str() {
+            if let Some(reason) = choice.finish_reason.as_deref() {
                 let sr = match reason {
                     "stop" => StopReason::EndTurn,
                     "tool_calls" => StopReason::ToolUse,

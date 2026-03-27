@@ -1,11 +1,97 @@
 use std::io::BufRead;
 use std::sync::atomic::Ordering;
 
+use serde::Deserialize;
+
 use crate::errors::ProviderError;
 
 use super::convert::{LlmContent, LlmMessage};
 use super::provider::*;
 use super::types::*;
+
+// ---------------------------------------------------------------------------
+// Typed SSE event structs — avoids serde_json::Value DOM on the hot path
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct SseUsage {
+    #[serde(default)]
+    input_tokens: u32,
+    #[serde(default)]
+    output_tokens: u32,
+    #[serde(default)]
+    cache_read_input_tokens: u32,
+    #[serde(default)]
+    cache_creation_input_tokens: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum SseContentBlock {
+    #[serde(rename = "tool_use")]
+    ToolUse { id: String, name: String },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum SseDelta {
+    #[serde(rename = "text_delta")]
+    Text { text: String },
+    #[serde(rename = "thinking_delta")]
+    Thinking { thinking: String },
+    #[serde(rename = "input_json_delta")]
+    InputJson { partial_json: String },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+struct SseMessageStart {
+    message: SseMessageStartInner,
+}
+#[derive(Deserialize)]
+struct SseMessageStartInner {
+    usage: SseUsage,
+}
+
+#[derive(Deserialize)]
+struct SseContentBlockStart {
+    index: u32,
+    content_block: SseContentBlock,
+}
+
+#[derive(Deserialize)]
+struct SseContentBlockDelta {
+    index: u32,
+    delta: SseDelta,
+}
+
+#[derive(Deserialize)]
+struct SseContentBlockStop {
+    index: u32,
+}
+
+#[derive(Deserialize)]
+struct SseMessageDeltaInner {
+    stop_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SseMessageDelta {
+    delta: SseMessageDeltaInner,
+    usage: SseUsage,
+}
+
+#[derive(Deserialize)]
+struct SseError {
+    error: SseErrorInner,
+}
+#[derive(Deserialize)]
+struct SseErrorInner {
+    message: String,
+}
 
 pub struct AnthropicProvider {
     api_key: String,
@@ -177,9 +263,9 @@ impl Provider for AnthropicProvider {
         if status != 200 {
             let err_body = response.into_body().read_to_string().unwrap_or_default();
             crate::log::warn(&format!("anthropic HTTP {}: {}", status, err_body));
-            let message = serde_json::from_str::<serde_json::Value>(&err_body)
+            let message = serde_json::from_str::<SseError>(&err_body)
                 .ok()
-                .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
+                .map(|e| e.error.message)
                 .unwrap_or_else(|| format!("HTTP {}", status));
             return Err(classify_status(status, &message));
         }
@@ -228,13 +314,11 @@ impl Provider for AnthropicProvider {
             if let Some(event_type) = line.strip_prefix("event: ") {
                 current_event_type = event_type.to_string();
             } else if let Some(data) = line.strip_prefix("data: ") {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                    for event in parse_sse_event(&current_event_type, &json, &mut sse_state) {
-                        let is_stop = matches!(event, ProviderEvent::MessageStop { .. });
-                        on_event(event);
-                        if is_stop {
-                            return Ok(());
-                        }
+                for event in parse_sse_event(&current_event_type, data, &mut sse_state) {
+                    let is_stop = matches!(event, ProviderEvent::MessageStop { .. });
+                    on_event(event);
+                    if is_stop {
+                        return Ok(());
                     }
                 }
                 current_event_type.clear();
@@ -249,101 +333,99 @@ impl Provider for AnthropicProvider {
 #[derive(Default)]
 struct SseState {
     /// Maps content block index → tool_use ID (only for tool_use blocks)
-    tool_ids: std::collections::HashMap<u64, String>,
+    tool_ids: std::collections::HashMap<u32, String>,
 }
 
-fn parse_sse_event(
-    event_type: &str,
-    data: &serde_json::Value,
-    state: &mut SseState,
-) -> Vec<ProviderEvent> {
+fn parse_sse_event(event_type: &str, data: &str, state: &mut SseState) -> Vec<ProviderEvent> {
     match event_type {
         "message_start" => {
-            let usage = parse_usage(&data["message"]["usage"]);
-            if usage.input > 0 {
-                vec![ProviderEvent::UsageUpdate(usage)]
+            let Ok(ev) = serde_json::from_str::<SseMessageStart>(data) else {
+                return vec![];
+            };
+            let u = ev.message.usage;
+            if u.input_tokens > 0 {
+                vec![ProviderEvent::UsageUpdate(Usage {
+                    input: u.input_tokens,
+                    output: u.output_tokens,
+                    cache_read: u.cache_read_input_tokens,
+                    cache_write: u.cache_creation_input_tokens,
+                })]
             } else {
                 vec![]
             }
         }
         "content_block_start" => {
-            let index = data["index"].as_u64().unwrap_or(0);
-            let block = &data["content_block"];
-            match block["type"].as_str() {
-                Some("tool_use") => {
-                    let id = block["id"].as_str().unwrap_or("").to_string();
-                    state.tool_ids.insert(index, id.clone());
-                    vec![ProviderEvent::ToolCallStart {
-                        id,
-                        name: block["name"].as_str().unwrap_or("").to_string(),
-                    }]
+            let Ok(ev) = serde_json::from_str::<SseContentBlockStart>(data) else {
+                return vec![];
+            };
+            match ev.content_block {
+                SseContentBlock::ToolUse { id, name } => {
+                    state.tool_ids.insert(ev.index, id.clone());
+                    vec![ProviderEvent::ToolCallStart { id, name }]
                 }
-                _ => vec![],
+                SseContentBlock::Other => vec![],
             }
         }
         "content_block_delta" => {
-            let delta = &data["delta"];
-            match delta["type"].as_str() {
-                Some("text_delta") => {
-                    vec![ProviderEvent::TextDelta(
-                        delta["text"].as_str().unwrap_or("").to_string(),
-                    )]
+            let Ok(ev) = serde_json::from_str::<SseContentBlockDelta>(data) else {
+                return vec![];
+            };
+            match ev.delta {
+                SseDelta::Text { text } => vec![ProviderEvent::TextDelta(text)],
+                SseDelta::Thinking { thinking } => {
+                    vec![ProviderEvent::ThinkingDelta(thinking)]
                 }
-                Some("thinking_delta") => {
-                    vec![ProviderEvent::ThinkingDelta(
-                        delta["thinking"].as_str().unwrap_or("").to_string(),
-                    )]
-                }
-                Some("input_json_delta") => {
-                    let index = data["index"].as_u64().unwrap_or(0);
-                    let id = state.tool_ids.get(&index).cloned().unwrap_or_default();
+                SseDelta::InputJson { partial_json } => {
+                    let id = state.tool_ids.get(&ev.index).cloned().unwrap_or_default();
                     vec![ProviderEvent::ToolCallArgsDelta {
                         id,
-                        delta: delta["partial_json"].as_str().unwrap_or("").to_string(),
+                        delta: partial_json,
                     }]
                 }
-                _ => vec![],
+                SseDelta::Other => vec![],
             }
         }
         "content_block_stop" => {
-            let index = data["index"].as_u64().unwrap_or(0);
+            let Ok(ev) = serde_json::from_str::<SseContentBlockStop>(data) else {
+                return vec![];
+            };
             // Only emit ToolCallEnd for tool_use blocks
-            if let Some(id) = state.tool_ids.remove(&index) {
+            if let Some(id) = state.tool_ids.remove(&ev.index) {
                 vec![ProviderEvent::ToolCallEnd { id }]
             } else {
                 vec![]
             }
         }
         "message_delta" => {
-            let stop_reason = match data["delta"]["stop_reason"].as_str() {
+            let Ok(ev) = serde_json::from_str::<SseMessageDelta>(data) else {
+                return vec![];
+            };
+            let stop_reason = match ev.delta.stop_reason.as_deref() {
                 Some("end_turn") => StopReason::EndTurn,
                 Some("tool_use") => StopReason::ToolUse,
                 Some("max_tokens") => StopReason::MaxTokens,
                 _ => StopReason::EndTurn,
             };
-            let usage = parse_usage(&data["usage"]);
-            vec![ProviderEvent::MessageStop { stop_reason, usage }]
+            vec![ProviderEvent::MessageStop {
+                stop_reason,
+                usage: Usage {
+                    input: ev.usage.input_tokens,
+                    output: ev.usage.output_tokens,
+                    cache_read: ev.usage.cache_read_input_tokens,
+                    cache_write: ev.usage.cache_creation_input_tokens,
+                },
+            }]
         }
         "error" => {
-            let msg = data["error"]["message"]
-                .as_str()
-                .unwrap_or("unknown error")
-                .to_string();
+            let msg = serde_json::from_str::<SseError>(data)
+                .map(|e| e.error.message)
+                .unwrap_or_else(|_| "unknown error".to_string());
             vec![ProviderEvent::MessageStop {
                 stop_reason: StopReason::Error { message: msg },
                 usage: Usage::default(),
             }]
         }
         _ => vec![],
-    }
-}
-
-fn parse_usage(v: &serde_json::Value) -> Usage {
-    Usage {
-        input: v["input_tokens"].as_u64().unwrap_or(0) as u32,
-        output: v["output_tokens"].as_u64().unwrap_or(0) as u32,
-        cache_read: v["cache_read_input_tokens"].as_u64().unwrap_or(0) as u32,
-        cache_write: v["cache_creation_input_tokens"].as_u64().unwrap_or(0) as u32,
     }
 }
 
@@ -468,22 +550,28 @@ fn cache_control_value(cache: &CacheConfig, base_url: &str) -> serde_json::Value
 mod tests {
     use super::*;
 
+    // Helper: serialize a json! literal to string, then run through the typed parser.
+    // This keeps the test fixtures readable while exercising the real code path.
+    fn p(event_type: &str, v: serde_json::Value, state: &mut SseState) -> Vec<ProviderEvent> {
+        parse_sse_event(event_type, &v.to_string(), state)
+    }
+
     #[test]
     fn text_block_stop_does_not_emit_tool_end() {
         let mut state = SseState::default();
 
         // content_block_start for text (index 0)
-        let events = parse_sse_event(
+        let events = p(
             "content_block_start",
-            &serde_json::json!({"index": 0, "content_block": {"type": "text", "text": ""}}),
+            serde_json::json!({"index": 0, "content_block": {"type": "text", "text": ""}}),
             &mut state,
         );
         assert!(events.is_empty());
 
         // content_block_stop for text (index 0) — should NOT emit ToolCallEnd
-        let events = parse_sse_event(
+        let events = p(
             "content_block_stop",
-            &serde_json::json!({"index": 0}),
+            serde_json::json!({"index": 0}),
             &mut state,
         );
         assert!(
@@ -496,16 +584,16 @@ mod tests {
     fn thinking_block_stop_does_not_emit_tool_end() {
         let mut state = SseState::default();
 
-        let events = parse_sse_event(
+        let events = p(
             "content_block_start",
-            &serde_json::json!({"index": 0, "content_block": {"type": "thinking", "thinking": ""}}),
+            serde_json::json!({"index": 0, "content_block": {"type": "thinking", "thinking": ""}}),
             &mut state,
         );
         assert!(events.is_empty());
 
-        let events = parse_sse_event(
+        let events = p(
             "content_block_stop",
-            &serde_json::json!({"index": 0}),
+            serde_json::json!({"index": 0}),
             &mut state,
         );
         assert!(
@@ -519,9 +607,9 @@ mod tests {
         let mut state = SseState::default();
 
         // content_block_start for tool_use (index 1)
-        let events = parse_sse_event(
+        let events = p(
             "content_block_start",
-            &serde_json::json!({"index": 1, "content_block": {"type": "tool_use", "id": "toolu_abc123", "name": "read"}}),
+            serde_json::json!({"index": 1, "content_block": {"type": "tool_use", "id": "toolu_abc123", "name": "read"}}),
             &mut state,
         );
         assert_eq!(events.len(), 1);
@@ -531,9 +619,9 @@ mod tests {
         );
 
         // input_json_delta — should use real tool ID, not block index
-        let events = parse_sse_event(
+        let events = p(
             "content_block_delta",
-            &serde_json::json!({"index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"path\":"}}),
+            serde_json::json!({"index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"path\":"}}),
             &mut state,
         );
         assert_eq!(events.len(), 1);
@@ -545,9 +633,9 @@ mod tests {
         }
 
         // content_block_stop for tool_use (index 1) — should emit ToolCallEnd
-        let events = parse_sse_event(
+        let events = p(
             "content_block_stop",
-            &serde_json::json!({"index": 1}),
+            serde_json::json!({"index": 1}),
             &mut state,
         );
         assert_eq!(events.len(), 1);
@@ -559,44 +647,44 @@ mod tests {
         let mut state = SseState::default();
 
         // Block 0: text
-        parse_sse_event(
+        p(
             "content_block_start",
-            &serde_json::json!({"index": 0, "content_block": {"type": "text", "text": ""}}),
+            serde_json::json!({"index": 0, "content_block": {"type": "text", "text": ""}}),
             &mut state,
         );
         // Block 1: tool_use
-        parse_sse_event(
+        p(
             "content_block_start",
-            &serde_json::json!({"index": 1, "content_block": {"type": "tool_use", "id": "toolu_xyz", "name": "bash"}}),
+            serde_json::json!({"index": 1, "content_block": {"type": "tool_use", "id": "toolu_xyz", "name": "bash"}}),
             &mut state,
         );
         // Block 2: thinking
-        parse_sse_event(
+        p(
             "content_block_start",
-            &serde_json::json!({"index": 2, "content_block": {"type": "thinking", "thinking": ""}}),
+            serde_json::json!({"index": 2, "content_block": {"type": "thinking", "thinking": ""}}),
             &mut state,
         );
 
         // Stop block 0 (text) — no ToolCallEnd
-        let e = parse_sse_event(
+        let e = p(
             "content_block_stop",
-            &serde_json::json!({"index": 0}),
+            serde_json::json!({"index": 0}),
             &mut state,
         );
         assert!(e.is_empty());
 
         // Stop block 2 (thinking) — no ToolCallEnd
-        let e = parse_sse_event(
+        let e = p(
             "content_block_stop",
-            &serde_json::json!({"index": 2}),
+            serde_json::json!({"index": 2}),
             &mut state,
         );
         assert!(e.is_empty());
 
         // Stop block 1 (tool_use) — ToolCallEnd with correct ID
-        let e = parse_sse_event(
+        let e = p(
             "content_block_stop",
-            &serde_json::json!({"index": 1}),
+            serde_json::json!({"index": 1}),
             &mut state,
         );
         assert_eq!(e.len(), 1);
@@ -606,9 +694,9 @@ mod tests {
     #[test]
     fn message_start_extracts_usage() {
         let mut state = SseState::default();
-        let events = parse_sse_event(
+        let events = p(
             "message_start",
-            &serde_json::json!({"message": {"usage": {"input_tokens": 150, "output_tokens": 0}}}),
+            serde_json::json!({"message": {"usage": {"input_tokens": 150, "output_tokens": 0}}}),
             &mut state,
         );
         assert_eq!(events.len(), 1);
@@ -622,9 +710,9 @@ mod tests {
     #[test]
     fn message_delta_stop_reason() {
         let mut state = SseState::default();
-        let events = parse_sse_event(
+        let events = p(
             "message_delta",
-            &serde_json::json!({"delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 50}}),
+            serde_json::json!({"delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 50}}),
             &mut state,
         );
         assert_eq!(events.len(), 1);
