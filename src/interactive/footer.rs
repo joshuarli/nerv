@@ -21,6 +21,10 @@ pub struct FooterComponent {
     plan_mode: bool,
     /// Auto-compact threshold (0–100). Default 50.
     compact_threshold_pct: u8,
+    /// When true, the hexagon bar animates as a loading sweep instead of showing fill.
+    compacting: bool,
+    /// Animation frame counter for the compaction sweep (incremented on each tick).
+    compact_tick: u8,
     /// Total input/output tokens sent across all API calls in this session.
     total_input: u64,
     total_output: u64,
@@ -74,6 +78,8 @@ impl FooterComponent {
             provider_online: None,
             plan_mode: false,
             compact_threshold_pct: 50,
+            compacting: false,
+            compact_tick: 0,
             total_input: 0,
             total_output: 0,
             total_cache_read: 0,
@@ -112,6 +118,20 @@ impl FooterComponent {
 
     pub fn set_compact_threshold(&mut self, pct: u8) {
         self.compact_threshold_pct = pct;
+    }
+
+    pub fn set_compacting(&mut self, active: bool) {
+        self.compacting = active;
+        if !active {
+            self.compact_tick = 0;
+        }
+    }
+
+    /// Advance the compaction animation frame. Called every ~100ms from the main tick.
+    pub fn tick(&mut self) {
+        if self.compacting {
+            self.compact_tick = self.compact_tick.wrapping_add(1);
+        }
     }
 
     pub fn set_plan_mode(&mut self, enabled: bool) {
@@ -245,16 +265,37 @@ impl Component for FooterComponent {
         };
 
         let bar_len = w;
-        let filled = ((context_pct / 100.0) * bar_len as f64).round() as usize;
-        let empty = bar_len.saturating_sub(filled);
-        let hex_bar = format!(
-            "{}{}{}{}{}",
-            ctx_color,
-            "⬢".repeat(filled),
-            theme::FOOTER_DIM,
-            "⬡".repeat(empty),
-            r,
-        );
+        let hex_bar = if self.compacting {
+            // Sweep animation: a window of filled hexagons scrolls across the bar.
+            // Window is ~20% of bar width; wraps with a short trailing gap.
+            let window = (bar_len / 5).max(4);
+            let period = bar_len + window; // full cycle length
+            let offset = (self.compact_tick as usize * 2) % period; // 2 cells/tick = ~20 cells/s
+            let mut buf = String::new();
+            buf.push_str(theme::ACCENT);
+            for i in 0..bar_len {
+                // Position within the sweep cycle (leading edge at `offset`)
+                let rel = (offset + bar_len - i) % period;
+                if rel < window {
+                    buf.push('⬢');
+                } else {
+                    buf.push_str(&format!("{}{}{}", theme::FOOTER_DIM, '⬡', theme::ACCENT));
+                }
+            }
+            buf.push_str(r);
+            buf
+        } else {
+            let filled = ((context_pct / 100.0) * bar_len as f64).round() as usize;
+            let empty = bar_len.saturating_sub(filled);
+            format!(
+                "{}{}{}{}{}",
+                ctx_color,
+                "⬢".repeat(filled),
+                theme::FOOTER_DIM,
+                "⬡".repeat(empty),
+                r,
+            )
+        };
 
         // Line 2: session name/id (left) — model name (right)
         let session_label = if let Some(name) = &self.session_name {

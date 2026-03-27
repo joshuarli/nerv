@@ -645,6 +645,10 @@ fn main() {
                     layout.statusbar.tick();
                     tui.request_render(false);
                 }
+                if interactive.is_compacting {
+                    layout.footer.tick();
+                    tui.request_render(false);
+                }
                 tui.maybe_render(&layout);
             }
         }

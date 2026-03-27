@@ -29,6 +29,7 @@ pub enum PickerRequest {
 pub struct InteractiveMode {
     cmd_tx: channel::Sender<SessionCommand>,
     pub is_streaming: bool,
+    pub is_compacting: bool,
     current_model: Option<Model>,
     current_thinking: ThinkingLevel,
     current_effort: Option<EffortLevel>,
@@ -73,6 +74,7 @@ impl InteractiveMode {
         Self {
             cmd_tx,
             is_streaming: false,
+            is_compacting: false,
             current_model: initial_model,
             current_thinking: initial_thinking,
             current_effort: initial_effort,
@@ -356,12 +358,17 @@ impl InteractiveMode {
                     crate::core::CompactionReason::Manual => "Compacting...",
                 };
                 self.status_message = Some(label.into());
+                self.is_compacting = true;
+                layout.footer.set_compacting(true);
+                tui.request_render(false);
             }
             AgentSessionEvent::AutoCompactionEnd {
                 summary,
                 will_retry,
                 messages,
             } => {
+                layout.footer.set_compacting(false);
+                self.is_compacting = false;
                 if will_retry {
                     self.status_message = Some("Compacted. Retrying...".into());
                 } else if summary.is_some() {
