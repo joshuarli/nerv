@@ -204,7 +204,7 @@ impl AgentSession {
 
             self.agent.state.permission_fn = Some(std::sync::Arc::new(
                 move |tool: &str, args: &serde_json::Value| {
-                    // Check cache first
+                    // Check exact-match cache first
                     let args_json = serde_json::to_string(args).unwrap_or_default();
                     let key = format!("{}:{}", tool, args_json);
                     if cache.lock().unwrap().contains(&key) {
@@ -215,18 +215,31 @@ impl AgentSession {
                     match perm {
                         super::permissions::Permission::Allow => true,
                         super::permissions::Permission::Ask(reason) => {
+                            // Check whether this reason was already approved (e.g. same
+                            // outside-repo path referenced in a different command). This
+                            // lets the user approve once and have subsequent calls that
+                            // trigger the same reason auto-approved for the rest of the
+                            // session.
+                            let reason_key = format!("reason:{}", reason);
+                            if cache.lock().unwrap().contains(&reason_key) {
+                                return true;
+                            }
+
                             let (resp_tx, resp_rx) = crossbeam_channel::bounded(1);
                             let _ = perm_tx.send(AgentSessionEvent::PermissionRequest {
                                 tool: tool.to_string(),
                                 args: args.clone(),
-                                reason,
+                                reason: reason.clone(),
                                 response_tx: resp_tx,
                             });
                             // Block until user responds
                             let approved = resp_rx.recv().unwrap_or(false);
                             if approved {
-                                // Record in cache
-                                cache.lock().unwrap().insert(key.clone());
+                                // Cache both the exact call and the reason so future
+                                // calls that trigger the same reason are auto-approved.
+                                let mut c = cache.lock().unwrap();
+                                c.insert(key.clone());
+                                c.insert(reason_key);
                                 // Queue for DB recording
                                 let _ = perm_accept_tx.send((tool.to_string(), args_json.clone()));
                             }
