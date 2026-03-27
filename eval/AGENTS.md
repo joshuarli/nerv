@@ -64,6 +64,22 @@ class in one edit, and verifies — 4-5 turns. Weaker models iterate:
 implement → test → fail → re-read tests → fix → test → ... burning
 10+ turns. This is the hardest task in the suite.
 
+### concurrent-buffer (Expert)
+
+A thread-safe bounded buffer with **blocking put/get, timeouts, and
+graceful shutdown**. 14 tests including single-threaded correctness,
+close semantics, and concurrent stress tests with multiple real threads.
+
+**What this tests**: The model must implement correct concurrent code
+using `threading.Lock` and `threading.Condition`. The subtleties:
+`close()` must wake ALL blocked threads (not just one), `get()` only
+raises `Closed` when the buffer is *both closed AND empty* (drain
+semantics), timeouts must work correctly with condition variables, and
+the high-throughput test (4 producers × 4 consumers × 100 items through
+a 4-slot buffer) exposes any race condition or deadlock. A single
+notify/wait protocol mistake causes hangs or data loss that only
+manifests under concurrent execution. This is the hardest task.
+
 ## Task structure
 
 ```
