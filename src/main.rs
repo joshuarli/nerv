@@ -817,6 +817,16 @@ fn main() {
         layout.chat.push_styled(nerv::interactive::theme::WARN, &format!("⚠  {}", warning));
     }
 
+    // Warn if required external tools are missing.
+    for tool in &["rg", "fd"] {
+        if std::process::Command::new(tool).arg("--version").output().is_err() {
+            layout.chat.push_styled(
+                nerv::interactive::theme::WARN,
+                &format!("⚠  `{}` not found — install it for full functionality.", tool),
+            );
+        }
+    }
+
     tui.terminal_mut().start();
     tui.request_render(true); // initial render
     tui.maybe_render(&layout);

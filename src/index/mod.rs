@@ -514,32 +514,54 @@ fn find_impl_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 
 /// Collect all `.rs` files under `root`, respecting .gitignore via `fd`.
 fn collect_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
-    let output = match std::process::Command::new("fd")
+    // Prefer fd: respects .gitignore by default.
+    let output = std::process::Command::new("fd")
         .args(["--type", "f", "--extension", "rs", "--absolute-path"])
         .current_dir(root)
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => return walk_rs_files(root),
-    };
+        .output();
 
-    if !output.status.success() {
-        return walk_rs_files(root);
+    if let Ok(o) = output {
+        if o.status.success() {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            return stdout
+                .lines()
+                .filter(|l| !l.is_empty())
+                .filter_map(|l| {
+                    let path = PathBuf::from(l);
+                    let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
+                    Some((path, mtime))
+                })
+                .collect();
+        }
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout
-        .lines()
-        .filter(|l| !l.is_empty())
-        .filter_map(|l| {
-            let path = PathBuf::from(l);
-            let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
-            Some((path, mtime))
-        })
-        .collect()
+    // Fallback: `git ls-files` also respects .gitignore.
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "--cached", "--others", "--exclude-standard", "*.rs"])
+        .current_dir(root)
+        .output();
+
+    if let Ok(o) = output {
+        if o.status.success() {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            return stdout
+                .lines()
+                .filter(|l| !l.is_empty())
+                .filter_map(|l| {
+                    let path = root.join(l);
+                    let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
+                    Some((path, mtime))
+                })
+                .collect();
+        }
+    }
+
+    // Last resort: manual walk. Only skips obvious non-source dirs; does not
+    // read .gitignore. Should rarely be reached in practice.
+    walk_rs_files(root)
 }
 
-/// Fallback: walk the directory manually if `fd` isn't available.
+/// Fallback: walk the directory manually if neither `fd` nor `git` is available.
 fn walk_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
     let mut result = HashMap::new();
     walk_dir_recursive(root, &mut result);
