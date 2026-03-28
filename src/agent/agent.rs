@@ -131,7 +131,7 @@ impl Agent {
     pub fn prompt(
         &mut self,
         prompt_messages: Vec<AgentMessage>,
-        on_event: &dyn Fn(AgentEvent),
+        on_event: &(dyn Fn(AgentEvent) + Sync),
         persist_fn: Option<&mut dyn FnMut(&AgentMessage)>,
     ) -> Vec<AgentMessage> {
         self.reset_cancel();
@@ -220,7 +220,7 @@ impl Agent {
         new_messages
     }
 
-    fn stream_response(&mut self, on_event: &dyn Fn(AgentEvent), ctx: &super::transform::ContextConfig) -> AssistantMessage {
+    fn stream_response(&mut self, on_event: &(dyn Fn(AgentEvent) + Sync), ctx: &super::transform::ContextConfig) -> AssistantMessage {
         let model = match &self.state.model {
             Some(m) => m.clone(),
             None => {
@@ -491,85 +491,102 @@ impl Agent {
     fn execute_tools(
         &self,
         tool_calls: &[(String, String, serde_json::Value)],
-        on_event: &dyn Fn(AgentEvent),
+        on_event: &(dyn Fn(AgentEvent) + Sync),
     ) -> Vec<AgentMessage> {
-        // Execute sequentially (sync — no join_all needed)
-        tool_calls
-            .iter()
-            .map(|(id, name, args)| {
-                let tool = self.state.tools.iter().find(|t| t.name() == name).cloned();
+        const READONLY_TOOLS: &[&str] = &["read", "grep", "find", "ls", "symbols", "codemap"];
+        let all_readonly = tool_calls.len() > 1
+            && tool_calls.iter().all(|(_, name, _)| READONLY_TOOLS.contains(&name.as_str()));
 
-                on_event(AgentEvent::ToolExecutionStart {
-                    id: id.clone(),
-                    name: name.clone(),
-                    args: args.clone(),
-                });
-
-                // Check permissions before execution
-                let permitted = self
-                    .state
-                    .permission_fn
-                    .as_ref()
-                    .map(|f| f(name, args))
-                    .unwrap_or(true);
-
-                let result = if !permitted {
-                    ToolResult {
-                        content: "Tool call denied by user.".into(),
-                        details: None,
-                        is_error: true,
-                    }
-                } else if let Some(tool) = tool {
-                    let args = tool.normalize(args.clone());
-                    match tool.validate(&args) {
-                        Ok(()) => {
-                            let update_cb: UpdateCallback = Arc::new(|_output: String| {});
-                            tool.execute(args, update_cb)
-                        }
-                        Err(e) => ToolResult {
-                            content: format!("Validation error: {}", e),
-                            details: None,
-                            is_error: true,
-                        },
-                    }
-                } else {
-                    ToolResult {
-                        content: format!("Unknown tool: {}", name),
-                        details: None,
-                        is_error: true,
-                    }
-                };
-
-                if !result.is_error {
-                    if let Some(hook) = &self.state.post_tool_fn {
-                        hook(name, args);
-                    }
-                }
-
-                let display = result.details.as_ref().and_then(|d| {
-                    d.get("display").and_then(|v| v.as_str()).map(|s| s.to_string())
-                });
-
-                on_event(AgentEvent::ToolExecutionEnd {
-                    id: id.clone(),
-                    result: ToolResultData {
-                        content: result.content.clone(),
-                        display: display.clone(),
-                        is_error: result.is_error,
-                    },
-                });
-
-                AgentMessage::ToolResult {
-                    tool_call_id: id.clone(),
-                    content: vec![ContentItem::Text {
-                        text: result.content,
-                    }],
-                    is_error: result.is_error,
-                    display: display.clone(),
-                    timestamp: now_millis(),
-                }
+        if all_readonly {
+            // Parallel execution for readonly tools
+            std::thread::scope(|s| {
+                let handles: Vec<_> = tool_calls
+                    .iter()
+                    .map(|tc| s.spawn(|| self.run_one_tool(tc, on_event)))
+                    .collect();
+                handles.into_iter().map(|h| h.join().unwrap()).collect()
             })
-            .collect()
+        } else {
+            // Sequential execution (original path)
+            tool_calls.iter().map(|tc| self.run_one_tool(tc, on_event)).collect()
+        }
+    }
+
+    fn run_one_tool(
+        &self,
+        (id, name, args): &(String, String, serde_json::Value),
+        on_event: &(dyn Fn(AgentEvent) + Sync),
+    ) -> AgentMessage {
+        let tool = self.state.tools.iter().find(|t| t.name() == name).cloned();
+
+        on_event(AgentEvent::ToolExecutionStart {
+            id: id.clone(),
+            name: name.clone(),
+            args: args.clone(),
+        });
+
+        let permitted = self
+            .state
+            .permission_fn
+            .as_ref()
+            .map(|f| f(name, args))
+            .unwrap_or(true);
+
+        let result = if !permitted {
+            ToolResult {
+                content: "Tool call denied by user.".into(),
+                details: None,
+                is_error: true,
+            }
+        } else if let Some(tool) = tool {
+            let args = tool.normalize(args.clone());
+            match tool.validate(&args) {
+                Ok(()) => {
+                    let update_cb: UpdateCallback = Arc::new(|_output: String| {});
+                    tool.execute(args, update_cb)
+                }
+                Err(e) => ToolResult {
+                    content: format!("Validation error: {}", e),
+                    details: None,
+                    is_error: true,
+                },
+            }
+        } else {
+            ToolResult {
+                content: format!("Unknown tool: {}", name),
+                details: None,
+                is_error: true,
+            }
+        };
+
+        if !result.is_error {
+            if let Some(hook) = &self.state.post_tool_fn {
+                hook(name, args);
+            }
+        }
+
+        let display = result.details.as_ref().and_then(|d| {
+            d.get("display").and_then(|v| v.as_str()).map(|s| s.to_string())
+        });
+
+        on_event(AgentEvent::ToolExecutionEnd {
+            id: id.clone(),
+            result: ToolResultData {
+                content: result.content.clone(),
+                display: display.clone(),
+                is_error: result.is_error,
+            },
+        });
+
+        AgentMessage::ToolResult {
+            tool_call_id: id.clone(),
+            content: vec![ContentItem::Text {
+                text: result.content,
+            }],
+            is_error: result.is_error,
+            display,
+            timestamp: now_millis(),
+        }
     }
 }
 

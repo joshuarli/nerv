@@ -1451,7 +1451,8 @@ fn codemap_tool_no_results() {
         noop_update(),
     );
     assert!(!result.is_error);
-    assert!(result.content.contains("No symbols found"), "{}", result.content);
+    // Non-empty query with definitions in scope → redirect message
+    assert!(result.content.contains("No symbols matching"), "{}", result.content);
 }
 
 #[test]

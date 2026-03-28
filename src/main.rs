@@ -1225,8 +1225,8 @@ fn print_mode(args: &[String]) {
         &cwd, &b.resources, &tool_names, &snippets, &guidelines, model_id,
     );
 
-    // Collect metrics via the event callback (using RefCell since Fn closure)
-    use std::cell::RefCell;
+    // Collect metrics via the event callback (Mutex for Sync — no contention in practice)
+    use std::sync::Mutex;
 
     struct Metrics {
         turns: u32,
@@ -1242,7 +1242,7 @@ fn print_mode(args: &[String]) {
         in_text: bool,
     }
 
-    let metrics = RefCell::new(Metrics {
+    let metrics = Mutex::new(Metrics {
         turns: 0,
         tool_calls: Vec::new(),
         tokens_in: 0,
@@ -1273,7 +1273,7 @@ fn print_mode(args: &[String]) {
 
     let new_messages = agent.prompt(vec![user_msg], &|event| {
         use nerv::agent::types::{AgentEvent, StreamDelta};
-        let mut m = metrics.borrow_mut();
+        let mut m = metrics.lock().unwrap();
         match &event {
             AgentEvent::TurnStart => {
                 m.turns += 1;
@@ -1358,7 +1358,7 @@ fn print_mode(args: &[String]) {
     }, None);
 
     let wall_time = start.elapsed();
-    let m = metrics.into_inner();
+    let m = metrics.into_inner().unwrap();
 
     // Extract final assistant text
     let final_text: String = new_messages

@@ -134,6 +134,104 @@ fn bench_mutation_queue(c: &mut Criterion) {
     });
 }
 
+// --- Codemap benchmarks ---
+
+use nerv::index::codemap::{self, CodemapParams, Depth};
+use nerv::index::SymbolIndex;
+
+fn make_rust_project(file_count: usize, fns_per_file: usize, body_lines: usize) -> (tempfile::TempDir, SymbolIndex) {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+
+    for f in 0..file_count {
+        let mut source = String::new();
+        for i in 0..fns_per_file {
+            source.push_str(&format!("fn func_{}_{}() {{\n", f, i));
+            for j in 0..body_lines {
+                source.push_str(&format!("    let _{} = {};\n", j, j));
+            }
+            source.push_str("}\n\n");
+        }
+        std::fs::write(src.join(format!("mod_{}.rs", f)), &source).unwrap();
+    }
+
+    let mut index = SymbolIndex::new();
+    index.force_index_dir(tmp.path());
+    (tmp, index)
+}
+
+fn bench_codemap_signatures_small(c: &mut Criterion) {
+    // 5 files × 10 fns = 50 symbols, signatures mode
+    let (tmp, index) = make_rust_project(5, 10, 5);
+    let params = CodemapParams {
+        query: "",
+        kind: None,
+        file: None,
+        depth: Depth::Signatures,
+    };
+    c.bench_function("codemap_signatures_50_syms", |b| {
+        b.iter(|| black_box(codemap::codemap(&index, tmp.path(), &params)));
+    });
+}
+
+fn bench_codemap_full_small(c: &mut Criterion) {
+    // 5 files × 10 fns × 5 body lines = 50 symbols, full mode
+    let (tmp, index) = make_rust_project(5, 10, 5);
+    let params = CodemapParams {
+        query: "",
+        kind: None,
+        file: None,
+        depth: Depth::Full,
+    };
+    c.bench_function("codemap_full_50_syms", |b| {
+        b.iter(|| black_box(codemap::codemap(&index, tmp.path(), &params)));
+    });
+}
+
+fn bench_codemap_full_large(c: &mut Criterion) {
+    // 20 files × 30 fns × 10 body lines = 600 symbols, full mode (will hit budget)
+    let (tmp, index) = make_rust_project(20, 30, 10);
+    let params = CodemapParams {
+        query: "",
+        kind: None,
+        file: None,
+        depth: Depth::Full,
+    };
+    c.bench_function("codemap_full_600_syms", |b| {
+        b.iter(|| black_box(codemap::codemap(&index, tmp.path(), &params)));
+    });
+}
+
+fn bench_codemap_single_file(c: &mut Criterion) {
+    // Typical use: codemap on one file with 30 functions
+    let (tmp, index) = make_rust_project(10, 30, 8);
+    let file = tmp.path().join("src/mod_0.rs");
+    let params = CodemapParams {
+        query: "",
+        kind: None,
+        file: Some(&file),
+        depth: Depth::Full,
+    };
+    c.bench_function("codemap_full_single_file_30_fns", |b| {
+        b.iter(|| black_box(codemap::codemap(&index, tmp.path(), &params)));
+    });
+}
+
+fn bench_codemap_query_filter(c: &mut Criterion) {
+    // Query filter narrows results
+    let (tmp, index) = make_rust_project(10, 30, 8);
+    let params = CodemapParams {
+        query: "func_0_",
+        kind: None,
+        file: None,
+        depth: Depth::Full,
+    };
+    c.bench_function("codemap_full_query_filter_30_of_300", |b| {
+        b.iter(|| black_box(codemap::codemap(&index, tmp.path(), &params)));
+    });
+}
+
 criterion_group! {
     name = tools;
     config = fast();
@@ -146,5 +244,10 @@ criterion_group! {
         bench_diff_small,
         bench_diff_large,
         bench_mutation_queue,
+        bench_codemap_signatures_small,
+        bench_codemap_full_small,
+        bench_codemap_full_large,
+        bench_codemap_single_file,
+        bench_codemap_query_filter,
 }
 criterion_main!(tools);

@@ -89,21 +89,29 @@ impl AgentTool for CodemapTool {
             }
         });
 
-        let mut idx = self.index.lock().unwrap();
-        idx.index_dir(&self.cwd);
-
         let params = CodemapParams {
             query,
             kind,
             file: file_path.as_deref(),
             depth,
         };
-        let content = codemap::codemap(&idx, &self.cwd, &params);
 
-        let sym_count = if content == "No symbols found" {
+        // Search while holding the lock, then release before file I/O.
+        let search_result = {
+            let mut idx = self.index.lock().unwrap();
+            idx.index_dir(&self.cwd);
+            codemap::search(&idx, &params)
+        };
+
+        let content = match search_result {
+            codemap::SearchResult::Found(results) => codemap::render(&results, &self.cwd, &params.depth),
+            codemap::SearchResult::Redirect(msg) => msg,
+            codemap::SearchResult::Empty => "No symbols found".to_string(),
+        };
+
+        let sym_count = if content == "No symbols found" || content.starts_with("No symbols matching") {
             0
         } else {
-            // Count non-header, non-empty lines as a rough symbol count proxy
             content.lines().filter(|l| l.ends_with(':')).count()
         };
         let display = format!("{} files", sym_count);
