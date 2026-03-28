@@ -181,14 +181,16 @@ fn highlight_diff_html(diff: &str) -> String {
         };
         if cls.is_empty() {
             out.push_str(&html_escape_no_br(content));
+            out.push('\n');
         } else {
+            // display:block spans generate their own line break; don't add \n or it creates an
+            // extra blank line between adjacent diff-header / diff-hunk / diff-add / diff-del spans.
             out.push_str(&format!(
                 "<span class='{}'>{}</span>",
                 cls,
                 html_escape_no_br(content)
             ));
         }
-        out.push('\n');
     }
     out
 }
