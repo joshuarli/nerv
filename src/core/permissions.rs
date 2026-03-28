@@ -445,13 +445,17 @@ mod tests {
     #[test]
     fn bash_absolute_other_home_dir_asks() {
         // Arbitrary home subdirs (not in the safe list) should still prompt.
+        // We create a real temp file under $HOME so that extract_path_tokens
+        // can verify the path exists on disk (it skips non-existent paths to
+        // avoid treating non-path strings as paths).
         let home = crate::home_dir().unwrap();
-        let cmd = format!("cat {}/.zshrc", home.display());
+        let tmp_file = home.join(".zsh_nerv_perm_test");
+        std::fs::write(&tmp_file, "").unwrap();
+        let cmd = format!("cat {}", tmp_file.display());
         let args = serde_json::json!({"command": cmd});
-        assert!(matches!(
-            check("bash", &args, Some(&repo())),
-            Permission::Ask(_)
-        ));
+        let result = check("bash", &args, Some(&repo()));
+        let _ = std::fs::remove_file(&tmp_file);
+        assert!(matches!(result, Permission::Ask(_)));
     }
 }
 

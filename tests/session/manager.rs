@@ -629,7 +629,6 @@ fn branch_walk_from_leaf() {
     assert_eq!(branch.len(), 3);
 }
 
-#[test]
 // ── FTS5 search tests ────────────────────────────────────────────────
 
 #[test]

@@ -215,22 +215,37 @@ fn parse_kind_filter(s: &str) -> Option<SymbolKind> {
     }
 }
 
-/// Find markdown doc files in the project, respecting .gitignore via ripgrep.
+/// Find markdown doc files in the project root.
 fn find_doc_files(cwd: &std::path::Path) -> Vec<String> {
-    let output = match std::process::Command::new("rg")
+    // Prefer git ls-files: respects .gitignore, any depth, no extra deps.
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "--", "*.md"])
+        .current_dir(cwd)
+        .output();
+    if let Ok(out) = output {
+        if out.status.success() {
+            let mut files: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(|l| l.to_owned())
+                .collect();
+            files.sort();
+            return files;
+        }
+    }
+    // Outside a git repo (e.g. tests): fall back to rg.
+    let output = std::process::Command::new("rg")
         .args(["--files", "--glob", "*.md", "--sort=path"])
         .current_dir(cwd)
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => return vec![],
-    };
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter(|l| !l.is_empty())
-        .take(20)
-        .map(|l| l.to_string())
-        .collect()
+        .output();
+    if let Ok(out) = output {
+        if out.status.success() {
+            return String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(|l| l.to_owned())
+                .collect();
+        }
+    }
+    vec![]
 }
 
 fn find_references(symbol: &str, cwd: &std::path::Path) -> Vec<String> {
@@ -269,6 +284,9 @@ mod tests {
         std::fs::write(tmp.path().join("lib.rs"), "fn hello() {}\n").unwrap();
         std::fs::write(tmp.path().join("README.md"), "# Hello\n").unwrap();
         std::fs::write(tmp.path().join("docs.md"), "# Docs\n").unwrap();
+        // Init a git repo and stage files so git ls-files works (no rg dependency).
+        std::process::Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
+        std::process::Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
 
         let tool = SymbolsTool::new(tmp.path().to_path_buf());
         let cancel = new_cancel_flag();

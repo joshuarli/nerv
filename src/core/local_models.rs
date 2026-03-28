@@ -146,14 +146,30 @@ pub fn recommended_defaults(model_path: &Path) -> LocalModel {
     }
 }
 
+/// Total system RAM in GB (best-effort; falls back to 16 GB).
 pub fn sysctl_mem_gb() -> f64 {
-    sysctl_u64("hw.memsize")
-        .map(|b| b as f64 / (1024.0 * 1024.0 * 1024.0))
-        .unwrap_or(16.0)
+    #[cfg(target_os = "macos")]
+    {
+        sysctl_u64("hw.memsize")
+            .map(|b| b as f64 / (1024.0 * 1024.0 * 1024.0))
+            .unwrap_or(16.0)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        linux_mem_gb()
+    }
 }
 
+/// Physical CPU core count (best-effort; falls back to 4).
 pub fn sysctl_cores() -> u32 {
-    sysctl_u32("hw.physicalcpu").unwrap_or(4)
+    #[cfg(target_os = "macos")]
+    {
+        sysctl_u32("hw.physicalcpu").unwrap_or(4)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        linux_cpu_cores()
+    }
 }
 
 struct HardwareInfo {
@@ -162,17 +178,13 @@ struct HardwareInfo {
 }
 
 fn detect_hardware() -> HardwareInfo {
-    let total_memory_gb = sysctl_u64("hw.memsize")
-        .map(|b| b as f64 / (1024.0 * 1024.0 * 1024.0))
-        .unwrap_or(16.0);
-    let physical_cores = sysctl_u32("hw.physicalcpu").unwrap_or(4);
-
     HardwareInfo {
-        total_memory_gb,
-        physical_cores,
+        total_memory_gb: sysctl_mem_gb(),
+        physical_cores: sysctl_cores(),
     }
 }
 
+#[cfg(target_os = "macos")]
 fn sysctl_u64(name: &str) -> Option<u64> {
     use std::ffi::CString;
     let cname = CString::new(name).ok()?;
@@ -190,6 +202,7 @@ fn sysctl_u64(name: &str) -> Option<u64> {
     if ret == 0 { Some(value) } else { None }
 }
 
+#[cfg(target_os = "macos")]
 fn sysctl_u32(name: &str) -> Option<u32> {
     use std::ffi::CString;
     let cname = CString::new(name).ok()?;
@@ -205,6 +218,33 @@ fn sysctl_u32(name: &str) -> Option<u32> {
         )
     };
     if ret == 0 { Some(value) } else { None }
+}
+
+/// Read total RAM from `/proc/meminfo` on Linux.
+#[cfg(not(target_os = "macos"))]
+fn linux_mem_gb() -> f64 {
+    let Ok(content) = std::fs::read_to_string("/proc/meminfo") else {
+        return 16.0;
+    };
+    for line in content.lines() {
+        // "MemTotal:       16384000 kB"
+        if let Some(rest) = line.strip_prefix("MemTotal:") {
+            if let Some(kb) = rest.split_whitespace().next().and_then(|s| s.parse::<u64>().ok()) {
+                return kb as f64 / (1024.0 * 1024.0);
+            }
+        }
+    }
+    16.0
+}
+
+/// Count physical CPU cores via `/sys/devices/system/cpu/` on Linux.
+#[cfg(not(target_os = "macos"))]
+fn linux_cpu_cores() -> u32 {
+    // nproc is logical cores, but that's the best we can do portably without
+    // parsing /proc/cpuinfo for "core id" deduplication.
+    std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(4)
 }
 
 /// Load models from ~/.nerv/models.json (JSONC).

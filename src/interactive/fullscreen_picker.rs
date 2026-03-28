@@ -76,7 +76,7 @@ pub fn run_fullscreen_picker(list: &mut dyn FullscreenList) -> Option<String> {
         }
         if n < 0 {
             // EINTR (signal interrupted read) — just retry.
-            let errno = unsafe { *libc::__error() };
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
             if errno == libc::EINTR {
                 continue;
             }

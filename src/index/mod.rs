@@ -529,6 +529,7 @@ fn collect_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
                 .filter(|l| !l.is_empty())
                 .filter_map(|l| {
                     let path = PathBuf::from(l);
+                    let path = path.canonicalize().unwrap_or(path);
                     let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
                     Some((path, mtime))
                 })
@@ -550,6 +551,7 @@ fn collect_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
                 .filter(|l| !l.is_empty())
                 .filter_map(|l| {
                     let path = root.join(l);
+                    let path = path.canonicalize().unwrap_or(path);
                     let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
                     Some((path, mtime))
                 })
@@ -584,6 +586,7 @@ fn walk_dir_recursive(dir: &Path, out: &mut HashMap<PathBuf, SystemTime>) {
             walk_dir_recursive(&path, out);
         } else if path.extension().is_some_and(|e| e == "rs") {
             if let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) {
+                let path = path.canonicalize().unwrap_or(path);
                 out.insert(path, mtime);
             }
         }
