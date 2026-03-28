@@ -55,7 +55,8 @@ impl AgentTool for CodemapTool {
 
     fn prompt_guidelines(&self) -> Vec<String> {
         vec![
-            "`codemap` reads the source bodies of matching definitions across files. Use it instead of multiple `read` calls when you need to understand how something works. `depth: full` returns complete implementations; `depth: signatures` returns one-line signatures grouped by file.".into(),
+            "`codemap` reads the source bodies of matching definitions across files. Use a broad query (e.g. `query: \"\"` with a `file` filter) to get an overview of a module or directory in one call. Use a specific query to drill into one symbol. Do not issue separate codemap calls per type — one broad call replaces many.".into(),
+            "`codemap` output is complete source code — do not `read` a file that codemap already returned. `depth: full` returns implementations; `depth: signatures` returns one-line signatures grouped by file.".into(),
             "Tool selection: `symbols` → \"where is X defined?\" (location + signature). `codemap` → \"how does X work?\" (actual source code). `grep` → \"where is X used?\" (call sites, imports, string occurrences). `read` → read a specific file/range you already know.".into(),
         ]
     }

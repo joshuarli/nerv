@@ -1,0 +1,13 @@
+{
+  "prompt": "Trace the cancel_order flow in this codebase. Follow the code path from when cancel_order is called through every module it touches. Identify any design issues, race conditions, or failure modes in the cancellation logic. Write your analysis to answer.md.",
+  "verify": "python3 verify_trace.py",
+  "max_turns": 12,
+  "on_fail": "Look more carefully at the order of operations in cancel_order. What happens if one of the steps fails partway through?",
+  "goals": {
+    "require_before_read": ["symbols", "codemap"],
+    "forbid_bash_search": true,
+    "require_tools": ["symbols", "codemap"],
+    "max_turns": 8,
+    "description": "symbols to find cancel_order and trace dependencies, codemap to read implementations, identify the ordering/atomicity bugs. 5-8 turns."
+  }
+}

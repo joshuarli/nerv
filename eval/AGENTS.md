@@ -130,6 +130,25 @@ every edit (~25+ turns). This task directly measures the impact of:
 - Small file auto-sizing (all files are < 50 lines)
 - System prompt batch guidance (read all first, then edit)
 
+### trace-cancellation (Tool Discipline, Expert)
+
+Trace the `cancel_order` code path through a 10-file e-commerce system
+(~600 lines) with 6 modules: orders, inventory, payments, notifications,
+metrics, shipping. The model must identify two design bugs in the
+cancellation flow: inventory released before refund (no rollback), and
+cancellation notification sent before refund completes.
+
+**What this tests**: Strategic tool use on a larger codebase. `codemap ""`
+is too noisy across 10 files — the model must use `symbols` to find
+`cancel_order` and trace its dependencies, then targeted `codemap` calls
+to read specific implementations. Shipping and inventory/cache are red
+herrings (not in the cancel path). Goals assert:
+- `symbols` or `codemap` before any `read`
+- Both `symbols` and `codemap` used
+- No bash searching
+- ≤8 turns
+- Answer identifies the ordering/atomicity bug and premature notification
+
 ### code-exploration (Tool Discipline)
 
 Explore a small Rust codebase (3 source files, ~200 lines) and write an
