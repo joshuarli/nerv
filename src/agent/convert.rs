@@ -322,6 +322,10 @@ pub fn transform_context(
         })
         .collect();
 
+    // Pass 1c: for stale read results, find lines referenced by later edits on the same file.
+    // This lets us fold unreferenced ranges instead of blindly truncating.
+    let read_referenced_lines = find_read_referenced_lines(&messages);
+
     // Pass 2: transform
     // When stale_cutoff is provided (frozen at the start of a prompt loop), use it
     // so that the stale/recent boundary doesn't shift between consecutive API calls
@@ -433,6 +437,27 @@ pub fn transform_context(
                 }
             }
             AgentMessage::ToolResult {
+                ref tool_call_id,
+                ref content,
+                is_error,
+                timestamp,
+                ..
+            } if i < cutoff
+                && tool_names.get(tool_call_id).map(|n| n.as_str()) == Some("read")
+                && read_referenced_lines.contains_key(tool_call_id) =>
+            {
+                let text = content_text(content);
+                let refs = &read_referenced_lines[tool_call_id];
+                let folded = fold_read_result(&text, refs);
+                Some(AgentMessage::ToolResult {
+                    tool_call_id: tool_call_id.clone(),
+                    content: vec![ContentItem::Text { text: folded }],
+                    is_error,
+                    display: None,
+                    timestamp,
+                })
+            }
+            AgentMessage::ToolResult {
                 tool_call_id,
                 content,
                 is_error,
@@ -493,6 +518,170 @@ fn content_text(content: &[ContentItem]) -> String {
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+/// For each read tool call, find line numbers referenced by later edits on the same file.
+/// Returns a map of tool_call_id → set of referenced line numbers (1-based).
+fn find_read_referenced_lines(
+    messages: &[AgentMessage],
+) -> std::collections::HashMap<String, std::collections::HashSet<usize>> {
+    // Collect read tool calls: (index, tool_call_id, path)
+    let mut reads: Vec<(usize, String, String)> = Vec::new();
+    for (i, msg) in messages.iter().enumerate() {
+        if let AgentMessage::Assistant(a) = msg {
+            for block in &a.content {
+                if let ContentBlock::ToolCall {
+                    id, name, arguments, ..
+                } = block
+                {
+                    if name == "read" {
+                        if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+                            reads.push((i, id.clone(), path.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut result: std::collections::HashMap<String, std::collections::HashSet<usize>> =
+        std::collections::HashMap::new();
+
+    for (read_idx, read_id, read_path) in &reads {
+        // Find the corresponding tool result to parse its lines
+        let read_content = messages[*read_idx + 1..].iter().find_map(|m| match m {
+            AgentMessage::ToolResult {
+                tool_call_id,
+                content,
+                ..
+            } if tool_call_id == read_id => Some(content_text(content)),
+            _ => None,
+        });
+        let read_content = match read_content {
+            Some(c) => c,
+            None => continue,
+        };
+
+        // Parse read output: "  N\tcontent" → Vec<(line_num, content)>
+        let parsed_lines: Vec<(usize, &str)> = read_content
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim_start();
+                let tab_pos = trimmed.find('\t')?;
+                let num: usize = trimmed[..tab_pos].parse().ok()?;
+                let content = &trimmed[tab_pos + 1..];
+                Some((num, content))
+            })
+            .collect();
+
+        if parsed_lines.is_empty() {
+            continue;
+        }
+
+        // Scan forward for edits on the same path
+        for msg in &messages[*read_idx + 1..] {
+            if let AgentMessage::Assistant(a) = msg {
+                for block in &a.content {
+                    if let ContentBlock::ToolCall {
+                        name, arguments, ..
+                    } = block
+                    {
+                        if name == "edit" {
+                            let edit_path =
+                                arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                            if edit_path != read_path {
+                                continue;
+                            }
+                            if let Some(old_str) =
+                                arguments.get("old_string").and_then(|v| v.as_str())
+                            {
+                                // Find which lines in the read match this old_string
+                                let old_lines: Vec<&str> = old_str.lines().collect();
+                                if old_lines.is_empty() {
+                                    continue;
+                                }
+                                // Sliding window match over parsed_lines
+                                for window_start in
+                                    0..parsed_lines.len().saturating_sub(old_lines.len() - 1)
+                                {
+                                    let matches = old_lines.iter().enumerate().all(|(j, ol)| {
+                                        window_start + j < parsed_lines.len()
+                                            && parsed_lines[window_start + j].1 == *ol
+                                    });
+                                    if matches {
+                                        let refs = result.entry(read_id.clone()).or_default();
+                                        for j in 0..old_lines.len() {
+                                            refs.insert(parsed_lines[window_start + j].0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Fold a read result, keeping referenced lines + context and collapsing gaps.
+const FOLD_CONTEXT: usize = 2;
+
+fn fold_read_result(
+    read_text: &str,
+    referenced_lines: &std::collections::HashSet<usize>,
+) -> String {
+    // Parse into (line_num, full_original_line) pairs
+    let lines: Vec<(usize, &str)> = read_text
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            let tab_pos = trimmed.find('\t')?;
+            let num: usize = trimmed[..tab_pos].parse().ok()?;
+            Some((num, line))
+        })
+        .collect();
+
+    if lines.is_empty() {
+        return read_text.to_string();
+    }
+
+    // Build set of lines to keep: referenced + context
+    let mut keep: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for &line_num in referenced_lines {
+        for offset in 0..=(FOLD_CONTEXT * 2) {
+            let n = (line_num + offset).saturating_sub(FOLD_CONTEXT);
+            if n > 0 {
+                keep.insert(n);
+            }
+        }
+    }
+
+    let mut output = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let (num, original) = lines[i];
+        if keep.contains(&num) {
+            output.push(original.to_string());
+            i += 1;
+        } else {
+            // Find the end of this folded range
+            let fold_start = num;
+            while i < lines.len() && !keep.contains(&lines[i].0) {
+                i += 1;
+            }
+            let fold_end = if i > 0 { lines[i - 1].0 } else { fold_start };
+            if fold_start == fold_end {
+                output.push(format!("[line {} omitted]", fold_start));
+            } else {
+                output.push(format!("[lines {}-{} omitted]", fold_start, fold_end));
+            }
+        }
+    }
+
+    output.join("\n")
 }
 
 /// Detect bash success patterns and return a one-line summary.
@@ -1919,6 +2108,131 @@ FAILED (failures=1)";
         ];
         let recent = compute_adaptive_recent(&msgs);
         assert_eq!(recent, RECENT_TURNS, "short conversations use base value");
+    }
+
+    // --- read result folding ---
+
+    #[test]
+    fn stale_read_folds_unreferenced_lines() {
+        // Build a read result with 50 numbered lines (matching read tool format)
+        let read_content = (1..=50)
+            .map(|i| format!("{:>2}\t{}", i, format!("line {} content here", i)))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let mut msgs = vec![
+            user("read and edit"),
+            assistant_tool_call("r1", "read", serde_json::json!({"path": "src/main.rs"})),
+            tool_result("r1", &read_content),
+            // Edit referencing lines 24-26
+            assistant_tool_call("e1", "edit", serde_json::json!({
+                "path": "src/main.rs",
+                "old_string": "line 24 content here\nline 25 content here\nline 26 content here",
+                "new_string": "modified content"
+            })),
+            tool_result("e1", "Edited src/main.rs"),
+            assistant_text("done editing"),
+        ];
+        // Pad to push read into stale zone
+        for i in 0..(RECENT_TURNS + 2) {
+            let id = format!("pad_{}", i);
+            msgs.push(assistant_tool_call(
+                &id,
+                "bash",
+                serde_json::json!({"command": format!("echo {}", i)}),
+            ));
+            msgs.push(tool_result(&id, &format!("{}", i)));
+        }
+
+        let result = transform_context(msgs, 200_000, Some(6));
+        let read_text = match &result[2] {
+            AgentMessage::ToolResult { content, .. } => content_text(content),
+            _ => panic!("expected tool result"),
+        };
+
+        // Referenced lines (24-26) should be preserved
+        assert!(read_text.contains("line 25 content here"), "referenced line should be kept: {}", read_text);
+        // Distant unreferenced lines should be folded
+        assert!(!read_text.contains("line 1 content here"), "far unreferenced line should be folded: {}", read_text);
+        // Should have folding markers
+        assert!(read_text.contains("[lines"), "should have fold markers: {}", read_text);
+    }
+
+    #[test]
+    fn stale_read_without_edits_uses_normal_truncation() {
+        // A stale read with no subsequent edits on the same file should fall through
+        // to normal summarize_tool_content behavior
+        let read_content = (1..=50)
+            .map(|i| format!("{:>2}\t{}", i, format!("line {} stuff", i)))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let mut msgs = vec![
+            user("read file"),
+            assistant_tool_call("r1", "read", serde_json::json!({"path": "src/other.rs"})),
+            tool_result("r1", &read_content),
+            assistant_text("noted"),
+        ];
+        for i in 0..(RECENT_TURNS + 2) {
+            let id = format!("pad_{}", i);
+            msgs.push(assistant_tool_call(
+                &id,
+                "bash",
+                serde_json::json!({"command": format!("echo {}", i)}),
+            ));
+            msgs.push(tool_result(&id, &format!("{}", i)));
+        }
+
+        let result = transform_context(msgs, 200_000, Some(4));
+        let read_text = match &result[2] {
+            AgentMessage::ToolResult { content, .. } => content_text(content),
+            _ => panic!("expected tool result"),
+        };
+
+        // Should use normal truncation (first few lines + truncated marker)
+        assert!(read_text.contains("[truncated:"), "should use normal truncation: {}", read_text);
+    }
+
+    #[test]
+    fn stale_read_fold_preserves_context_around_referenced_lines() {
+        // Verify that a few context lines around referenced lines are kept
+        let read_content = (1..=40)
+            .map(|i| format!("{:>2}\t{}", i, format!("ctx line {}", i)))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let mut msgs = vec![
+            user("work"),
+            assistant_tool_call("r1", "read", serde_json::json!({"path": "src/foo.rs"})),
+            tool_result("r1", &read_content),
+            assistant_tool_call("e1", "edit", serde_json::json!({
+                "path": "src/foo.rs",
+                "old_string": "ctx line 20",
+                "new_string": "modified"
+            })),
+            tool_result("e1", "Edited src/foo.rs"),
+            assistant_text("done"),
+        ];
+        for i in 0..(RECENT_TURNS + 2) {
+            let id = format!("pad_{}", i);
+            msgs.push(assistant_tool_call(
+                &id,
+                "bash",
+                serde_json::json!({"command": format!("echo {}", i)}),
+            ));
+            msgs.push(tool_result(&id, &format!("{}", i)));
+        }
+
+        let result = transform_context(msgs, 200_000, Some(6));
+        let read_text = match &result[2] {
+            AgentMessage::ToolResult { content, .. } => content_text(content),
+            _ => panic!("expected tool result"),
+        };
+
+        // Line 20 and nearby context should be present
+        assert!(read_text.contains("ctx line 20"), "exact referenced line: {}", read_text);
+        // Line 1 should be folded away (far from reference)
+        assert!(!read_text.contains("ctx line 1\n"), "distant line should be folded: {}", read_text);
     }
 
     #[test]
