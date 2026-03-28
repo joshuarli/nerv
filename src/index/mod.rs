@@ -288,16 +288,15 @@ impl SymbolIndex {
     /// lock.write().unwrap().index_dir(&cwd);
     /// ```
     ///
-    /// Returns `true` if the debounce period has not elapsed *or* every file on
-    /// disk has a matching entry in the in-memory index (no parse needed).
+    /// Returns `true` if every `.rs` file under `root` is already indexed at the
+    /// correct mtime — meaning no write lock is needed.
+    ///
+    /// Callers holding an `RwLock<SymbolIndex>` should use this under a read lock
+    /// before deciding whether to escalate to a write lock for [`index_dir`].
     pub fn is_fresh(&self, root: &Path) -> bool {
-        // Respect the same debounce window as index_dir so we don't stat the
-        // whole tree on every tool invocation.
-        if let Some(last) = self.last_scan {
-            if last.elapsed() < SCAN_DEBOUNCE {
-                return true;
-            }
-        }
+        // Always stat — this is the point of the read-lock fast path.
+        // We deliberately do not apply the debounce here; debounce only applies
+        // to index_dir (which does tree-sitter parsing) not to the cheap stat check.
         let on_disk = collect_rs_files(root);
         // Fresh if every file that exists on disk is already indexed at the
         // same mtime, and no indexed file has disappeared (count matches).
@@ -1094,5 +1093,139 @@ mod tests {
         idx2.force_index_dir(tmp.path());
         assert_eq!(idx2.search("version_one", None, None).len(), 0, "stale cache entry should not persist");
         assert_eq!(idx2.search("version_two", None, None).len(), 1);
+    }
+
+    // ── is_fresh / two-phase RwLock tests ────────────────────────────────────
+
+    #[test]
+    fn is_fresh_returns_true_when_nothing_changed() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("lib.rs"), "fn foo() {}\n").unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.force_index_dir(tmp.path());
+
+        // Immediately after a full scan everything on disk matches the index.
+        assert!(index.is_fresh(tmp.path()), "unchanged dir should be fresh");
+    }
+
+    #[test]
+    fn is_fresh_returns_false_when_file_modified() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let f = tmp.path().join("lib.rs");
+        std::fs::write(&f, "fn original() {}\n").unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.force_index_dir(tmp.path());
+
+        // Wait for mtime granularity, then modify.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&f, "fn changed() {}\n").unwrap();
+
+        assert!(!index.is_fresh(tmp.path()), "modified file should make index stale");
+    }
+
+    #[test]
+    fn is_fresh_returns_false_when_file_added() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn a() {}\n").unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.force_index_dir(tmp.path());
+
+        // Add a second file after the scan.
+        std::fs::write(tmp.path().join("b.rs"), "fn b() {}\n").unwrap();
+
+        assert!(!index.is_fresh(tmp.path()), "new file should make index stale");
+    }
+
+    #[test]
+    fn is_fresh_returns_false_when_file_deleted() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let a = tmp.path().join("a.rs");
+        let b = tmp.path().join("b.rs");
+        std::fs::write(&a, "fn a() {}\n").unwrap();
+        std::fs::write(&b, "fn b() {}\n").unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.force_index_dir(tmp.path());
+
+        std::fs::remove_file(&b).unwrap();
+
+        assert!(!index.is_fresh(tmp.path()), "deleted file should make index stale");
+    }
+
+    #[test]
+    fn two_phase_rwlock_serves_search_without_write_lock_when_fresh() {
+        use std::sync::{Arc, RwLock};
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("lib.rs"), "fn omega() {}\n").unwrap();
+
+        let mut idx = SymbolIndex::new();
+        idx.force_index_dir(tmp.path());
+
+        let lock: Arc<RwLock<SymbolIndex>> = Arc::new(RwLock::new(idx));
+        let root = tmp.path().to_path_buf();
+
+        // Simulate what the tools do: read-lock freshness check → search.
+        {
+            let guard = lock.read().unwrap();
+            assert!(guard.is_fresh(&root), "should be fresh — no write lock needed");
+            let results = guard.search("omega", None, None);
+            assert_eq!(results.len(), 1);
+        }
+
+        // Mutate on disk, then simulate the write-lock upgrade path.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(tmp.path().join("lib.rs"), "fn alpha() {}\n").unwrap();
+
+        {
+            let stale = !lock.read().unwrap().is_fresh(&root);
+            assert!(stale, "after modification index should be stale");
+        }
+        // Write-lock upgrade: re-index, then search.
+        lock.write().unwrap().force_index_dir(&root);
+        {
+            let guard = lock.read().unwrap();
+            assert!(guard.is_fresh(&root));
+            assert_eq!(guard.search("alpha", None, None).len(), 1);
+            assert_eq!(guard.search("omega", None, None).len(), 0);
+        }
+    }
+
+    #[test]
+    fn two_phase_rwlock_allows_concurrent_readers() {
+        use std::sync::{Arc, Barrier, RwLock};
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("lib.rs"), "fn shared() {}\n").unwrap();
+
+        let mut idx = SymbolIndex::new();
+        idx.force_index_dir(tmp.path());
+
+        let lock: Arc<RwLock<SymbolIndex>> = Arc::new(RwLock::new(idx));
+        let root = tmp.path().to_path_buf();
+
+        // Spin up 4 reader threads that all hold the read lock simultaneously.
+        let barrier = Arc::new(Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let lock = Arc::clone(&lock);
+                let root = root.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let guard = lock.read().unwrap();
+                    // All threads meet here while all holding the read lock.
+                    barrier.wait();
+                    assert!(guard.is_fresh(&root));
+                    assert_eq!(guard.search("shared", None, None).len(), 1);
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
     }
 }
