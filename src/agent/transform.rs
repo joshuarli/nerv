@@ -128,218 +128,235 @@ pub fn transform_context(
     transform_context_with_config(messages, &config)
 }
 
+/// Pre-computed metadata about the message history. Collected once, read by
+/// each per-message transform so we iterate the input only once for analysis.
+struct MessageMeta {
+    /// tool_call_id → tool name (for tool-specific transforms)
+    tool_names: std::collections::HashMap<String, String>,
+    /// tool_call_ids that have a corresponding ToolResult
+    answered_ids: std::collections::HashSet<String>,
+    /// tool_call_ids whose ToolResult was a denied error
+    denied_ids: std::collections::HashSet<String>,
+    /// tool_call_ids superseded by a later call on the same resource
+    superseded_ids: std::collections::HashSet<String>,
+    /// For read tool calls: line numbers referenced by later edits
+    read_referenced_lines: std::collections::HashMap<String, std::collections::HashSet<usize>>,
+}
+
+impl MessageMeta {
+    fn new(messages: &[AgentMessage]) -> Self {
+        let tool_names: std::collections::HashMap<String, String> = messages
+            .iter()
+            .filter_map(|m| match m {
+                AgentMessage::Assistant(a) => Some(a),
+                _ => None,
+            })
+            .flat_map(|a| &a.content)
+            .filter_map(|b| match b {
+                ContentBlock::ToolCall { id, name, .. } => Some((id.clone(), name.clone())),
+                _ => None,
+            })
+            .collect();
+
+        let answered_ids = messages
+            .iter()
+            .filter_map(|m| match m {
+                AgentMessage::ToolResult { tool_call_id, .. } => Some(tool_call_id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        let denied_ids = messages
+            .iter()
+            .filter_map(|m| match m {
+                AgentMessage::ToolResult {
+                    tool_call_id,
+                    content,
+                    is_error: true,
+                    ..
+                } => {
+                    let text = content
+                        .iter()
+                        .filter_map(|c| match c {
+                            ContentItem::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<String>();
+                    if text.contains("denied") {
+                        Some(tool_call_id.clone())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+
+        Self {
+            tool_names,
+            answered_ids,
+            denied_ids,
+            superseded_ids: find_superseded_results(messages),
+            read_referenced_lines: find_read_referenced_lines(messages),
+        }
+    }
+}
+
 fn transform_context_with_config(
     messages: Vec<AgentMessage>,
     config: &ContextConfig,
 ) -> Vec<AgentMessage> {
-    // Pass 0: find superseded tool calls — walk backwards, track latest call per key.
-    // Earlier calls of the same file/path/pattern are replaced with a short marker.
-    let superseded_ids = find_superseded_results(&messages);
-
-    // Pass 0b: map tool_call_id → tool name for bash success detection
-    let tool_names: std::collections::HashMap<String, String> = messages
-        .iter()
-        .filter_map(|m| match m {
-            AgentMessage::Assistant(a) => Some(a),
-            _ => None,
-        })
-        .flat_map(|a| &a.content)
-        .filter_map(|b| match b {
-            ContentBlock::ToolCall { id, name, .. } => Some((id.clone(), name.clone())),
-            _ => None,
-        })
-        .collect();
-
-    // Pass 1: collect tool_call_ids that have a ToolResult
-    let answered_ids: std::collections::HashSet<String> = messages
-        .iter()
-        .filter_map(|m| match m {
-            AgentMessage::ToolResult { tool_call_id, .. } => Some(tool_call_id.clone()),
-            _ => None,
-        })
-        .collect();
-
-    // Pass 1b: collect tool_call_ids that were denied
-    let denied_ids: std::collections::HashSet<String> = messages
-        .iter()
-        .filter_map(|m| match m {
-            AgentMessage::ToolResult {
-                tool_call_id,
-                content,
-                is_error: true,
-                ..
-            } => {
-                let text = content
-                    .iter()
-                    .filter_map(|c| match c {
-                        ContentItem::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<String>();
-                if text.contains("denied") {
-                    Some(tool_call_id.clone())
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        })
-        .collect();
-
-    // Pass 1c: for stale read results, find lines referenced by later edits on the same file.
-    // This lets us fold unreferenced ranges instead of blindly truncating.
-    let read_referenced_lines = find_read_referenced_lines(&messages);
-
-    // Pass 2: transform
-    // When stale_cutoff is provided (frozen at the start of a prompt loop), use it
-    // so that the stale/recent boundary doesn't shift between consecutive API calls
-    // within the same tool loop — this keeps the message prefix stable for caching.
-    let cutoff = config.stale_cutoff;
+    let meta = MessageMeta::new(&messages);
     messages
         .into_iter()
         .enumerate()
         .filter_map(|(i, msg)| match msg {
-            AgentMessage::Assistant(mut a) => {
-                // Remove orphaned tool calls
-                a.content.retain(|block| match block {
-                    ContentBlock::ToolCall { id, .. } => answered_ids.contains(id),
-                    _ => true,
-                });
-
-                // Strip thinking blocks — they're never referenced in context
-                a.content
-                    .retain(|block| !matches!(block, ContentBlock::Thinking { .. }));
-
-                // Strip args from denied tool calls.
-                // For stale turns, also strip bulky edit/write args (keep only path).
-                a.content = a
-                    .content
-                    .into_iter()
-                    .map(|block| match block {
-                        ContentBlock::ToolCall { id, name, .. } if denied_ids.contains(&id) => {
-                            ContentBlock::ToolCall {
-                                id,
-                                name,
-                                arguments: serde_json::json!({}),
-                            }
-                        }
-                        ContentBlock::ToolCall {
-                            id,
-                            ref name,
-                            ref arguments,
-                        } if i < cutoff && (name == "edit" || name == "write") => {
-                            let path = arguments
-                                .get("path")
-                                .cloned()
-                                .unwrap_or(serde_json::json!(""));
-                            ContentBlock::ToolCall {
-                                id,
-                                name: name.clone(),
-                                arguments: serde_json::json!({"path": path}),
-                            }
-                        }
-                        other => other,
-                    })
-                    .collect();
-
-                if a.content.is_empty() {
-                    None
-                } else {
-                    Some(AgentMessage::Assistant(a))
-                }
-            }
-            AgentMessage::ToolResult {
-                tool_call_id,
-                content: _,
-                is_error,
-                display: _,
-                timestamp,
-            } if superseded_ids.contains(&tool_call_id) => {
-                Some(AgentMessage::ToolResult {
-                    tool_call_id,
-                    content: vec![ContentItem::Text {
-                        text: "[superseded by later call]".into(),
-                    }],
-                    is_error,
-                    display: None,
-                    timestamp,
-                })
-            }
-            AgentMessage::ToolResult {
-                tool_call_id,
-                content,
-                is_error: false,
-                display: _,
-                timestamp,
-            } if tool_names.get(&tool_call_id).map(|n| n.as_str()) == Some("bash") => {
-                let text = content_text(&content);
-                if let Some(compressed) = compress_bash_success(&text) {
-                    Some(AgentMessage::ToolResult {
-                        tool_call_id,
-                        content: vec![ContentItem::Text { text: compressed }],
-                        is_error: false,
-                        display: None,
-                        timestamp,
-                    })
-                } else if i < cutoff {
-                    let summary = summarize_tool_content(&content);
-                    Some(AgentMessage::ToolResult {
-                        tool_call_id,
-                        content: vec![ContentItem::Text { text: summary }],
-                        is_error: false,
-                        display: None,
-                        timestamp,
-                    })
-                } else {
-                    Some(AgentMessage::ToolResult {
-                        tool_call_id,
-                        content,
-                        is_error: false,
-                        display: None,
-                        timestamp,
-                    })
-                }
-            }
-            AgentMessage::ToolResult {
-                ref tool_call_id,
-                ref content,
-                is_error,
-                timestamp,
-                ..
-            } if i < cutoff
-                && tool_names.get(tool_call_id).map(|n| n.as_str()) == Some("read")
-                && read_referenced_lines.contains_key(tool_call_id) =>
-            {
-                let text = content_text(content);
-                let refs = &read_referenced_lines[tool_call_id];
-                let folded = fold_read_result(&text, refs);
-                Some(AgentMessage::ToolResult {
-                    tool_call_id: tool_call_id.clone(),
-                    content: vec![ContentItem::Text { text: folded }],
-                    is_error,
-                    display: None,
-                    timestamp,
-                })
-            }
-            AgentMessage::ToolResult {
-                tool_call_id,
-                content,
-                is_error,
-                display: _,
-                timestamp,
-            } if i < cutoff => {
-                let summary = summarize_tool_content(&content);
-                Some(AgentMessage::ToolResult {
-                    tool_call_id,
-                    content: vec![ContentItem::Text { text: summary }],
-                    is_error,
-                    display: None,
-                    timestamp,
-                })
-            }
+            AgentMessage::Assistant(a) => transform_assistant(a, i, config, &meta),
+            AgentMessage::ToolResult { .. } => transform_tool_result(msg, i, config, &meta),
             other => Some(other),
         })
         .collect()
+}
+
+/// Transform an assistant message: strip orphans, thinking, denied/stale args.
+/// Returns None if all content blocks were removed.
+fn transform_assistant(
+    mut a: AssistantMessage,
+    i: usize,
+    config: &ContextConfig,
+    meta: &MessageMeta,
+) -> Option<AgentMessage> {
+    // Remove orphaned tool calls (no matching ToolResult)
+    a.content.retain(|block| match block {
+        ContentBlock::ToolCall { id, .. } => meta.answered_ids.contains(id),
+        _ => true,
+    });
+
+    // Strip thinking blocks — never referenced in context
+    a.content
+        .retain(|block| !matches!(block, ContentBlock::Thinking { .. }));
+
+    // Strip args from denied tool calls.
+    // For stale turns, also strip bulky edit/write args (keep only path).
+    a.content = a
+        .content
+        .into_iter()
+        .map(|block| match block {
+            ContentBlock::ToolCall { id, name, .. } if meta.denied_ids.contains(&id) => {
+                ContentBlock::ToolCall {
+                    id,
+                    name,
+                    arguments: serde_json::json!({}),
+                }
+            }
+            ContentBlock::ToolCall {
+                id,
+                ref name,
+                ref arguments,
+            } if i < config.stale_cutoff && (name == "edit" || name == "write") => {
+                let path = arguments
+                    .get("path")
+                    .cloned()
+                    .unwrap_or(serde_json::json!(""));
+                ContentBlock::ToolCall {
+                    id,
+                    name: name.clone(),
+                    arguments: serde_json::json!({"path": path}),
+                }
+            }
+            other => other,
+        })
+        .collect();
+
+    if a.content.is_empty() {
+        None
+    } else {
+        Some(AgentMessage::Assistant(a))
+    }
+}
+
+/// Transform a tool result: supersede, compress bash, fold reads, truncate stale.
+fn transform_tool_result(
+    msg: AgentMessage,
+    i: usize,
+    config: &ContextConfig,
+    meta: &MessageMeta,
+) -> Option<AgentMessage> {
+    let AgentMessage::ToolResult {
+        tool_call_id,
+        content,
+        is_error,
+        timestamp,
+        ..
+    } = msg
+    else {
+        return Some(msg);
+    };
+
+    let tool_name = meta.tool_names.get(&tool_call_id).map(|s| s.as_str());
+
+    // Superseded: a later call on the same resource makes this one stale
+    if meta.superseded_ids.contains(&tool_call_id) {
+        return Some(AgentMessage::ToolResult {
+            tool_call_id,
+            content: vec![ContentItem::Text {
+                text: "[superseded by later call]".into(),
+            }],
+            is_error,
+            display: None,
+            timestamp,
+        });
+    }
+
+    // Bash success compression (position-independent)
+    if tool_name == Some("bash") && !is_error {
+        let text = content_text(&content);
+        if let Some(compressed) = compress_bash_success(&text) {
+            return Some(AgentMessage::ToolResult {
+                tool_call_id,
+                content: vec![ContentItem::Text { text: compressed }],
+                is_error: false,
+                display: None,
+                timestamp,
+            });
+        }
+    }
+
+    // Everything below only applies to stale messages
+    if i >= config.stale_cutoff {
+        return Some(AgentMessage::ToolResult {
+            tool_call_id,
+            content,
+            is_error,
+            display: None,
+            timestamp,
+        });
+    }
+
+    // Stale read with referenced lines → fold unreferenced ranges
+    if tool_name == Some("read") {
+        if let Some(refs) = meta.read_referenced_lines.get(&tool_call_id) {
+            let text = content_text(&content);
+            let folded = fold_read_result(&text, refs);
+            return Some(AgentMessage::ToolResult {
+                tool_call_id,
+                content: vec![ContentItem::Text { text: folded }],
+                is_error,
+                display: None,
+                timestamp,
+            });
+        }
+    }
+
+    // Stale generic → truncate
+    let summary = summarize_tool_content(&content);
+    Some(AgentMessage::ToolResult {
+        tool_call_id,
+        content: vec![ContentItem::Text { text: summary }],
+        is_error,
+        display: None,
+        timestamp,
+    })
 }
 
 fn summarize_tool_content(content: &[ContentItem]) -> String {
