@@ -26,7 +26,7 @@ release:
 pgo-profile:
 	rm -rf $(PGO_DIR) && mkdir -p $(PGO_DIR)
 	RUSTFLAGS="-Cprofile-generate=$(PGO_DIR)" \
-	cargo bench
+	cargo bench -- --sample-size 10 --warm-up-time 1 --measurement-time 2
 	$(LLVM_PROFDATA) merge -o $(PGO_MERGED) $(PGO_DIR)
 
 # PGO-optimized release: uses gathered profiles + all aggressive flags.
