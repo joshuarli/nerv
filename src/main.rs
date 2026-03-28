@@ -48,6 +48,7 @@ fn main() {
                 println!("  models               List configured local models");
                 println!("  unload               Kill running llama-server");
                 println!("  codemap <query> [path]  Show symbol implementations matching query");
+                println!("  symbols <query> [path]  List symbol definitions matching query");
                 return;
             }
             "--version" => {
@@ -62,7 +63,7 @@ fn main() {
                 list_all_models();
                 return;
             }
-            "add" | "load" | "models" | "unload" | "export" | "codemap" => {
+            "add" | "load" | "models" | "unload" | "export" | "codemap" | "symbols" => {
                 let nerv_dir = nerv_dir();
                 std::fs::create_dir_all(nerv_dir).ok();
                 handle_subcommand(cmd, &args[2..], nerv_dir);
@@ -1038,6 +1039,72 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
                 depth,
             };
             println!("{}", nerv::index::codemap::codemap(&index, &cwd, &params));
+        }
+        "symbols" => {
+            if args.is_empty() {
+                eprintln!("Usage: nerv symbols <query> [path] [--kind <kind>] [--refs]");
+                std::process::exit(1);
+            }
+            let query = &args[0];
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+            let mut kind_str = None;
+            let mut file_str = None;
+            let mut want_refs = false;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--kind" => { kind_str = args.get(i + 1).map(|s| s.as_str()); i += 2; }
+                    "--file" => { file_str = args.get(i + 1).map(|s| s.as_str()); i += 2; }
+                    "--refs" => { want_refs = true; i += 1; }
+                    s if !s.starts_with('-') && file_str.is_none() => {
+                        file_str = Some(s);
+                        i += 1;
+                    }
+                    _ => { i += 1; }
+                }
+            }
+
+            let kind = kind_str.and_then(nerv::index::codemap::parse_kind);
+            let file_path = file_str.map(|f| {
+                if f.starts_with('/') { PathBuf::from(f) } else { cwd.join(f) }
+            });
+
+            let mut index = nerv::index::SymbolIndex::new();
+            index.force_index_dir(&cwd);
+
+            let results = index.search(query, kind, file_path.as_deref());
+            if results.is_empty() {
+                println!("No definitions found");
+            } else {
+                for sym in &results {
+                    let rel = sym.file.strip_prefix(&cwd).unwrap_or(&sym.file).display();
+                    let parent_suffix = sym.parent.as_ref()
+                        .map(|p| format!("  ({})", p))
+                        .unwrap_or_default();
+                    println!(
+                        "  {}:{:<4}  {} {}{}",
+                        rel, sym.line, sym.kind.label(), sym.signature, parent_suffix,
+                    );
+                }
+                println!("\n{} definitions", results.len());
+            }
+
+            if want_refs {
+                let output = std::process::Command::new("rg")
+                    .args(["--no-heading", "--line-number", "--color=never", "--word-regexp", query])
+                    .current_dir(&cwd)
+                    .output();
+                if let Ok(o) = output {
+                    let refs = String::from_utf8_lossy(&o.stdout);
+                    if !refs.is_empty() {
+                        println!("\nREFERENCES:");
+                        for line in refs.lines().take(50) {
+                            println!("  {}", line);
+                        }
+                    }
+                }
+            }
         }
         _ => {
             eprintln!("Unknown command: {}. Try nerv --help", cmd);
