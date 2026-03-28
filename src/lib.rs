@@ -85,13 +85,37 @@ pub fn repo_fingerprint(repo_root: &std::path::Path) -> Option<String> {
 
 /// Find the repo root by walking up from `start` looking for `.git/`.
 pub fn find_repo_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<std::path::PathBuf, Option<std::path::PathBuf>>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = cache.lock().unwrap();
+    if let Some(cached) = map.get(start) {
+        return cached.clone();
+    }
     let mut dir = start.to_path_buf();
-    loop {
+    let result = loop {
         if dir.join(".git").exists() {
-            return Some(dir);
+            break Some(dir);
         }
         if !dir.pop() {
-            return None;
+            break None;
         }
-    }
+    };
+    map.insert(start.to_path_buf(), result.clone());
+    result
+}
+
+/// Returns the per-repo data directory: `~/.nerv/repos/<repo_id>/`.
+///
+/// Falls back to `nerv_dir` when there is no stable fingerprint (non-git
+/// directories, empty repos, or git unavailable).  Callers must handle both
+/// cases — the directory is created if it does not yet exist.
+pub fn repo_data_dir(cwd: &std::path::Path) -> std::path::PathBuf {
+    let dir = find_repo_root(cwd)
+        .and_then(|root| repo_fingerprint(&root))
+        .map(|fpr| nerv_dir().join("repos").join(fpr))
+        .unwrap_or_else(|| nerv_dir().to_path_buf());
+    dir
 }

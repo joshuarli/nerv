@@ -82,8 +82,9 @@ struct SymbolCache {
 }
 
 impl SymbolCache {
-    fn open(nerv_dir: &Path) -> Option<Self> {
-        let path = nerv_dir.join("symbol_cache.db");
+    fn open(repo_dir: &Path) -> Option<Self> {
+        let _ = std::fs::create_dir_all(repo_dir);
+        let path = repo_dir.join("symbol_cache.db");
         let db = match sqlite::open(&path) {
             Ok(db) => db,
             Err(e) => {
@@ -236,15 +237,15 @@ impl SymbolIndex {
         Self::new_inner(None)
     }
 
-    /// Construct with a persistent on-disk cache at `nerv_dir/symbol_cache.db`.
-    pub fn new_with_cache(nerv_dir: &Path) -> Self {
-        Self::new_inner(SymbolCache::open(nerv_dir))
+    /// Construct with a persistent on-disk cache at `repo_dir/symbol_cache.db`.
+    pub fn new_with_cache(repo_dir: &Path) -> Self {
+        Self::new_inner(SymbolCache::open(repo_dir))
     }
 
     /// Create with a cache, and attach a repo root so paths are stored relative to it.
     /// This makes the cache survive directory renames.
-    pub fn new_with_cache_and_root(nerv_dir: &Path, repo_root: &Path) -> Self {
-        let cache = SymbolCache::open(nerv_dir)
+    pub fn new_with_cache_and_root(repo_dir: &Path, repo_root: &Path) -> Self {
+        let cache = SymbolCache::open(repo_dir)
             .map(|c| c.with_repo_root(repo_root.to_path_buf()));
         Self::new_inner(cache)
     }

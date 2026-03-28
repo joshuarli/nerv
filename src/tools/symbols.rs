@@ -23,11 +23,13 @@ impl SymbolsTool {
     /// If `cwd` is inside a git repo, paths are stored relative to the repo root
     /// so the cache survives directory renames.
     pub fn new_with_cache(cwd: PathBuf, nerv_dir: &std::path::Path) -> Self {
+        let repo_dir = crate::repo_data_dir(&cwd);
         let index = if let Some(repo_root) = crate::find_repo_root(&cwd) {
-            crate::index::SymbolIndex::new_with_cache_and_root(nerv_dir, &repo_root)
+            crate::index::SymbolIndex::new_with_cache_and_root(&repo_dir, &repo_root)
         } else {
-            crate::index::SymbolIndex::new_with_cache(nerv_dir)
+            crate::index::SymbolIndex::new_with_cache(&repo_dir)
         };
+        let _ = nerv_dir; // kept in signature for API stability; path now derived from cwd
         Self {
             cwd,
             index: Arc::new(Mutex::new(index)),

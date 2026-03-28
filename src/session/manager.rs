@@ -20,8 +20,9 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
-    pub fn new(nerv_dir: &Path) -> Self {
-        let db_path = nerv_dir.join("sessions.db");
+    pub fn new(repo_dir: &Path) -> Self {
+        let _ = std::fs::create_dir_all(repo_dir);
+        let db_path = repo_dir.join("sessions.db");
         let db = sqlite::open(&db_path).expect("failed to open sessions.db");
 
         db.execute("PRAGMA journal_mode=WAL").ok();

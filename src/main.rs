@@ -503,7 +503,9 @@ fn repo_gate(cwd: &std::path::Path, nerv_dir: &std::path::Path) -> RepoGateResul
                     is_no_repo = true;
                 }
                 Some(ref fpr) => {
-                    let sm = nerv::session::SessionManager::new(nerv_dir);
+                    let repo_dir = nerv_dir.join("repos").join(fpr);
+                    let _ = std::fs::create_dir_all(&repo_dir);
+                    let sm = nerv::session::SessionManager::new(&repo_dir);
                     if sm.has_sessions_for_repo(fpr) {
                         // Known repo — proceed silently.
                         return RepoGateResult::Continue;
@@ -1246,10 +1248,11 @@ fn launch_picker(
 
     let result = match req {
         PickerRequest::SessionPicker { sessions, repo_root } => {
-            let nerv_dir = nerv_dir();
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let repo_dir = nerv::repo_data_dir(&cwd);
             let search_fn: Box<dyn Fn(&str) -> Vec<nerv::session::manager::SearchResult>> = {
                 Box::new(move |q: &str| {
-                    let mgr = nerv::session::manager::SessionManager::new(nerv_dir);
+                    let mgr = nerv::session::manager::SessionManager::new(&repo_dir);
                     mgr.search_sessions(q)
                 })
             };

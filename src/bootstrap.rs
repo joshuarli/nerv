@@ -141,7 +141,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
 
     let cancel_flag = agent.cancel.clone();
 
-    let session_manager = SessionManager::new(nerv_dir);
+    let session_manager = SessionManager::new(&crate::repo_data_dir(cwd));
 
     let mut session = AgentSession::new(
         agent,
