@@ -104,10 +104,14 @@ either API errors, cache waste, or incorrect behavior.
    keeps permission prompts, file mutation ordering, and cancel semantics
    trivial.
 
-5. **Persistence is batched per turn, not per tool call.** `run_agent_prompt`
-   writes all new messages to SQLite after the tool loop completes. A
-   mid-turn crash loses that turn. This keeps `Agent` decoupled from the
-   session layer — it has no knowledge of persistence.
+5. **Persistence is per-iteration via callback.** `Agent::prompt` accepts
+   an optional `persist_fn: Option<&mut dyn FnMut(&AgentMessage)>` that
+   is called for each message as it's produced (user, assistant, and tool
+   results). `run_agent_prompt` passes a closure that writes to SQLite
+   (WAL mode — cheap single-row inserts). A mid-turn crash recovers
+   everything up to the last completed tool call. `Agent` has no knowledge
+   of SQLite or sessions — persistence is injected, same pattern as
+   `on_event`.
 
 6. **Cancel is cooperative.** `cancel` (AtomicBool) is checked at two
    points: inside `stream_completion` (aborts the SSE read loop) and
@@ -121,19 +125,19 @@ either API errors, cache waste, or incorrect behavior.
 session_task()                          ← OS thread; receives SessionCommand
   AgentSession::prompt()                ← one user turn
     prepare_system_prompt()             ← rebuild tools + system prompt
-    [closure setup: permission_fn, context_gate_fn]
+    prepare_callbacks()                 ← wire permission_fn + context_gate_fn
     run_agent_prompt()
-      Agent::prompt()                   ← the tool loop (agent.rs)
+      Agent::prompt(persist_fn)         ← the tool loop (agent.rs)
         loop {
           stream_response()
             transform_context()         ← 7 zero-cost optimizations
             context gate check          ← circuit breaker
             provider.stream_completion()← SSE stream → content blocks
+          persist_fn(assistant)         ← write to SQLite immediately
           execute_tools()               ← permission → dispatch → result
-          messages.push(results)
+          persist_fn(each tool_result)  ← write to SQLite immediately
         }
-      persist all new messages to SQLite
-    post-turn:
+    post_turn()
       overflow compaction + retry
       threshold compaction
       session naming
@@ -148,7 +152,9 @@ session_task()                          ← OS thread; receives SessionCommand
 | Tool dispatch | `src/agent/agent.rs` | `execute_tools` |
 | Context optimization | `src/agent/convert.rs` | `transform_context` |
 | Session orchestration | `src/core/agent_session.rs` | `AgentSession::prompt` |
-| Persistence | `src/core/agent_session.rs` | `run_agent_prompt` |
+| Callback wiring | `src/core/agent_session.rs` | `prepare_callbacks` |
+| Per-iteration persistence | `src/core/agent_session.rs` | `run_agent_prompt` |
+| Post-turn housekeeping | `src/core/agent_session.rs` | `post_turn` |
 | Compaction | `src/compaction/mod.rs` | `find_cut_point`, `should_compact` |
 
 ## Retry logic
@@ -185,8 +191,3 @@ pre-computing the token estimate before entering the streaming function.
 **`load_state` is split.** Message history and the system prompt are
 rebuilt separately (`reload_agent_context()` and `prepare_system_prompt()`).
 Both run before `run_agent_prompt` but aren't a single named step.
-
-**`AgentSession::prompt` does too much.** At ~260 lines it mixes closure
-setup, the prompt call, and post-turn housekeeping (compaction + naming).
-The closures (~70 lines) and post-turn work (~120 lines) could be
-extracted without changing behavior.

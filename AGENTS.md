@@ -96,7 +96,7 @@ src/
 - **Plan mode**: `/plan`, Shift+Tab, or bare "plan" toggles read-only research mode. Removes edit/write from the tool set and injects a planning-focused system prompt section. `ToolRegistry::set_active` handles the filtering.
 - **Git worktrees**: `/wt <branch>` creates an isolated worktree for the session; `/wt merge` merges back and cleans up. Session DB tracks worktree path for `/resume` restoration.
 - **macOS Keychain**: credentials via `security` CLI, not on disk
-- **Execution loop**: `Agent::prompt` (agent.rs) is the clean inner loop (compress → model → execute → update); `AgentSession::prompt` (agent_session.rs) is the session-aware orchestrator that adds persistence, compaction, and permission wiring. See [docs/execution-loop.md](docs/execution-loop.md).
+- **Execution loop**: `Agent::prompt` (agent.rs) is the clean inner loop (compress → model → execute → persist → update); `AgentSession::prompt` (agent_session.rs) orchestrates via `prepare_callbacks` (permission + context gate), `run_agent_prompt` (per-iteration SQLite persistence via `persist_fn` callback), and `post_turn` (compaction + session naming). See [docs/execution-loop.md](docs/execution-loop.md).
 
 ## Deep dives
 

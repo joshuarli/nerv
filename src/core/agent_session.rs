@@ -244,16 +244,22 @@ impl AgentSession {
                     },
                 ));
 
-        // Set up permission checking for tool calls
+        self.prepare_callbacks(event_tx);
+
+        let new_messages = self.run_agent_prompt(vec![user_msg], event_tx);
+        self.post_turn(new_messages, &text, event_tx);
+    }
+
+    /// Wire up permission_fn and context_gate_fn on the agent before a prompt.
+    fn prepare_callbacks(&mut self, event_tx: &Sender<AgentSessionEvent>) {
+        // Permission checking
         if self.permissions_enabled {
             let repo_root = crate::find_repo_root(&self.cwd);
             let perm_tx = event_tx.clone();
             let cache = self.permission_cache.clone();
-            let (perm_accept_tx, perm_accept_rx) = crossbeam_channel::unbounded();
 
             self.agent.state.permission_fn = Some(std::sync::Arc::new(
                 move |tool: &str, args: &serde_json::Value| {
-                    // Check exact-match cache first
                     let args_json = serde_json::to_string(args).unwrap_or_default();
                     let key = format!("{}:{}", tool, args_json);
                     if cache.lock().unwrap().contains(&key) {
@@ -264,11 +270,6 @@ impl AgentSession {
                     match perm {
                         super::permissions::Permission::Allow => true,
                         super::permissions::Permission::Ask(reason) => {
-                            // Check whether this reason was already approved (e.g. same
-                            // outside-repo path referenced in a different command). This
-                            // lets the user approve once and have subsequent calls that
-                            // trigger the same reason auto-approved for the rest of the
-                            // session.
                             let reason_key = format!("reason:{}", reason);
                             if cache.lock().unwrap().contains(&reason_key) {
                                 return true;
@@ -281,75 +282,54 @@ impl AgentSession {
                                 reason: reason.clone(),
                                 response_tx: resp_tx,
                             });
-                            // Block until user responds
                             let approved = resp_rx.recv().unwrap_or(false);
                             if approved {
-                                // Cache both the exact call and the reason so future
-                                // calls that trigger the same reason are auto-approved.
                                 let mut c = cache.lock().unwrap();
                                 c.insert(key.clone());
                                 c.insert(reason_key);
-                                // Queue for DB recording
-                                let _ = perm_accept_tx.send((tool.to_string(), args_json.clone()));
                             }
                             approved
                         }
                     }
                 },
             ));
-            
-            // Process queued permission accepts after the prompt
-            while let Ok((tool, args)) = perm_accept_rx.try_recv() {
-                use crate::session::types::{gen_entry_id, now_iso, PermissionAcceptEntry, SessionEntry};
-                let entry = PermissionAcceptEntry {
-                    id: gen_entry_id(),
-                    parent_id: self.session_manager.leaf_id().map(|s| s.to_string()),
-                    timestamp: now_iso(),
-                    tool,
-                    args,
-                };
-                let _ = self.session_manager.append_entry(SessionEntry::PermissionAccept(entry));
-            }
-
         }
 
-        // Set up context gate (circuit breaker for context growth)
-        {
-            let gate_tx = event_tx.clone();
-            self.agent.state.context_gate_fn = Some(std::sync::Arc::new(
-                move |info: crate::agent::agent::ContextGateInfo| {
-                    // Need at least a few rounds to establish a baseline — early calls
-                    // always show huge growth from initial file reads.
-                    if info.tool_rounds < 4 || info.prev_tokens == 0 {
-                        return true;
-                    }
-                    let delta = info.estimated_tokens.saturating_sub(info.prev_tokens);
-                    // Only trigger when the absolute growth is significant (>20k tokens,
-                    // roughly a 500-line file) AND represents >30% growth. Small deltas
-                    // from normal tool use (reads, edits) should never prompt.
-                    if delta < 20_000 {
-                        return true;
-                    }
-                    let pct = (delta as f64 / info.prev_tokens as f64) * 100.0;
-                    if pct <= 30.0 {
-                        return true;
-                    }
-                    // Ask user
-                    let (resp_tx, resp_rx) = crossbeam_channel::bounded(1);
-                    let _ = gate_tx.send(AgentSessionEvent::ContextGateRequest {
-                        estimated_tokens: info.estimated_tokens,
-                        prev_tokens: info.prev_tokens,
-                        context_window: info.context_window,
-                        response_tx: resp_tx,
-                    });
-                    resp_rx.recv().unwrap_or(false)
-                },
-            ));
-        }
+        // Context gate (circuit breaker for context growth)
+        let gate_tx = event_tx.clone();
+        self.agent.state.context_gate_fn = Some(std::sync::Arc::new(
+            move |info: crate::agent::agent::ContextGateInfo| {
+                if info.tool_rounds < 4 || info.prev_tokens == 0 {
+                    return true;
+                }
+                let delta = info.estimated_tokens.saturating_sub(info.prev_tokens);
+                if delta < 20_000 {
+                    return true;
+                }
+                let pct = (delta as f64 / info.prev_tokens as f64) * 100.0;
+                if pct <= 30.0 {
+                    return true;
+                }
+                let (resp_tx, resp_rx) = crossbeam_channel::bounded(1);
+                let _ = gate_tx.send(AgentSessionEvent::ContextGateRequest {
+                    estimated_tokens: info.estimated_tokens,
+                    prev_tokens: info.prev_tokens,
+                    context_window: info.context_window,
+                    response_tx: resp_tx,
+                });
+                resp_rx.recv().unwrap_or(false)
+            },
+        ));
+    }
 
-        let new_messages = self.run_agent_prompt(vec![user_msg], event_tx);
-
-        // Check for context overflow → auto-compact → retry
+    /// Handle compaction and session naming after a completed prompt.
+    fn post_turn(
+        &mut self,
+        new_messages: Vec<AgentMessage>,
+        user_text: &str,
+        event_tx: &Sender<AgentSessionEvent>,
+    ) {
+        // Context overflow → auto-compact → retry
         if let Some(last) = last_assistant(&new_messages)
             && last.stop_reason.is_context_overflow()
         {
@@ -360,7 +340,6 @@ impl AgentSession {
 
             match self.run_compaction(None) {
                 Ok(Some(result)) => {
-                    // Reload agent context from compacted session before notifying UI
                     self.reload_agent_context();
                     let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                         summary: Some(result.summary),
@@ -368,9 +347,10 @@ impl AgentSession {
                         messages: self.agent.state.messages.clone(),
                     });
 
-                    // Retry the original prompt
                     let retry_msg = AgentMessage::User {
-                        content: vec![ContentItem::Text { text }],
+                        content: vec![ContentItem::Text {
+                            text: user_text.to_string(),
+                        }],
                         timestamp: now_millis(),
                     };
                     self.prepare_system_prompt();
@@ -402,7 +382,7 @@ impl AgentSession {
             return;
         }
 
-        // Check threshold-based auto-compaction (proactive, before we hit the wall)
+        // Threshold-based auto-compaction (proactive, before we hit the wall)
         if let Some(last) = last_assistant(&new_messages)
             && !last.stop_reason.is_error()
             && let Some(ref usage) = last.usage
@@ -428,7 +408,6 @@ impl AgentSession {
                         });
                     }
                     Ok(None) | Err(_) => {
-                        // Threshold auto-compact: silently skip on failure (will retry next turn)
                         let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                             summary: None,
                             will_retry: false,
@@ -439,30 +418,23 @@ impl AgentSession {
             }
         }
 
-        // Generate a session title after the first completed turn.
-        // session_naming_model: None = unset (use default), Some(None) = disabled, Some(Some(s)) = use s.
+        // Session naming after first completed turn
         if !self.session_named && self.session_manager.name().is_none() {
             let config = NervConfig::load(crate::nerv_dir());
             let naming_model_override: Option<Option<&str>> = config
                 .session_naming_model
                 .as_ref()
                 .map(|inner| inner.as_deref());
-            // Some(None) means the user explicitly set null → skip naming entirely.
             let should_name = !matches!(naming_model_override, Some(None));
             if should_name {
                 let model_hint = naming_model_override.flatten();
-                if let Some((provider, model_id)) =
-                    self.resolve_utility_provider(model_hint)
-                {
-                    // `text` is the original user message string (still in scope).
-                    if !text.is_empty() {
-                        match generate_session_name(&text, provider, &model_id) {
+                if let Some((provider, model_id)) = self.resolve_utility_provider(model_hint) {
+                    if !user_text.is_empty() {
+                        match generate_session_name(user_text, provider, &model_id) {
                             Ok(name) => {
                                 self.session_manager.set_name(&name);
                                 self.session_named = true;
-                                let _ = event_tx.send(AgentSessionEvent::SessionNamed {
-                                    name,
-                                });
+                                let _ = event_tx.send(AgentSessionEvent::SessionNamed { name });
                             }
                             Err(e) => {
                                 crate::log::info(&format!("session naming failed: {e}"));
@@ -513,7 +485,10 @@ impl AgentSession {
         }
     }
 
-    /// Run agent.prompt() with event forwarding and persistence. Returns new messages.
+    /// Run agent.prompt() with event forwarding and per-iteration persistence.
+    /// Each message is written to SQLite as it's produced (WAL mode makes this
+    /// cheap), so a mid-turn crash recovers everything up to the last completed
+    /// tool call. Returns the new messages produced during this prompt.
     fn run_agent_prompt(
         &mut self,
         prompt_messages: Vec<AgentMessage>,
@@ -521,25 +496,28 @@ impl AgentSession {
     ) -> Vec<AgentMessage> {
         let tx = event_tx.clone();
 
-        let new_messages = self.agent.prompt(prompt_messages, &|event: AgentEvent| {
-            let _ = tx.send(AgentSessionEvent::Agent(event));
-        });
+        // Destructure self so the borrow checker sees agent, session_manager,
+        // and session_cost as independent borrows (needed because the persist
+        // closure captures session_manager/session_cost while agent.prompt()
+        // borrows agent).
+        let AgentSession {
+            ref mut agent,
+            ref mut session_manager,
+            ref mut session_cost,
+            ref mut last_input_tokens,
+            ..
+        } = *self;
 
-        let context_window = self
-            .agent
+        let context_window = agent
             .state
             .model
             .as_ref()
             .map(|m| m.context_window)
             .unwrap_or(0);
+        let model_pricing = agent.state.model.as_ref().map(|m| m.pricing.clone());
 
-        // Persist new messages to SQLite with token metadata.
-        // Each AssistantMessage carries its own Usage from its API call,
-        // so we use per-message input tokens (not a single value for the whole turn).
-        // context_used = input + output for that call; input already includes all prior
-        // conversation history, so no running accumulation needed.
-        let mut last_input: u32 = 0;
-        for msg in &new_messages {
+        let mut last_input = 0u32;
+        let mut persist = |msg: &AgentMessage| {
             let tokens = if let AgentMessage::Assistant(a) = msg {
                 let input = a.usage.as_ref().map(|u| u.input).unwrap_or(0);
                 let output = a.usage.as_ref().map(|u| u.output).unwrap_or(0);
@@ -557,19 +535,22 @@ impl AgentSession {
             } else {
                 None
             };
-            let _ = self.session_manager.append_message(msg, tokens);
-        }
-        self.last_input_tokens = last_input;
+            let _ = session_manager.append_message(msg, tokens);
 
-        // Update cost
-        for msg in &new_messages {
             if let AgentMessage::Assistant(assistant) = msg
                 && let Some(ref usage) = assistant.usage
-                && let Some(model) = &self.agent.state.model
+                && let Some(ref pricing) = model_pricing
             {
-                self.session_cost.add_usage(usage, &model.pricing);
+                session_cost.add_usage(usage, pricing);
             }
-        }
+        };
+
+        let new_messages =
+            agent.prompt(prompt_messages, &|event: AgentEvent| {
+                let _ = tx.send(AgentSessionEvent::Agent(event));
+            }, Some(&mut persist));
+
+        *last_input_tokens = last_input;
 
         // Surface non-overflow errors
         if let Some(last) = last_assistant(&new_messages)

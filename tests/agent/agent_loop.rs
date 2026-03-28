@@ -28,7 +28,7 @@ fn collect_events(
     prompt: Vec<AgentMessage>,
 ) -> (Vec<AgentMessage>, Vec<AgentEvent>) {
     let events = std::sync::Mutex::new(Vec::new());
-    let messages = agent.prompt(prompt, &|e| events.lock().unwrap().push(e));
+    let messages = agent.prompt(prompt, &|e| events.lock().unwrap().push(e), None);
     (messages, events.into_inner().unwrap())
 }
 
@@ -232,4 +232,82 @@ fn turn_events_bracket_each_turn() {
         .count();
     assert!(turn_starts >= 2, "should have at least 2 turns");
     assert_eq!(turn_starts, turn_ends, "starts and ends should match");
+}
+
+// --- persist_fn tests ---
+
+/// Collect messages delivered to persist_fn during a prompt.
+fn collect_persisted(
+    agent: &mut Agent,
+    prompt: Vec<AgentMessage>,
+) -> (Vec<AgentMessage>, Vec<AgentMessage>) {
+    let persisted = std::sync::Mutex::new(Vec::new());
+    let mut persist = |msg: &AgentMessage| {
+        persisted.lock().unwrap().push(msg.clone());
+    };
+    let messages = agent.prompt(prompt, &|_| {}, Some(&mut persist));
+    (messages, persisted.into_inner().unwrap())
+}
+
+#[test]
+fn persist_fn_called_for_simple_response() {
+    let mut agent = setup_agent(vec![simple_response("Hello!")]);
+    let (messages, persisted) = collect_persisted(&mut agent, vec![user_msg("Hi")]);
+
+    assert_eq!(persisted.len(), messages.len());
+    assert!(matches!(persisted[0], AgentMessage::User { .. }));
+    assert!(matches!(persisted[1], AgentMessage::Assistant(_)));
+}
+
+#[test]
+fn persist_fn_called_for_tool_loop() {
+    let mut agent = setup_agent(vec![
+        tool_call_response("c1", "echo", r#"{"text":"x"}"#),
+        simple_response("Done"),
+    ]);
+    agent.state.tools = vec![Arc::new(EchoTool)];
+
+    let (messages, persisted) = collect_persisted(&mut agent, vec![user_msg("test")]);
+
+    // Should match: User, Assistant(tool_use), ToolResult, Assistant(text)
+    assert_eq!(persisted.len(), messages.len());
+    assert!(matches!(persisted[0], AgentMessage::User { .. }));
+    assert!(matches!(persisted[1], AgentMessage::Assistant(_)));
+    assert!(matches!(persisted[2], AgentMessage::ToolResult { .. }));
+    assert!(matches!(persisted[3], AgentMessage::Assistant(_)));
+}
+
+#[test]
+fn persist_fn_called_for_error_response() {
+    let mut agent = setup_agent(vec![error_response("boom")]);
+    let (_, persisted) = collect_persisted(&mut agent, vec![user_msg("test")]);
+
+    // User + error Assistant
+    assert_eq!(persisted.len(), 2);
+    if let AgentMessage::Assistant(ref a) = persisted[1] {
+        assert!(a.stop_reason.is_error());
+    } else {
+        panic!("expected assistant error in persisted messages");
+    }
+}
+
+#[test]
+fn persist_fn_order_matches_returned_messages() {
+    let mut agent = setup_agent(vec![
+        tool_call_response("c1", "echo", r#"{"text":"a"}"#),
+        tool_call_response("c2", "echo", r#"{"text":"b"}"#),
+        simple_response("final"),
+    ]);
+    agent.state.tools = vec![Arc::new(EchoTool)];
+
+    let (messages, persisted) = collect_persisted(&mut agent, vec![user_msg("go")]);
+
+    assert_eq!(persisted.len(), messages.len());
+    for (i, (ret, pers)) in messages.iter().zip(persisted.iter()).enumerate() {
+        assert_eq!(
+            std::mem::discriminant(ret),
+            std::mem::discriminant(pers),
+            "message type mismatch at index {i}"
+        );
+    }
 }

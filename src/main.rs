@@ -1155,7 +1155,7 @@ fn print_mode(args: &[String]) {
             }
             _ => {}
         }
-    });
+    }, None);
 
     let wall_time = start.elapsed();
     let m = metrics.into_inner();

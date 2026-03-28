@@ -118,16 +118,22 @@ impl Agent {
     }
 
     /// Run the agentic loop synchronously. Calls `on_event` for each event.
+    /// If `persist_fn` is provided, each new message is persisted to the session
+    /// DB as it's produced (per-iteration), so a mid-turn crash doesn't lose work.
     /// Returns the new messages produced during this prompt.
     pub fn prompt(
         &mut self,
         prompt_messages: Vec<AgentMessage>,
         on_event: &dyn Fn(AgentEvent),
+        persist_fn: Option<&mut dyn FnMut(&AgentMessage)>,
     ) -> Vec<AgentMessage> {
         self.reset_cancel();
         self.state.is_streaming = true;
 
         let mut new_messages: Vec<AgentMessage> = Vec::new();
+
+        // Rebind as mutable so we can pass &mut into closures at each call site.
+        let mut persist_fn = persist_fn;
 
         on_event(AgentEvent::AgentStart);
         on_event(AgentEvent::TurnStart);
@@ -135,6 +141,9 @@ impl Agent {
         for msg in &prompt_messages {
             self.state.messages.push(msg.clone());
             new_messages.push(msg.clone());
+            if let Some(ref mut f) = persist_fn {
+                f(msg);
+            }
             on_event(AgentEvent::MessageStart {
                 message: msg.clone(),
             });
@@ -147,7 +156,11 @@ impl Agent {
         let mut has_tool_calls = true;
         while has_tool_calls {
             let assistant = self.stream_response(on_event, stale_cutoff);
-            new_messages.push(AgentMessage::Assistant(assistant.clone()));
+            let assistant_msg = AgentMessage::Assistant(assistant.clone());
+            new_messages.push(assistant_msg.clone());
+            if let Some(ref mut f) = persist_fn {
+                f(&assistant_msg);
+            }
 
             if assistant.stop_reason.is_error()
                 || matches!(assistant.stop_reason, StopReason::Aborted)
@@ -179,7 +192,10 @@ impl Agent {
                 let results = self.execute_tools(&tool_calls, on_event);
                 for r in results {
                     self.state.messages.push(r.clone());
-                    new_messages.push(r);
+                    new_messages.push(r.clone());
+                    if let Some(ref mut f) = persist_fn {
+                        f(&r);
+                    }
                 }
             }
 
