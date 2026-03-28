@@ -81,11 +81,15 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
         {
             let idx = symbol_index.clone();
             let root = cwd.to_path_buf();
-            std::thread::spawn(move || {
-                if let Ok(mut index) = idx.write() {
-                    index.force_index_dir(&root);
-                }
-            });
+            std::thread::Builder::new()
+                .name("nerv-index".into())
+                .stack_size(512 * 1024)
+                .spawn(move || {
+                    if let Ok(mut index) = idx.write() {
+                        index.force_index_dir(&root);
+                    }
+                })
+                .expect("failed to spawn index thread");
         }
 
         let tools: Vec<Arc<dyn crate::agent::agent::AgentTool>> = {

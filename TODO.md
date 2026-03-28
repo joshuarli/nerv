@@ -1,5 +1,20 @@
 ## General
 
+## Memory (RSS reduction)
+
+- [ ] **Undo stack cap** (`editor.rs`): `undo_stack: Vec<(Vec<String>, usize, usize)>` grows
+      unboundedly — every keystroke pushes a full copy of all editor lines. Cap at 50 entries
+      with `truncate`, same as kill ring.
+
+- [ ] **Evict `source` from `FileEntry` after indexing** (`index/mod.rs`): each `FileEntry`
+      holds `source: Option<Arc<String>>` (the full file text) to serve `codemap` calls.
+      After a full index pass, call a `drop_sources()` sweep to release all file text;
+      re-read on demand when `codemap` needs a body. On a large repo this can be many MB.
+
+- [ ] **Drop `Block::Markdown` raw source after render** (`chat_writer.rs`): once a
+      `Markdown` block has been rendered into `block_lines`, replace it with a
+      `Block::Rendered(Vec<String>)` variant to free the original response body string.
+
 - [ ] Skip `force_index_dir` in `symbols`/`codemap` if no mutating tools have
       run since the last index scan (track a `dirty` flag in `SymbolIndex`,
       set by `edit`/`write` via a shared atomic or by checking the mutation

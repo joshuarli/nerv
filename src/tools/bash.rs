@@ -63,11 +63,15 @@ impl AgentTool for BashTool {
         // if the child fills the stderr buffer while we're blocked reading
         // stdout, both sides stall forever.
         let stderr_thread = child.stderr.take().map(|mut stderr| {
-            std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                let _ = stderr.read_to_end(&mut buf);
-                buf
-            })
+            std::thread::Builder::new()
+                .name("nerv-bash-stderr".into())
+                .stack_size(64 * 1024)
+                .spawn(move || {
+                    let mut buf = Vec::new();
+                    let _ = stderr.read_to_end(&mut buf);
+                    buf
+                })
+                .expect("failed to spawn bash stderr thread")
         });
 
         let mut output = Vec::new();

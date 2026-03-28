@@ -840,7 +840,7 @@ fn main() {
 
     // Channels (crossbeam)
     let (cmd_tx, cmd_rx) = crossbeam_channel::bounded::<SessionCommand>(32);
-    let (event_tx, event_rx) = crossbeam_channel::bounded::<AgentSessionEvent>(256);
+    let (event_tx, event_rx) = crossbeam_channel::bounded::<AgentSessionEvent>(64);
 
     // Capture initial state before session is moved to its thread
     let initial_thinking_level = session.agent.state.thinking_level;
@@ -851,7 +851,11 @@ fn main() {
 
     // Session thread
     let evt_tx = event_tx.clone();
-    std::thread::spawn(move || session_task(cmd_rx, evt_tx, session));
+    std::thread::Builder::new()
+        .name("nerv-session".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || session_task(cmd_rx, evt_tx, session))
+        .expect("failed to spawn session thread");
 
     // Build layout + TUI
     let terminal = ProcessTerminal::new();
@@ -1000,7 +1004,10 @@ fn main() {
         let name = provider_cfg.name.clone();
         let url = format!("{}/models", provider_cfg.base_url);
         let tx = event_tx.clone();
-        std::thread::spawn(move || {
+        std::thread::Builder::new()
+            .name("nerv-provider-health".into())
+            .stack_size(64 * 1024)
+            .spawn(move || {
             let agent = ureq::Agent::config_builder()
                 .timeout_global(Some(std::time::Duration::from_secs(2)))
                 .build()
@@ -1016,14 +1023,18 @@ fn main() {
                 }
                 std::thread::sleep(Duration::from_secs(3));
             }
-        });
+        })
+        .expect("failed to spawn provider health thread");
     }
 
     // Stdin reader thread — uses poll() so it can be paused for $EDITOR
     let stdin_paused = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stdin_paused2 = stdin_paused.clone();
     let (stdin_tx, stdin_rx) = crossbeam_channel::bounded::<Vec<u8>>(64);
-    std::thread::spawn(move || {
+    std::thread::Builder::new()
+        .name("nerv-stdin".into())
+        .stack_size(64 * 1024)
+        .spawn(move || {
         use std::io::Read;
         let mut buf = [0u8; 1024];
         let mut pfd = libc::pollfd {
@@ -1052,7 +1063,8 @@ fn main() {
                 Err(_) => break,
             }
         }
-    });
+    })
+    .expect("failed to spawn stdin reader thread");
 
     // Register signals
     let sigint_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));

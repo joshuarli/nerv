@@ -171,10 +171,23 @@ impl Editor {
     }
 
     fn push_undo(&mut self) {
+        const MAX_UNDO: usize = 50;
         self.undo_stack.truncate(self.undo_index + 1);
         self.undo_stack
             .push((self.lines.clone(), self.cursor_line, self.cursor_col));
+        // Drop the oldest entry when over the cap so memory is bounded.
+        if self.undo_stack.len() > MAX_UNDO {
+            self.undo_stack.remove(0);
+        }
         self.undo_index = self.undo_stack.len() - 1;
+    }
+
+    fn push_kill(&mut self, s: String) {
+        const MAX_KILL: usize = 20;
+        self.kill_ring.push(s);
+        if self.kill_ring.len() > MAX_KILL {
+            self.kill_ring.remove(0);
+        }
     }
 
     fn undo(&mut self) {
@@ -323,7 +336,7 @@ impl Editor {
         if end > self.cursor_col {
             let killed = self.lines[self.cursor_line][self.cursor_col..end].to_string();
             self.lines[self.cursor_line].drain(self.cursor_col..end);
-            self.kill_ring.push(killed);
+            self.push_kill(killed);
             self.push_undo();
         }
     }
@@ -347,7 +360,7 @@ impl Editor {
             let killed = self.lines[self.cursor_line][start..self.cursor_col].to_string();
             self.lines[self.cursor_line].drain(start..self.cursor_col);
             self.cursor_col = start;
-            self.kill_ring.push(killed);
+            self.push_kill(killed);
             self.push_undo();
         }
     }
@@ -420,12 +433,12 @@ impl Editor {
         if self.cursor_col < line.len() {
             let killed = line[self.cursor_col..].to_string();
             self.lines[self.cursor_line].truncate(self.cursor_col);
-            self.kill_ring.push(killed);
+            self.push_kill(killed);
         } else if self.cursor_line + 1 < self.lines.len() {
             // Kill the newline — join with next line
             let next = self.lines.remove(self.cursor_line + 1);
             self.lines[self.cursor_line].push_str(&next);
-            self.kill_ring.push("\n".into());
+            self.push_kill("\n".into());
         }
         self.push_undo();
     }
@@ -435,13 +448,13 @@ impl Editor {
             let killed = self.lines[self.cursor_line][..self.cursor_col].to_string();
             self.lines[self.cursor_line].drain(..self.cursor_col);
             self.cursor_col = 0;
-            self.kill_ring.push(killed);
+            self.push_kill(killed);
         } else if self.cursor_line > 0 {
             let current = self.lines.remove(self.cursor_line);
             self.cursor_line -= 1;
             self.cursor_col = self.lines[self.cursor_line].len();
             self.lines[self.cursor_line].push_str(&current);
-            self.kill_ring.push("\n".into());
+            self.push_kill("\n".into());
         }
         self.push_undo();
     }

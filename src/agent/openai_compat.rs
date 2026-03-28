@@ -226,16 +226,20 @@ impl Provider for OpenAICompatProvider {
         // Read SSE lines in a background thread so the main thread can check
         // the cancel flag without being blocked on network I/O.
         let (line_tx, line_rx) = crossbeam_channel::bounded::<Result<String, String>>(64);
-        std::thread::spawn(move || {
-            let mut body = response.into_body();
-            let reader = std::io::BufReader::new(body.as_reader());
-            for line_result in reader.lines() {
-                let msg = line_result.map_err(|e| e.to_string());
-                if line_tx.send(msg).is_err() {
-                    break; // receiver dropped (cancelled) — body drops, closing connection
+        std::thread::Builder::new()
+            .name("nerv-sse-reader".into())
+            .stack_size(64 * 1024)
+            .spawn(move || {
+                let mut body = response.into_body();
+                let reader = std::io::BufReader::new(body.as_reader());
+                for line_result in reader.lines() {
+                    let msg = line_result.map_err(|e| e.to_string());
+                    if line_tx.send(msg).is_err() {
+                        break; // receiver dropped (cancelled) — body drops, closing connection
+                    }
                 }
-            }
-        });
+            })
+            .expect("failed to spawn SSE reader thread");
 
         let mut usage = Usage::default();
         let poll_interval = std::time::Duration::from_millis(50);

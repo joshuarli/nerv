@@ -309,7 +309,10 @@ impl Provider for AnthropicProvider {
         // Read SSE lines in a background thread so the main thread can check
         // the cancel flag without being blocked on network I/O.
         let (line_tx, line_rx) = crossbeam_channel::bounded::<Result<String, String>>(64);
-        std::thread::spawn(move || {
+        std::thread::Builder::new()
+            .name("nerv-sse-reader".into())
+            .stack_size(64 * 1024)
+            .spawn(move || {
             let mut body = response.into_body();
             let reader = std::io::BufReader::new(body.as_reader());
             for line_result in reader.lines() {
@@ -318,7 +321,8 @@ impl Provider for AnthropicProvider {
                     break; // receiver dropped (cancelled) — body drops, closing connection
                 }
             }
-        });
+        })
+        .expect("failed to spawn SSE reader thread");
 
         let mut current_event_type = String::new();
         let mut sse_state = SseState::default();

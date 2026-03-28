@@ -56,7 +56,8 @@ impl SymbolKind {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SymbolDef {
-    pub name: String,
+    /// `Box<str>` instead of `String`: saves one word (capacity) per field.
+    pub name: Box<str>,
     pub kind: SymbolKind,
     pub file: PathBuf,
     pub line: u32,
@@ -66,8 +67,8 @@ pub struct SymbolDef {
     pub start_byte: u32,
     /// Byte offset one past the last byte of this symbol's node.
     pub end_byte: u32,
-    pub signature: String,
-    pub parent: Option<String>,
+    pub signature: Box<str>,
+    pub parent: Option<Box<str>>,
 }
 
 struct FileEntry {
@@ -549,15 +550,15 @@ impl SymbolIndex {
             };
 
             symbols.push(SymbolDef {
-                name,
+                name: name.into(),
                 kind,
                 file: path.to_path_buf(),
                 line,
                 end_line,
                 start_byte: node.start_byte() as u32,
                 end_byte: node.end_byte() as u32,
-                signature,
-                parent,
+                signature: signature.into(),
+                parent: parent.map(Into::into),
             });
         }
 
