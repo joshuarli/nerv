@@ -1117,7 +1117,11 @@ fn main() {
                                     if !current.is_empty() { interactive.pending_messages[idx] = current; }
                                 }
                                 if let Some(text) = interactive.edit_queue_up() {
-                                    layout.editor.set_text(&text); tui.request_render(false); tui.maybe_render(&layout); continue;
+                                    layout.editor.set_text(&text);
+                                    layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
+                                    layout.statusbar.render_queue(tui.width());
+                                    tui.fixed_bottom = nerv::interactive::layout::BASE_FIXED_BOTTOM + layout.statusbar.queue_line_count();
+                                    tui.request_render(false); tui.maybe_render(&layout); continue;
                                 }
                             }
                             // Up-arrow when not streaming but there are queued messages: dequeue last into editor
@@ -1137,7 +1141,11 @@ fn main() {
                                     if !current.is_empty() { interactive.pending_messages[idx] = current; }
                                 }
                                 if let Some(text) = interactive.edit_queue_down() {
-                                    layout.editor.set_text(&text); tui.request_render(false); tui.maybe_render(&layout); continue;
+                                    layout.editor.set_text(&text);
+                                    layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
+                                    layout.statusbar.render_queue(tui.width());
+                                    tui.fixed_bottom = nerv::interactive::layout::BASE_FIXED_BOTTOM + layout.statusbar.queue_line_count();
+                                    tui.request_render(false); tui.maybe_render(&layout); continue;
                                 }
                             }
                             if keys::matches_key(seq, "backspace") && interactive.editing_queue_idx.is_some()
