@@ -176,10 +176,13 @@ impl AnthropicProvider {
             // pins a breakpoint at the end of the tools block, making all tool definitions
             // an Rc (cache-read) hit after the very first request — including the first
             // request after a compaction, when the conversation messages are cache-cold.
-            // Anthropic allows up to 4 cache_control breakpoints; nerv uses three:
+            // Anthropic allows up to 4 cache_control breakpoints; nerv uses all four:
             //   1. system prompt  (stable for entire session)
             //   2. tool definitions  (stable for entire session)  ← this one
-            //   3. last user message  (advances each turn, written in messages_to_wire)
+            //   3. first user message  (compaction summary or initial prompt — stable)
+            //   4. last user message  (advances each turn)
+            // Breakpoints 3+4 are set in messages_to_wire. When there's only one user
+            // message, 3 is skipped to avoid duplicate breakpoints.
             if request.cache.retention != CacheRetention::None
                 && let Some(last_tool) = tools.last_mut()
             {
@@ -542,12 +545,29 @@ fn messages_to_wire(
         }
     }
 
-    if cache.retention != CacheRetention::None
-        && let Some(last_user_idx) = wire.iter().rposition(|m| m["role"] == "user")
-        && let Some(content) = wire[last_user_idx]["content"].as_array_mut()
-        && let Some(last_block) = content.last_mut()
-    {
-        last_block["cache_control"] = cache_control_value(cache, base_url);
+    if cache.retention != CacheRetention::None {
+        let first_user_idx = wire.iter().position(|m| m["role"] == "user");
+        let last_user_idx = wire.iter().rposition(|m| m["role"] == "user");
+
+        // 4th breakpoint: pin the first user message (compaction summary or initial prompt).
+        // This creates a stable cache segment so the summary is Rc on every post-compaction call.
+        // Skip when first == last to avoid a duplicate breakpoint on the same message.
+        if let Some(fi) = first_user_idx
+            && let Some(li) = last_user_idx
+            && fi != li
+            && let Some(content) = wire[fi]["content"].as_array_mut()
+            && let Some(last_block) = content.last_mut()
+        {
+            last_block["cache_control"] = cache_control_value(cache, base_url);
+        }
+
+        // 3rd breakpoint: pin the last user message (advances each turn).
+        if let Some(li) = last_user_idx
+            && let Some(content) = wire[li]["content"].as_array_mut()
+            && let Some(last_block) = content.last_mut()
+        {
+            last_block["cache_control"] = cache_control_value(cache, base_url);
+        }
     }
 
     wire
@@ -762,5 +782,93 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    // --- cache breakpoint tests ---
+
+    use crate::agent::convert::{LlmContent, LlmMessage};
+
+    fn make_cache(retention: CacheRetention) -> CacheConfig {
+        CacheConfig { retention }
+    }
+
+    #[test]
+    fn first_user_message_gets_cache_breakpoint_in_multi_turn() {
+        let messages = vec![
+            LlmMessage::User {
+                content: vec![LlmContent::Text("summary of prior context".into())],
+            },
+            LlmMessage::Assistant {
+                content: vec![LlmContent::Text("ok".into())],
+            },
+            LlmMessage::User {
+                content: vec![LlmContent::Text("do something".into())],
+            },
+            LlmMessage::Assistant {
+                content: vec![LlmContent::Text("done".into())],
+            },
+            LlmMessage::User {
+                content: vec![LlmContent::Text("latest question".into())],
+            },
+        ];
+        let wire = messages_to_wire(&messages, &make_cache(CacheRetention::Long), "https://api.anthropic.com");
+
+        // First user message should have cache_control on its last content block
+        let first_user = &wire[0];
+        let first_content = first_user["content"].as_array().unwrap();
+        assert!(
+            first_content.last().unwrap().get("cache_control").is_some(),
+            "first user message should have cache breakpoint: {:?}",
+            first_content,
+        );
+
+        // Last user message should also have cache_control
+        let last_user = &wire[4];
+        let last_content = last_user["content"].as_array().unwrap();
+        assert!(
+            last_content.last().unwrap().get("cache_control").is_some(),
+            "last user message should still have cache breakpoint",
+        );
+    }
+
+    #[test]
+    fn single_user_message_no_duplicate_breakpoint() {
+        // When there's only one user message, it's both first and last —
+        // should only get one breakpoint, not two
+        let messages = vec![
+            LlmMessage::User {
+                content: vec![LlmContent::Text("hello".into())],
+            },
+        ];
+        let wire = messages_to_wire(&messages, &make_cache(CacheRetention::Long), "https://api.anthropic.com");
+        let content = wire[0]["content"].as_array().unwrap();
+        // Should have cache_control (from the last-user-message logic)
+        assert!(content.last().unwrap().get("cache_control").is_some());
+    }
+
+    #[test]
+    fn no_cache_breakpoints_when_disabled() {
+        let messages = vec![
+            LlmMessage::User {
+                content: vec![LlmContent::Text("summary".into())],
+            },
+            LlmMessage::Assistant {
+                content: vec![LlmContent::Text("ok".into())],
+            },
+            LlmMessage::User {
+                content: vec![LlmContent::Text("question".into())],
+            },
+        ];
+        let wire = messages_to_wire(&messages, &make_cache(CacheRetention::None), "https://api.anthropic.com");
+        for msg in &wire {
+            if let Some(content) = msg["content"].as_array() {
+                for block in content {
+                    assert!(
+                        block.get("cache_control").is_none() || block["cache_control"].is_null(),
+                        "no cache breakpoints when caching disabled: {:?}", block,
+                    );
+                }
+            }
+        }
     }
 }

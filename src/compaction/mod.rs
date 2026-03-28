@@ -16,10 +16,12 @@ pub struct CompactionSettings {
     ///   - oldest part  → passed to the summarizer, replaced by a compact summary
     ///   - newest part  → kept verbatim in the DB (this is the verbatim window)
     ///
-    /// The verbatim window exists for cache efficiency. Those recent turns were already
-    /// cache-read (Rc) hits in the conversation before compaction; keeping them byte-for-byte
-    /// means they remain Rc on the very next API call. Only the summary prefix is cache-cold
-    /// (Wc) post-compaction. Set to 0 to summarize the entire kept range (original behaviour).
+    /// The verbatim window saves summarizer cost (fewer tokens sent to Haiku) and
+    /// accelerates cache recovery: the first post-compaction API call is cache-cold
+    /// regardless, but the cache breakpoint on the summary (bp3) means the summary is
+    /// Rc from the second call onward. The verbatim messages, being byte-identical to
+    /// what was sent pre-compaction, form a stable suffix that helps the prefix match
+    /// on subsequent calls. Set to 0 to summarize the entire kept range.
     pub verbatim_window_tokens: usize,
 }
 
