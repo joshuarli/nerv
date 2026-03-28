@@ -253,6 +253,7 @@ impl SymbolIndex {
         file_filter: Option<&Path>,
     ) -> Vec<&SymbolDef> {
         let query_lower = query.to_lowercase();
+        let words: Vec<&str> = query_lower.split_whitespace().collect();
         let canonical_filter = file_filter.and_then(|f| f.canonicalize().ok());
         let filter_ref = canonical_filter.as_deref().or(file_filter);
         let mut results: Vec<&SymbolDef> = self
@@ -265,17 +266,29 @@ impl SymbolIndex {
             })
             .flat_map(|(_, entry)| entry.symbols.iter())
             .filter(|sym| {
-                sym.name.to_lowercase().contains(&query_lower)
-                    && kind_filter.map(|k| sym.kind == k).unwrap_or(true)
+                let name = sym.name.to_lowercase();
+                let matches = if words.len() > 1 {
+                    // Multi-word: match if ANY word is a substring of the name
+                    words.iter().any(|w| name.contains(w))
+                } else {
+                    name.contains(&query_lower)
+                };
+                matches && kind_filter.map(|k| sym.kind == k).unwrap_or(true)
             })
             .collect();
 
-        // Sort: exact matches first, then by file path and line
+        // Sort: exact match first, then by word-match count (more = better),
+        // then by file path and line.
         results.sort_by(|a, b| {
+            let a_name = a.name.to_lowercase();
+            let b_name = b.name.to_lowercase();
             let a_exact = a.name.eq_ignore_ascii_case(query);
             let b_exact = b.name.eq_ignore_ascii_case(query);
+            let a_hits = words.iter().filter(|w| a_name.contains(*w)).count();
+            let b_hits = words.iter().filter(|w| b_name.contains(*w)).count();
             b_exact
                 .cmp(&a_exact)
+                .then_with(|| b_hits.cmp(&a_hits))
                 .then_with(|| a.file.cmp(&b.file))
                 .then_with(|| a.line.cmp(&b.line))
         });
@@ -595,6 +608,29 @@ mod tests {
 
         let sub_only = index.search("target", None, Some(&sub));
         assert_eq!(sub_only.len(), 1);
+    }
+
+    #[test]
+    fn multi_word_search() {
+        let mut index = SymbolIndex::new();
+        let source = "fn execute_tools() {}\nfn check_permission() {}\nfn render_ui() {}\n";
+        let syms = index.parse_symbols(Path::new("test.rs"), source);
+        index.files.insert(
+            PathBuf::from("test.rs"),
+            FileEntry { mtime: SystemTime::UNIX_EPOCH, symbols: syms },
+        );
+
+        // Multi-word query matches any word
+        let results = index.search("execute permission", None, None);
+        let names: Vec<&str> = results.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"execute_tools"), "should match 'execute'");
+        assert!(names.contains(&"check_permission"), "should match 'permission'");
+        assert!(!names.contains(&"render_ui"), "should not match unrelated");
+
+        // Single-word still works as substring
+        let results = index.search("perm", None, None);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "check_permission");
     }
 
     #[test]

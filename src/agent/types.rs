@@ -32,7 +32,9 @@ pub struct Cost {
 
 impl Cost {
     pub fn add_usage(&mut self, usage: &Usage, pricing: &ModelPricing) {
-        self.input += (pricing.input / 1_000_000.0) * usage.input as f64;
+        // usage.input includes cache_read + cache_write — subtract them to avoid double-counting.
+        let uncached = usage.input.saturating_sub(usage.cache_read + usage.cache_write);
+        self.input += (pricing.input / 1_000_000.0) * uncached as f64;
         self.output += (pricing.output / 1_000_000.0) * usage.output as f64;
         self.cache_read += (pricing.cache_read / 1_000_000.0) * usage.cache_read as f64;
         self.cache_write += (pricing.cache_write / 1_000_000.0) * usage.cache_write as f64;

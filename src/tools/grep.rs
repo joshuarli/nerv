@@ -105,7 +105,14 @@ impl AgentTool for GrepTool {
             cmd.arg("--glob").arg(g);
         }
 
-        cmd.arg(pattern).arg(&resolved_path);
+        // Pass relative paths as-is (current_dir is already set).
+        // Resolving to absolute breaks ripgrep's --glob matching.
+        let search_path = if path.starts_with('~') || path.starts_with('/') {
+            resolved_path
+        } else {
+            path.to_string()
+        };
+        cmd.arg(pattern).arg(&search_path);
 
         match cmd.output() {
             Ok(output) => {
