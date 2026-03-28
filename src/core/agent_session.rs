@@ -140,6 +140,7 @@ pub enum SessionCommand {
     CreateWorktree { branch_name: String, nerv_dir: PathBuf },
     MergeWorktree,
     SetPlanMode { enabled: bool },
+    ForkSession,
 }
 
 pub struct AgentSession {
@@ -1035,6 +1036,30 @@ pub fn session_task(
             }
             SessionCommand::SetPlanMode { enabled } => {
                 session.set_plan_mode(enabled, &event_tx);
+            }
+            SessionCommand::ForkSession => {
+                match session.session_manager.fork_session() {
+                    Ok(new_id) => {
+                        let short = new_id
+                            .char_indices()
+                            .nth(8)
+                            .map_or(new_id.as_str(), |(i, _)| &new_id[..i]);
+                        let _ = event_tx.send(AgentSessionEvent::SessionStarted {
+                            id: new_id.clone(),
+                            name: session.session_manager.name(),
+                        });
+                        let _ = event_tx.send(AgentSessionEvent::Status {
+                            message: format!("Forked to new session {short}."),
+                            is_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = event_tx.send(AgentSessionEvent::Status {
+                            message: format!("Fork failed: {e}"),
+                            is_error: true,
+                        });
+                    }
+                }
             }
             SessionCommand::SetCompactThreshold { pct } => {
                 let frac = (pct as f64 / 100.0).clamp(0.01, 1.0);

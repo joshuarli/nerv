@@ -44,6 +44,36 @@ impl SessionEntry {
         }
     }
 
+    pub fn set_id(&mut self, new_id: String) {
+        match self {
+            Self::Message(e) => e.id = new_id,
+            Self::ThinkingLevelChange(e) => e.id = new_id,
+            Self::ModelChange(e) => e.id = new_id,
+            Self::Compaction(e) => e.id = new_id,
+            Self::BranchSummary(e) => e.id = new_id,
+            Self::CustomMessage(e) => e.id = new_id,
+            Self::Label(e) => e.id = new_id,
+            Self::SessionInfo(e) => e.id = new_id,
+            Self::SystemPrompt(e) => e.id = new_id,
+            Self::PermissionAccept(e) => e.id = new_id,
+        }
+    }
+
+    pub fn set_parent_id(&mut self, new_parent: Option<String>) {
+        match self {
+            Self::Message(e) => e.parent_id = new_parent,
+            Self::ThinkingLevelChange(e) => e.parent_id = new_parent,
+            Self::ModelChange(e) => e.parent_id = new_parent,
+            Self::Compaction(e) => e.parent_id = new_parent,
+            Self::BranchSummary(e) => e.parent_id = new_parent,
+            Self::CustomMessage(e) => e.parent_id = new_parent,
+            Self::Label(e) => e.parent_id = new_parent,
+            Self::SessionInfo(e) => e.parent_id = new_parent,
+            Self::SystemPrompt(e) => e.parent_id = new_parent,
+            Self::PermissionAccept(e) => e.parent_id = new_parent,
+        }
+    }
+
     pub fn parent_id(&self) -> Option<&str> {
         match self {
             Self::Message(e) => e.parent_id.as_deref(),

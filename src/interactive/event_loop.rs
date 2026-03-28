@@ -860,6 +860,9 @@ impl InteractiveMode {
                 auth.remove(provider);
                 self.status_message = Some(format!("Logged out from {}.", provider));
             }
+            "/fork" => {
+                let _ = self.cmd_tx.send(SessionCommand::ForkSession);
+            }
             "/new" => {
                 let _ = self.cmd_tx.send(SessionCommand::NewSession);
             }
@@ -900,6 +903,7 @@ impl InteractiveMode {
                      /wt <branch>    — create git worktree for session\n\
                      /wt merge       — merge worktree back and clean up\n\
                      /plan           — toggle plan mode (read-only research)\n\
+                     /fork           — fork session into a new independent copy\n\
                      /new            — start new session\n\
                      /quit           — quit nerv\n\
                      /help           — this message",
@@ -991,6 +995,7 @@ impl InteractiveMode {
             "/resume".into(),
             "/tree".into(),
             "/plan".into(),
+            "/fork".into(),
             "/wt".into(),
             "/login".into(),
             "/logout".into(),

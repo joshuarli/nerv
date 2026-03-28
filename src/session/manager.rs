@@ -719,6 +719,152 @@ impl SessionManager {
     /// Return the `repo_id` (initial-commit SHA) for the current active session, if any.
     /// Return true if any session in the DB was started in a repository
     /// identified by `repo_id` (the initial-commit SHA fingerprint).
+    /// Copy the current branch (root → leaf) into a brand-new session and switch to it.
+    ///
+    /// All entries on the active branch are duplicated into the new session, preserving
+    /// their existing `id`, `parent_id`, and `seq` values so the tree structure is
+    /// intact.  The `search_index` rows are copied as well.  Sibling branches from the
+    /// source session are intentionally left behind — only the path you are currently
+    /// on is forked.
+    ///
+    /// Returns the new session id on success.
+    pub fn fork_session(&mut self) -> anyhow::Result<String> {
+        let src_id = self
+            .session_id
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("no active session"))?
+            .clone();
+
+        // Collect the branch entry ids we want to copy.
+        let branch_ids: Vec<String> = self
+            .get_branch()
+            .iter()
+            .map(|e| e.id().to_string())
+            .collect();
+
+        if branch_ids.is_empty() {
+            anyhow::bail!("nothing to fork — session has no entries");
+        }
+
+        let new_id = crate::session::types::gen_session_id();
+        let now = now_iso();
+
+        // Everything runs inside a transaction; roll back on any error.
+        self.db.execute("BEGIN")?;
+        let result = self.fork_session_inner(&src_id, &new_id, &now, &branch_ids);
+        if result.is_err() {
+            self.db.execute("ROLLBACK").ok();
+            return result.map(|_| new_id);
+        }
+        self.db.execute("COMMIT")?;
+
+        // Switch to the new session and reload in-memory state.  The entry ids
+        // are identical to the source but the owning session_id has changed, so
+        // we must reload rather than relying on the stale in-memory view.
+        self.session_id = Some(new_id.clone());
+        self.reload_entries()?;
+
+        Ok(new_id)
+    }
+
+    fn fork_session_inner(
+        &self,
+        src_id: &str,
+        new_id: &str,
+        now: &str,
+        branch_ids: &[String],
+    ) -> anyhow::Result<()> {
+        // Copy session metadata row, stamping a fresh id and timestamp.
+        // name, cwd, worktree, compact_threshold, repo_id and preview all
+        // carry over so the fork looks like the original in /resume.
+        let mut stmt = self.db.prepare(
+            "INSERT INTO sessions (id, cwd, created_at, updated_at, preview, worktree, name, compact_threshold, repo_id)
+             SELECT ?, cwd, ?, ?, preview, worktree, name, compact_threshold, repo_id
+             FROM sessions WHERE id = ?",
+        )?;
+        stmt.bind((1, new_id))?;
+        stmt.bind((2, now))?;
+        stmt.bind((3, now))?;
+        stmt.bind((4, src_id))?;
+        stmt.next()?;
+
+        // Assign a fresh entry id for every copied entry.  Entry ids are a
+        // PRIMARY KEY across the whole DB (not scoped to session_id), so we
+        // cannot reuse the source ids within the same database file.  We also
+        // remap parent_id references so the parent chain stays intact.
+        let id_map: HashMap<String, String> = branch_ids
+            .iter()
+            .map(|old| (old.clone(), gen_entry_id()))
+            .collect();
+
+        for old_id in branch_ids {
+            let new_entry_id = &id_map[old_id];
+
+            // Read the source row.
+            let mut sel = self.db.prepare(
+                "SELECT parent_id, seq, data FROM entries WHERE id = ?",
+            )?;
+            sel.bind((1, old_id.as_str()))?;
+            if sel.next()? != sqlite::State::Row {
+                anyhow::bail!("entry {old_id} not found during fork");
+            }
+            let parent_id_raw: Option<String> = sel.read("parent_id").ok();
+            let seq: i64 = sel.read("seq")?;
+            let data: String = sel.read("data")?;
+
+            // Remap parent_id if it was also in this branch (it always is for a
+            // linear branch, but be safe).
+            let mapped_parent: Option<String> = parent_id_raw
+                .as_deref()
+                .map(|p| id_map.get(p).map(|s| s.as_str()).unwrap_or(p).to_string());
+
+            // Patch the id and parent_id inside the JSON data blob so that
+            // reload_entries sees consistent state (entry.id() must match the
+            // DB id column, and parent chain must use the new ids).
+            let patched_data = {
+                let mut entry: SessionEntry = serde_json::from_str(&data)
+                    .map_err(|e| anyhow::anyhow!("deserialise entry {old_id}: {e}"))?;
+                entry.set_id(new_entry_id.clone());
+                entry.set_parent_id(mapped_parent.clone());
+                serde_json::to_string(&entry)
+                    .map_err(|e| anyhow::anyhow!("serialise fork entry: {e}"))?
+            };
+
+            let mut ins = self.db.prepare(
+                "INSERT INTO entries (id, session_id, parent_id, seq, data) VALUES (?, ?, ?, ?, ?)",
+            )?;
+            ins.bind((1, new_entry_id.as_str()))?;
+            ins.bind((2, new_id))?;
+            match mapped_parent.as_deref() {
+                Some(p) => ins.bind((3, p))?,
+                None => ins.bind((3, sqlite::Value::Null))?,
+            };
+            ins.bind((4, seq))?;
+            ins.bind((5, patched_data.as_str()))?;
+            ins.next()?;
+
+            // Copy search_index rows, updating entry_id to the new id.
+            let mut si_sel = self.db.prepare(
+                "SELECT text, role FROM search_index WHERE entry_id = ?",
+            )?;
+            si_sel.bind((1, old_id.as_str()))?;
+            while si_sel.next()? == sqlite::State::Row {
+                let text: String = si_sel.read("text")?;
+                let role: String = si_sel.read("role")?;
+                let mut si_ins = self.db.prepare(
+                    "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?, ?, ?, ?)",
+                )?;
+                si_ins.bind((1, text.as_str()))?;
+                si_ins.bind((2, new_id))?;
+                si_ins.bind((3, new_entry_id.as_str()))?;
+                si_ins.bind((4, role.as_str()))?;
+                si_ins.next()?;
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn has_sessions_for_repo(&self, repo_id: &str) -> bool {
         let mut stmt = match self
             .db
@@ -1145,4 +1291,308 @@ fn backfill_search_index(db: &sqlite::Connection) {
         }
     }
     db.execute("COMMIT").ok();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::types::{AgentMessage, AssistantMessage, ContentBlock, StopReason};
+
+    /// Build an in-memory SessionManager (no on-disk DB).
+    fn make_manager() -> SessionManager {
+        let db = sqlite::open(":memory:").expect("in-memory db");
+        db.execute("PRAGMA journal_mode=WAL").ok();
+        db.execute("PRAGMA synchronous=NORMAL").ok();
+
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS sessions (
+                id                TEXT PRIMARY KEY,
+                cwd               TEXT NOT NULL,
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL,
+                preview           TEXT NOT NULL DEFAULT '',
+                worktree          TEXT,
+                name              TEXT,
+                compact_threshold REAL,
+                repo_id           TEXT
+            )",
+        )
+        .unwrap();
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS entries (
+                id         TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES sessions(id),
+                parent_id  TEXT,
+                seq        INTEGER NOT NULL,
+                data       TEXT NOT NULL
+            )",
+        )
+        .unwrap();
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entries_session ON entries(session_id, seq)",
+        )
+        .ok();
+        db.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
+                text,
+                session_id UNINDEXED,
+                entry_id UNINDEXED,
+                role UNINDEXED,
+                tokenize = 'porter unicode61'
+            )",
+        )
+        .unwrap();
+
+        SessionManager {
+            db,
+            session_id: None,
+            entries: Vec::new(),
+            by_id: HashMap::new(),
+            leaf_id: None,
+            next_seq: 0,
+        }
+    }
+
+    fn user_msg(text: &str) -> AgentMessage {
+        AgentMessage::User {
+            content: vec![crate::agent::types::ContentItem::Text {
+                text: text.to_string(),
+            }],
+            timestamp: 0,
+        }
+    }
+
+    fn assistant_msg(text: &str) -> AgentMessage {
+        AgentMessage::Assistant(AssistantMessage {
+            content: vec![ContentBlock::Text {
+                text: text.to_string(),
+            }],
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+            timestamp: 0,
+        })
+    }
+
+    /// Count entries directly from the DB for a given session.
+    fn db_entry_count(mgr: &SessionManager, session_id: &str) -> usize {
+        mgr.count_entries(session_id) as usize
+    }
+
+    /// Fetch all entry ids from the DB for a given session, ordered by seq.
+    fn db_entry_ids(mgr: &SessionManager, session_id: &str) -> Vec<String> {
+        let mut stmt = mgr
+            .db
+            .prepare("SELECT id FROM entries WHERE session_id = ? ORDER BY seq")
+            .unwrap();
+        stmt.bind((1, session_id)).unwrap();
+        let mut ids = Vec::new();
+        while stmt.next().unwrap() == sqlite::State::Row {
+            ids.push(stmt.read::<String, _>("id").unwrap());
+        }
+        ids
+    }
+
+    /// Count search_index rows for a session.
+    fn db_search_count(mgr: &SessionManager, session_id: &str) -> usize {
+        let mut stmt = mgr
+            .db
+            .prepare("SELECT COUNT(*) as c FROM search_index WHERE session_id = ?")
+            .unwrap();
+        stmt.bind((1, session_id)).unwrap();
+        if stmt.next().unwrap() == sqlite::State::Row {
+            stmt.read::<i64, _>("c").unwrap() as usize
+        } else {
+            0
+        }
+    }
+
+    // ── basic: fork copies entries and creates a new session ──────────────────
+
+    #[test]
+    fn fork_creates_new_session_row() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+        let src_id = mgr.session_id().to_string();
+
+        mgr.append_message(&user_msg("hello"), None).unwrap();
+        mgr.append_message(&assistant_msg("world"), None).unwrap();
+
+        let fork_id = mgr.fork_session().unwrap();
+
+        assert_ne!(fork_id, src_id, "fork must have a different session id");
+        assert_eq!(mgr.session_id(), fork_id, "manager must switch to the fork");
+    }
+
+    #[test]
+    fn fork_copies_all_branch_entries() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+        let src_id = mgr.session_id().to_string();
+
+        mgr.append_message(&user_msg("one"), None).unwrap();
+        mgr.append_message(&assistant_msg("two"), None).unwrap();
+        mgr.append_message(&user_msg("three"), None).unwrap();
+
+        let fork_id = mgr.fork_session().unwrap();
+
+        assert_eq!(db_entry_count(&mgr, &src_id), 3, "source entries unchanged");
+        assert_eq!(db_entry_count(&mgr, &fork_id), 3, "fork has same entry count");
+    }
+
+    #[test]
+    fn fork_entry_ids_are_distinct_from_source() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+        let src_id = mgr.session_id().to_string();
+
+        mgr.append_message(&user_msg("a"), None).unwrap();
+        mgr.append_message(&assistant_msg("b"), None).unwrap();
+
+        let fork_id = mgr.fork_session().unwrap();
+
+        let src_ids = db_entry_ids(&mgr, &src_id);
+        let fork_ids = db_entry_ids(&mgr, &fork_id);
+        // Fresh ids are generated for each fork entry — no collisions in the same DB.
+        assert_eq!(src_ids.len(), fork_ids.len(), "same number of entries");
+        for id in &fork_ids {
+            assert!(!src_ids.contains(id), "fork entry id {id} must not collide with source");
+        }
+    }
+
+    // ── in-memory state is consistent after fork ──────────────────────────────
+
+    #[test]
+    fn fork_reloads_in_memory_state() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+        mgr.append_message(&user_msg("msg1"), None).unwrap();
+        mgr.append_message(&assistant_msg("msg2"), None).unwrap();
+
+        let fork_id = mgr.fork_session().unwrap();
+
+        // entry count and leaf must reflect the forked session
+        assert_eq!(mgr.entry_count(), 2);
+        assert_eq!(mgr.session_id(), fork_id);
+        assert!(mgr.leaf_id().is_some());
+    }
+
+    #[test]
+    fn fork_leaf_points_to_last_fork_entry() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+        mgr.append_message(&user_msg("x"), None).unwrap();
+        mgr.append_message(&assistant_msg("y"), None).unwrap();
+
+        mgr.fork_session().unwrap();
+        let fork_leaf = mgr.leaf_id().unwrap().to_string();
+
+        // The leaf must exist and must be one of the entries owned by the fork session.
+        assert!(!fork_leaf.is_empty());
+        let fork_id = mgr.session_id().to_string();
+        let fork_entry_ids = db_entry_ids(&mgr, &fork_id);
+        assert_eq!(fork_entry_ids.len(), 2);
+        assert!(fork_entry_ids.contains(&fork_leaf), "leaf id must be in fork's entries");
+        // The leaf must be the *last* entry (highest seq) in the fork.
+        assert_eq!(*fork_entry_ids.last().unwrap(), fork_leaf);
+    }
+
+    // ── source session is untouched ───────────────────────────────────────────
+
+    #[test]
+    fn fork_does_not_mutate_source_session() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+        let src_id = mgr.session_id().to_string();
+
+        mgr.append_message(&user_msg("hi"), None).unwrap();
+        mgr.append_message(&assistant_msg("there"), None).unwrap();
+        let src_entry_ids = db_entry_ids(&mgr, &src_id);
+
+        mgr.fork_session().unwrap();
+
+        // Reload source and verify it is unchanged
+        assert_eq!(db_entry_count(&mgr, &src_id), 2);
+        assert_eq!(db_entry_ids(&mgr, &src_id), src_entry_ids);
+    }
+
+    // ── search index is copied ────────────────────────────────────────────────
+
+    #[test]
+    fn fork_copies_search_index() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+        let src_id = mgr.session_id().to_string();
+
+        mgr.append_message(&user_msg("searchable text"), None).unwrap();
+        mgr.append_message(&assistant_msg("also searchable"), None).unwrap();
+
+        let src_search = db_search_count(&mgr, &src_id);
+        let fork_id = mgr.fork_session().unwrap();
+        let fork_search = db_search_count(&mgr, &fork_id);
+
+        assert_eq!(src_search, fork_search, "search index row count must match");
+    }
+
+    // ── append after fork writes to the fork, not the source ─────────────────
+
+    #[test]
+    fn append_after_fork_targets_fork() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+        let src_id = mgr.session_id().to_string();
+
+        mgr.append_message(&user_msg("before"), None).unwrap();
+        mgr.fork_session().unwrap();
+        let fork_id = mgr.session_id().to_string();
+
+        mgr.append_message(&user_msg("after"), None).unwrap();
+
+        assert_eq!(db_entry_count(&mgr, &src_id), 1, "source untouched after append");
+        assert_eq!(db_entry_count(&mgr, &fork_id), 2, "fork received new entry");
+    }
+
+    // ── error: fork with no active session ───────────────────────────────────
+
+    #[test]
+    fn fork_with_no_session_returns_error() {
+        let mut mgr = make_manager();
+        assert!(mgr.fork_session().is_err());
+    }
+
+    // ── fork only copies current branch, not sibling branches ────────────────
+
+    #[test]
+    fn fork_copies_only_current_branch() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+        // Build a two-entry trunk
+        mgr.append_message(&user_msg("root"), None).unwrap();
+        mgr.append_message(&assistant_msg("reply"), None).unwrap();
+        let branch_point = mgr.leaf_id().unwrap().to_string();
+
+        // Create a sibling branch by re-rooting at the first entry and adding extra
+        mgr.branch(&branch_point);
+        mgr.append_message(&user_msg("sibling only"), None).unwrap();
+        // current branch is now: root → reply → sibling only  (3 entries)
+
+        // Reset to branch_point and go back to original trunk direction
+        mgr.branch(&branch_point);
+        // current branch: root → reply  (2 entries)
+        assert_eq!(mgr.get_branch().len(), 2);
+
+        let src_id = mgr.session_id().to_string();
+        let fork_id = mgr.fork_session().unwrap();
+
+        assert_eq!(
+            db_entry_count(&mgr, &fork_id),
+            2,
+            "fork must only contain the active branch (2 entries), not the sibling"
+        );
+        assert_eq!(
+            db_entry_count(&mgr, &src_id),
+            3,
+            "source still has all 3 entries"
+        );
+    }
 }
