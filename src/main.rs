@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use nerv::agent::EffortLevel;
@@ -11,6 +12,15 @@ use nerv::interactive::layout::AppLayout;
 use nerv::interactive::statusbar::StatusBar;
 use nerv::tui::components::editor::Editor;
 use nerv::tui::*;
+
+/// Global cancel flag for print mode — SIGINT sets this instead of killing the process.
+static PRINT_CANCEL: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+
+extern "C" fn handle_sigint_print(_: libc::c_int) {
+    if let Some(cancel) = PRINT_CANCEL.get() {
+        cancel.store(true, Ordering::Relaxed);
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -1115,6 +1125,34 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
 
 /// Headless print mode: read prompt from stdin, run agent, output JSON.
 /// No TUI, no sessions, no memory, no permissions.
+fn format_args_brief(args: &serde_json::Value) -> String {
+    let obj = match args.as_object() {
+        Some(o) if !o.is_empty() => o,
+        _ => return String::new(),
+    };
+    let mut parts = Vec::new();
+    let mut total_len = 0;
+    for (k, v) in obj {
+        let v_str = match v {
+            serde_json::Value::String(s) if s.len() <= 60 => s.clone(),
+            serde_json::Value::String(s) => {
+                format!("{}…", &s[..s.floor_char_boundary(57)])
+            }
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => continue,
+        };
+        let part = format!("{}={}", k, v_str);
+        total_len += part.len() + 2;
+        if total_len > 120 {
+            parts.push("…".into());
+            break;
+        }
+        parts.push(part);
+    }
+    parts.join(", ")
+}
+
 fn print_mode(args: &[String]) {
     use std::io::Read;
 
@@ -1132,6 +1170,7 @@ fn print_mode(args: &[String]) {
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(20);
+    let verbose = args.iter().any(|a| a == "--verbose");
 
     // Read prompt from stdin
     let mut prompt = String::new();
@@ -1199,6 +1238,8 @@ fn print_mode(args: &[String]) {
         current_tool: Option<(String, std::time::Instant)>,
         last_usage: Option<nerv::agent::types::Usage>,
         usages: Vec<nerv::agent::types::Usage>,
+        verbose: bool,
+        in_text: bool,
     }
 
     let metrics = RefCell::new(Metrics {
@@ -1211,6 +1252,8 @@ fn print_mode(args: &[String]) {
         current_tool: None,
         last_usage: None,
         usages: Vec::new(),
+        verbose,
+        in_text: false,
     });
 
     let model_ref = model.clone();
@@ -1224,8 +1267,12 @@ fn print_mode(args: &[String]) {
 
     let cancel = agent.cancel.clone();
 
+    // Graceful SIGINT: set cancel flag instead of dying, so JSON output flushes.
+    PRINT_CANCEL.set(cancel.clone()).ok();
+    unsafe { libc::signal(libc::SIGINT, handle_sigint_print as *const () as libc::sighandler_t); }
+
     let new_messages = agent.prompt(vec![user_msg], &|event| {
-        use nerv::agent::types::AgentEvent;
+        use nerv::agent::types::{AgentEvent, StreamDelta};
         let mut m = metrics.borrow_mut();
         match &event {
             AgentEvent::TurnStart => {
@@ -1233,16 +1280,49 @@ fn print_mode(args: &[String]) {
                 if m.turns > max_turns {
                     cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
+                if m.verbose {
+                    eprintln!("\n── turn {} {}", m.turns, "─".repeat(40));
+                }
             }
-            AgentEvent::ToolExecutionStart { name, .. } => {
-                eprint!("  turn {} › {} ... ", m.turns, name);
+            AgentEvent::MessageUpdate { delta } if m.verbose => {
+                if let StreamDelta::Text(s) = delta {
+                    m.in_text = true;
+                    eprint!("{}", s);
+                }
+            }
+            AgentEvent::ToolExecutionStart { name, args, .. } => {
+                if m.in_text {
+                    eprintln!();
+                    m.in_text = false;
+                }
+                if m.verbose {
+                    let brief = format_args_brief(args);
+                    if brief.is_empty() {
+                        eprint!("  {}() ... ", name);
+                    } else {
+                        eprint!("  {}({}) ... ", name, brief);
+                    }
+                } else {
+                    eprint!("  turn {} › {} ... ", m.turns, name);
+                }
                 m.current_tool = Some((name.clone(), std::time::Instant::now()));
             }
             AgentEvent::ToolExecutionEnd { result, .. } => {
                 if let Some((name, start)) = m.current_tool.take() {
                     let ms = start.elapsed().as_millis();
                     let status = if result.is_error { "err" } else { "ok" };
-                    eprintln!("{} ({}ms)", status, ms);
+                    if m.verbose {
+                        let summary = result.display.as_ref().map(|s| s.as_str()).unwrap_or_else(|| {
+                            result.content.lines().next().unwrap_or("")
+                        });
+                        if summary.is_empty() || summary.len() > 120 {
+                            eprintln!("{} ({}ms)", status, ms);
+                        } else {
+                            eprintln!("{} ({}ms) — {}", status, ms, summary);
+                        }
+                    } else {
+                        eprintln!("{} ({}ms)", status, ms);
+                    }
                     m.tool_calls.push(serde_json::json!({
                         "name": name,
                         "duration_ms": ms as u64,
@@ -1251,6 +1331,10 @@ fn print_mode(args: &[String]) {
                 }
             }
             AgentEvent::MessageEnd { message } => {
+                if m.in_text {
+                    eprintln!();
+                    m.in_text = false;
+                }
                 if let Some(ref usage) = message.usage {
                     if usage.input > m.tokens_in {
                         m.tokens_in = usage.input;
@@ -1265,6 +1349,9 @@ fn print_mode(args: &[String]) {
                     m.last_usage = Some(usage.clone());
                     m.usages.push(usage.clone());
                 }
+            }
+            AgentEvent::Retrying { attempt, wait_secs, reason } if m.verbose => {
+                eprintln!("  retry {} ({}s): {}", attempt, wait_secs, reason);
             }
             _ => {}
         }

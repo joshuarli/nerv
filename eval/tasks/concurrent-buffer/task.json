@@ -2,7 +2,6 @@
   "prompt": "buffer.py has method stubs that raise NotImplementedError. Implement the BoundedBuffer class so all tests in test_buffer.py pass. The tests include concurrent producer/consumer scenarios with real threads.",
   "verify": "python3 test_buffer.py",
   "max_turns": 15,
-  "on_fail": "Tests are still failing. The concurrent tests are sensitive to the notify/wait protocol. Make sure close() wakes ALL waiting threads, and that get() only raises Closed when the buffer is both closed AND empty.",
   "goals": {
     "max_edit_calls": 1,
     "min_multi_edits": 0,

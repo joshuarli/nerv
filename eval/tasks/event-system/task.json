@@ -2,7 +2,6 @@
   "prompt": "events.py has stubs for an EventBus class. Implement it so all tests in test_events.py pass. Read the tests carefully — they exercise subtle interactions between priority ordering, handler mutation during dispatch, cascading events, and once semantics.",
   "verify": "python3 test_events.py",
   "max_turns": 20,
-  "on_fail": "Still failing. The tricky parts: (1) off() during dispatch must prevent the removed handler from running later in the SAME dispatch cycle, (2) cascading emits are synchronous/reentrant, (3) handlers added during dispatch should be visible to cascaded emits but not the current dispatch list.",
   "goals": {
     "max_edit_calls": 2,
     "min_multi_edits": 0,

@@ -2,7 +2,6 @@
   "prompt": "The tests in test_project.py are failing. We renamed the public API from fetch_data to retrieve_data but forgot to update the implementation files. Rename all fetch_data variants to retrieve_data across the entire codebase and make the tests pass.",
   "verify": "python3 test_project.py",
   "max_turns": 25,
-  "on_fail": "Some tests are still failing. Check every .py file for leftover references to fetch_data.",
   "goals": {
     "max_edit_calls": 8,
     "max_turns": 15,

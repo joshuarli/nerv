@@ -35,8 +35,6 @@ class ToolCall:
 class EvalResult:
     task: str
     passed: bool
-    attempts: int = 1
-    hint_used: bool = False
     turns: int = 0
     tool_calls: list[ToolCall] = field(default_factory=list)
     total_tool_calls: int = 0
@@ -79,64 +77,50 @@ def run_nerv(
     prompt: str,
     work_dir: Path,
     max_turns: int = 20,
-    timeout: int = 120,
+    timeout: int = 300,
     model: str | None = None,
     stream: bool = False,
 ) -> tuple[dict, str, str]:
-    """Run nerv in print mode. Returns (parsed_json, stdout, stderr)."""
+    """Run nerv in print mode. Returns (parsed_json, stdout, stderr).
+
+    nerv handles SIGINT gracefully (sets cancel flag, finishes current turn,
+    flushes JSON). On ^C we wait up to 30s for it to finish. Second ^C kills.
+    """
     cmd = [str(binary), "--print", "--max-turns", str(max_turns)]
     if model:
         cmd.extend(["--model", model])
-
     if stream:
-        # Stream stderr to terminal in real time, capture stdout for JSON
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=None,  # inherit — streams to terminal
-                text=True,
-                cwd=work_dir,
-            )
-            stdout, _ = proc.communicate(input=prompt, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout, _ = proc.communicate()
-            return {"error": f"timeout after {timeout}s"}, stdout or "", ""
-        except KeyboardInterrupt:
-            proc.kill()
-            proc.wait()
-            return {"error": "interrupted"}, "", ""
+        cmd.append("--verbose")
 
-        stderr = ""
-        if proc.returncode != 0 and not stdout.strip():
-            return {"error": f"exit code {proc.returncode}"}, stdout, stderr
-
-        try:
-            return json.loads(stdout), stdout, stderr
-        except json.JSONDecodeError:
-            return {"error": f"invalid JSON output: {stdout[:200]}"}, stdout, stderr
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=None if stream else subprocess.PIPE,
+        text=True,
+        cwd=work_dir,
+    )
 
     try:
-        result = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            cwd=work_dir,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as e:
-        return {"error": f"timeout after {timeout}s"}, e.stdout or "", e.stderr or ""
+        stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        return {"error": f"timeout after {timeout}s"}, stdout or "", stderr or ""
     except KeyboardInterrupt:
-        return {"error": "interrupted"}, "", ""
+        # First ^C: nerv got SIGINT too and is flushing. Wait for it.
+        try:
+            stdout, stderr = proc.communicate(timeout=30)
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            # Second ^C or too slow: force kill.
+            proc.kill()
+            stdout, stderr = proc.communicate()
+            return {"error": "interrupted"}, stdout or "", stderr or ""
 
-    stdout = result.stdout
-    stderr = result.stderr
+    stderr = stderr or ""
 
-    if result.returncode != 0 and not stdout.strip():
-        return {"error": stderr.strip() or f"exit code {result.returncode}"}, stdout, stderr
+    if proc.returncode != 0 and not stdout.strip():
+        return {"error": stderr.strip() or f"exit code {proc.returncode}"}, stdout, stderr
 
     try:
         return json.loads(stdout), stdout, stderr
@@ -169,7 +153,6 @@ def write_report(report_dir: Path, task_name: str, config: dict,
     task_dir = report_dir / task_name
     task_dir.mkdir(parents=True, exist_ok=True)
 
-    # Full nerv JSON output (may contain {"attempts": [...]})
     with open(task_dir / "nerv_output.json", "w") as f:
         json.dump(nerv_output, f, indent=2)
 
@@ -185,7 +168,6 @@ def write_report(report_dir: Path, task_name: str, config: dict,
         "task": task_name,
         "passed": passed,
         "prompt": config["prompt"],
-        "on_fail": config.get("on_fail", []),
         "verify_command": config["verify"],
         **asdict(result),
     }
@@ -207,124 +189,84 @@ def run_task(task_dir: Path, binary: Path, report_dir: Path,
              model: str | None = None, stream: bool = False) -> EvalResult:
     task_name = task_dir.name
     config = load_task(task_dir)
-    on_fail_hints = config.get("on_fail", [])
-    if isinstance(on_fail_hints, str):
-        on_fail_hints = [on_fail_hints]
 
     with tempfile.TemporaryDirectory(prefix="nerv-eval-") as tmpdir:
         work_dir = Path(tmpdir)
         setup_workdir(task_dir, work_dir)
 
-        # Accumulate metrics across attempts
-        all_tool_calls: list[ToolCall] = []
-        all_outputs: list[dict] = []
-        all_stderr: list[str] = []
-        total_turns = 0
-        total_tokens_in = 0
-        total_tokens_out = 0
-        total_tokens_cache = 0
-        total_cost = 0.0
-        hint_used = False
-
-        prompts = [config["prompt"]] + on_fail_hints
         start = time.monotonic()
+        error_msg = None
 
-        for attempt, prompt in enumerate(prompts):
+        try:
             nerv_output, nerv_stdout, nerv_stderr = run_nerv(
                 binary,
-                prompt,
+                config["prompt"],
                 work_dir,
                 max_turns=config.get("max_turns", 20),
                 model=model,
                 stream=stream,
             )
+        except KeyboardInterrupt:
+            nerv_output = {"error": "interrupted"}
+            nerv_stderr = ""
 
-            all_outputs.append(nerv_output)
-            all_stderr.append(nerv_stderr)
-
-            if "error" in nerv_output:
-                wall_time = time.monotonic() - start
-                result = EvalResult(
-                    task=task_name,
-                    passed=False,
-                    attempts=attempt + 1,
-                    hint_used=hint_used,
-                    wall_time_s=round(wall_time, 2),
-                    error=nerv_output["error"],
-                )
-                write_report(report_dir, task_name, config,
-                             {"attempts": all_outputs},
-                             "\n".join(all_stderr), "",
-                             False, "", result)
-                return result
-
+        if "error" in nerv_output:
+            error_msg = nerv_output["error"]
+            tool_calls, metrics = [], {}
+        else:
             tool_calls, metrics = extract_metrics(nerv_output)
-            all_tool_calls.extend(tool_calls)
-            total_turns += metrics.get("turns", 0)
-            total_tokens_in = max(total_tokens_in, metrics.get("tokens_in", 0))
-            total_tokens_out += metrics.get("tokens_out", 0)
-            total_tokens_cache = max(total_tokens_cache, metrics.get("tokens_cache_read", 0))
-            total_cost += metrics.get("cost", 0.0)
 
+        if error_msg:
+            passed, verify_output = False, ""
+        else:
             passed, verify_output = verify(
                 config["verify"],
                 work_dir,
                 config.get("expected_exit", 0),
             )
 
-            if passed:
-                break
-
-            # Not the last attempt — will send a hint
-            if attempt < len(prompts) - 1:
-                hint_used = True
-
         wall_time = time.monotonic() - start
 
         result = EvalResult(
             task=task_name,
             passed=passed,
-            attempts=len(all_outputs),
-            hint_used=hint_used,
-            turns=total_turns,
-            tool_calls=all_tool_calls,
-            total_tool_calls=len(all_tool_calls),
-            tokens_in=total_tokens_in,
-            tokens_out=total_tokens_out,
-            tokens_cache_read=total_tokens_cache,
-            cost=round(total_cost, 6),
+            turns=metrics.get("turns", 0),
+            tool_calls=tool_calls,
+            total_tool_calls=len(tool_calls),
+            tokens_in=metrics.get("tokens_in", 0),
+            tokens_out=metrics.get("tokens_out", 0),
+            tokens_cache_read=metrics.get("tokens_cache_read", 0),
+            cost=round(metrics.get("cost", 0.0), 6),
             wall_time_s=round(wall_time, 2),
+            error=error_msg,
         )
 
-        # Analyze goals
         goals = config.get("goals")
         if goals and passed:
-            result.goal_results = check_goals(goals, all_outputs, result)
+            result.goal_results = check_goals(goals, nerv_output, result)
 
         write_report(report_dir, task_name, config,
-                     {"attempts": all_outputs},
-                     "\n".join(all_stderr), "",
+                     nerv_output, nerv_stderr or "", "",
                      passed, verify_output, result)
 
         return result
 
 
-def extract_tool_sequence(all_outputs: list[dict]) -> list[dict]:
-    """Extract ordered list of {tool, args} from all trace messages."""
+def extract_tool_sequence(output: dict) -> list[dict]:
+    """Extract ordered list of {tool, args} from trace messages."""
     sequence = []
-    for output in all_outputs:
-        for msg in output.get("trace", []):
-            if msg.get("role") != "assistant":
-                continue
-            for tc in msg.get("tool_calls", []):
-                sequence.append({"tool": tc.get("tool", ""), "args": tc.get("args", {})})
+    for msg in output.get("trace", []):
+        if msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls", []):
+            sequence.append({"tool": tc.get("tool", ""), "args": tc.get("args", {})})
     return sequence
 
 
-def check_goals(goals: dict, all_outputs: list[dict], result: EvalResult) -> list[str]:
+def check_goals(goals: dict, output: dict, result: EvalResult) -> list[str]:
     """Check efficiency goals against the trace. Returns list of pass/fail strings."""
     results = []
-    tool_seq = extract_tool_sequence(all_outputs)
+    tool_seq = extract_tool_sequence(output)
 
     # Count edit calls and multi-edits
     edit_calls = sum(1 for t in tool_seq if t["tool"] == "edit")
@@ -462,11 +404,9 @@ def main():
 
             if not json_output:
                 if result.passed:
-                    hint = " +hint" if result.hint_used else ""
-                    att = f" ({result.attempts} attempts)" if result.attempts > 1 else ""
                     ctx = result.tokens_in + result.tokens_cache_read
                     print(
-                        f"PASS{att}{hint}  ({result.turns} turns, {result.total_tool_calls} tools, "
+                        f"PASS  ({result.turns} turns, {result.total_tool_calls} tools, "
                         f"{ctx}+{result.tokens_out} tok, "
                         f"${result.cost:.4f}, {result.wall_time_s}s)",
                         file=sys.stderr,
@@ -475,11 +415,14 @@ def main():
                         print(f"    {g}", file=sys.stderr)
                 else:
                     err = result.error or "verification failed"
-                    att = f" after {result.attempts} attempts" if result.attempts > 1 else ""
-                    print(f"FAIL{att}  {err}", file=sys.stderr)
+                    print(f"FAIL  {err}", file=sys.stderr)
 
             results.append(result)
             flush_results()
+
+            # Stop running more tasks if this one was interrupted
+            if result.error == "interrupted":
+                break
 
     except KeyboardInterrupt:
         if not json_output:

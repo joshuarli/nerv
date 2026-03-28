@@ -112,7 +112,7 @@ The model can't pattern-match from tests because tests just say
 with custom inputs (`python3 -c "import oracle; print(oracle.step(...))"`)
 to discover the rules, then implement them. This requires genuine reasoning
 about input-output examples, not code comprehension. The first model to
-consistently pass this without the on_fail hint is genuinely capable.
+consistently pass this is genuinely capable.
 
 ### mass-rename (Context Efficiency)
 
@@ -129,6 +129,23 @@ every edit (~25+ turns). This task directly measures the impact of:
 - Bash success pattern compression (repeated test runs)
 - Small file auto-sizing (all files are < 50 lines)
 - System prompt batch guidance (read all first, then edit)
+
+### trace-tool-execution (Tool Discipline, Expert)
+
+Trace the tool execution path through the **real nerv codebase** (~23k lines,
+30+ Rust files). `setup.sh` copies the live `src/`, `Cargo.toml`, and
+`AGENTS.md` into the workdir. The model must follow the code from model
+response parsing through permission checks, tool dispatch, execution,
+post-tool hooks, and result handling.
+
+**What this tests**: Strategic navigation of a large, real codebase.
+`codemap ""` is useless at 23k lines — the model must use `symbols` to
+discover function names (`execute_tools`, `PermissionFn`, `post_tool_fn`),
+then targeted `codemap` to read specific implementations across
+`agent.rs`, `tool_registry.rs`, `permissions.rs`, and `bootstrap.rs`.
+Verification checks 6 specific concepts the answer must identify:
+execute_tools, permission checking, tool registry, AgentTool trait,
+PostToolFn callback, and the loop structure.
 
 ### trace-cancellation (Tool Discipline, Expert)
 
@@ -184,15 +201,9 @@ eval/tasks/<name>/
   "prompt": "The initial user message",
   "verify": "python3 test_foo.py",
   "max_turns": 15,
-  "on_fail": "Optional follow-up hint sent if verify fails after first attempt",
   "expected_exit": 0
 }
 ```
-
-When `on_fail` is set and the first attempt fails verification, the harness
-sends the hint as a second prompt to the same workdir (files persist). This
-tests the model's ability to recover with a vague nudge — hints should be
-realistic human messages, not detailed instructions.
 
 ## Report structure
 
@@ -249,7 +260,6 @@ echo "fix the bug" | NERV_LOG=info ./target/debug/nerv --print --model haiku 2>/
 - **tokens_out**: assistant output tokens. Measures narration waste.
 - **tokens_in / cache_read**: input tokens. High cache_read = prompt caching working.
 - **cost**: dollar cost from token pricing.
-- **attempts**: 1 = solved first try, 2 = needed the on_fail hint.
 
 ## Design principles
 
@@ -257,5 +267,4 @@ echo "fix the bug" | NERV_LOG=info ./target/debug/nerv --print --model haiku 2>/
 - AGENTS.md in each repo tells the model how to run tests.
 - The eval uses the real system prompt and real tool implementations.
 - Prompts are realistic: "tests are failing, fix it" — not "change line 4".
-- on_fail hints are vague like a real human: "still broken, run the tests" — not "change = to +=".
 - Tasks are designed to stress specific nerv capabilities (multi-edit, tool efficiency) not just model intelligence.

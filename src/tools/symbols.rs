@@ -75,7 +75,7 @@ impl AgentTool for SymbolsTool {
 
     fn prompt_guidelines(&self) -> Vec<String> {
         vec![
-            "`symbols` finds where things are defined (name, kind, file, line, signature). Use it to locate code before reading it. Use `references: true` to also find call sites via ripgrep.".into(),
+            "`symbols` lists definitions (name, kind, file, line, signature). Start here — `query: \"\"` gives a full map of any codebase. Then use targeted `codemap` calls to read what matters. Use `references: true` to also find call sites.".into(),
         ]
     }
 
