@@ -102,6 +102,58 @@ fn bench_symbol_queries(c: &mut Criterion) {
     group.finish();
 }
 
+// --------------------------------------------------------------------------
+// codemap render benchmarks
+// --------------------------------------------------------------------------
+
+fn bench_codemap_render(c: &mut Criterion) {
+    use nerv::index::codemap::{CodemapParams, Depth, render, search, SearchResult};
+
+    let src = src_dir();
+    let mut idx = SymbolIndex::new();
+    idx.force_index_dir(src);
+
+    let mut group = c.benchmark_group("codemap/render");
+
+    // Signatures mode: no file I/O needed (just format stored fields)
+    group.bench_function("signatures_all_symbols", |b| {
+        let params = CodemapParams { query: "", kind: None, file: None, depth: Depth::Signatures };
+        let results = match search(&idx, &params) {
+            SearchResult::Found(r) => r,
+            _ => panic!("expected results"),
+        };
+        b.iter(|| {
+            black_box(render(black_box(&results), src, &Depth::Signatures))
+        });
+    });
+
+    // Full mode: reads files from disk and slices bodies
+    group.bench_function("full_all_symbols", |b| {
+        let params = CodemapParams { query: "", kind: None, file: None, depth: Depth::Full };
+        let results = match search(&idx, &params) {
+            SearchResult::Found(r) => r,
+            _ => panic!("expected results"),
+        };
+        b.iter(|| {
+            black_box(render(black_box(&results), src, &Depth::Full))
+        });
+    });
+
+    // Full mode, targeted query (realistic single-symbol lookup)
+    group.bench_function("full_transform_context", |b| {
+        let params = CodemapParams { query: "transform_context", kind: None, file: None, depth: Depth::Full };
+        let results = match search(&idx, &params) {
+            SearchResult::Found(r) => r,
+            _ => panic!("no transform_context found"),
+        };
+        b.iter(|| {
+            black_box(render(black_box(&results), src, &Depth::Full))
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     name = index_slow;
     config = slow();
@@ -110,6 +162,6 @@ criterion_group!(
 criterion_group!(
     name = index_fast;
     config = fast();
-    targets = bench_incremental_reindex, bench_symbol_queries,
+    targets = bench_incremental_reindex, bench_symbol_queries, bench_codemap_render,
 );
 criterion_main!(index_slow, index_fast);

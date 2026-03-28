@@ -60,6 +60,11 @@ pub struct SymbolDef {
     pub file: PathBuf,
     pub line: u32,
     pub end_line: u32,
+    /// Byte offset of the first byte of this symbol's node in the source file.
+    /// Together with `end_byte`, allows body extraction without re-parsing.
+    pub start_byte: u32,
+    /// Byte offset one past the last byte of this symbol's node.
+    pub end_byte: u32,
     pub signature: String,
     pub parent: Option<String>,
 }
@@ -430,6 +435,8 @@ impl SymbolIndex {
                 file: path.to_path_buf(),
                 line,
                 end_line,
+                start_byte: node.start_byte() as u32,
+                end_byte: node.end_byte() as u32,
                 signature,
                 parent,
             });

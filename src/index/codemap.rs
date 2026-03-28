@@ -54,19 +54,25 @@ pub fn render(results: &[SymbolDef], project_root: &Path, depth: &Depth) -> Stri
         by_file.entry(sym.file.as_path()).or_default().push(sym);
     }
 
-    let file_contents: BTreeMap<&Path, Vec<String>> = by_file
-        .keys()
-        .filter_map(|path| {
-            let source = std::fs::read_to_string(path).ok()?;
-            let lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
-            Some((*path, lines))
-        })
-        .collect();
-
     let full_mode = matches!(depth, Depth::Full);
+
+    // For full mode: read each file once as a String (keyed by path). We slice
+    // directly by byte offset stored in SymbolDef — no line-Vec allocation needed.
+    let file_sources: BTreeMap<&Path, String> = if full_mode {
+        by_file
+            .keys()
+            .filter_map(|path| {
+                let source = std::fs::read_to_string(path).ok()?;
+                Some((*path, source))
+            })
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
+
     let full_set: std::collections::HashSet<usize> = if full_mode {
         let refs: Vec<&SymbolDef> = results.iter().collect();
-        let cutoff = find_demote_cutoff(&refs, &file_contents);
+        let cutoff = find_demote_cutoff(&refs, &file_sources);
         (0..cutoff).collect()
     } else {
         std::collections::HashSet::new()
@@ -78,7 +84,7 @@ pub fn render(results: &[SymbolDef], project_root: &Path, depth: &Depth) -> Stri
         let rel = path.strip_prefix(project_root).unwrap_or(path).display();
         out.push_str(&format!("{}:\n", rel));
 
-        let lines = file_contents.get(path);
+        let source = file_sources.get(path).map(|s| s.as_str());
 
         for sym in syms {
             // Find this symbol's index in the original results to check full_set
@@ -86,8 +92,8 @@ pub fn render(results: &[SymbolDef], project_root: &Path, depth: &Depth) -> Stri
             let use_full = full_set.contains(&idx);
 
             if use_full {
-                if let Some(lines) = lines {
-                    format_full(&mut out, sym, lines);
+                if let Some(src) = source {
+                    format_full(&mut out, sym, src);
                 } else {
                     format_signature(&mut out, sym);
                 }
@@ -113,15 +119,20 @@ pub fn codemap(index: &SymbolIndex, project_root: &Path, params: &CodemapParams)
 }
 
 /// Format a symbol with its full source body.
-fn format_full(out: &mut String, sym: &SymbolDef, lines: &[String]) {
-    let start = (sym.line as usize).saturating_sub(1);
-    let end = (sym.end_line as usize).min(lines.len());
-    if start >= lines.len() {
+fn format_full(out: &mut String, sym: &SymbolDef, source: &str) {
+    let start = sym.start_byte as usize;
+    let end = sym.end_byte as usize;
+    if start >= source.len() {
         format_signature_inline(out, sym);
         return;
     }
-    for i in start..end {
-        out.push_str(&format!("  {:<5} {}\n", i + 1, lines[i]));
+    // Clamp to valid char boundaries (defensive; byte offsets from tree-sitter are exact).
+    let start = source.floor_char_boundary(start);
+    let end = source.floor_char_boundary(end.min(source.len()));
+    let body = &source[start..end];
+    let start_line = sym.line as usize; // 1-based line of first byte
+    for (i, line) in body.lines().enumerate() {
+        out.push_str(&format!("  {:<5} {}\n", start_line + i, line));
     }
 }
 
@@ -147,10 +158,10 @@ fn format_signature_inline(out: &mut String, sym: &SymbolDef) {
 
 /// Find how many symbols (in search order) we can show in full mode
 /// before exceeding the line budget. Returns the count.
-fn find_demote_cutoff(results: &[&SymbolDef], file_contents: &BTreeMap<&Path, Vec<String>>) -> usize {
+fn find_demote_cutoff(results: &[&SymbolDef], file_sources: &BTreeMap<&Path, String>) -> usize {
     let mut total_lines = 0;
     for (i, sym) in results.iter().enumerate() {
-        let body_lines = if file_contents.contains_key(sym.file.as_path()) {
+        let body_lines = if file_sources.contains_key(sym.file.as_path()) {
             (sym.end_line - sym.line + 1) as usize
         } else {
             1
