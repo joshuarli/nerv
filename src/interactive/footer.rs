@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::agent::types::*;
@@ -87,6 +87,82 @@ pub(crate) fn sample_rss_kb() -> u64 {
     }
 }
 
+/// Sample total CPU time consumed by this process (user + system) in microseconds.
+/// Returns 0 on unsupported platforms or failure.
+pub(crate) fn sample_cpu_time_us() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        // Re-use the MACH_TASK_BASIC_INFO call — user_time and system_time are
+        // time_value_t { seconds: u32, microseconds: u32 }.
+        use std::mem;
+        #[allow(non_camel_case_types)]
+        type natural_t = u32;
+        #[allow(non_camel_case_types)]
+        type integer_t = i32;
+        const MACH_TASK_BASIC_INFO: natural_t = 20;
+        #[repr(C)]
+        struct MachTaskBasicInfo {
+            virtual_size: u64,
+            resident_size: u64,
+            resident_size_max: u64,
+            user_time: [u32; 2],   // time_value_t { seconds, microseconds }
+            system_time: [u32; 2], // time_value_t { seconds, microseconds }
+            policy: i32,
+            suspend_count: i32,
+        }
+        unsafe extern "C" {
+            fn task_info(
+                target_task: u32,
+                flavor: natural_t,
+                task_info_out: *mut integer_t,
+                task_info_outCnt: *mut natural_t,
+            ) -> i32;
+        }
+        unsafe {
+            #[allow(deprecated)]
+            let task = libc::mach_task_self();
+            let mut info: MachTaskBasicInfo = mem::zeroed();
+            let mut count = (mem::size_of::<MachTaskBasicInfo>() / mem::size_of::<integer_t>()) as natural_t;
+            let kr = task_info(
+                task,
+                MACH_TASK_BASIC_INFO,
+                &mut info as *mut MachTaskBasicInfo as *mut integer_t,
+                &mut count,
+            );
+            if kr == 0 {
+                let user_us = info.user_time[0] as u64 * 1_000_000 + info.user_time[1] as u64;
+                let sys_us  = info.system_time[0] as u64 * 1_000_000 + info.system_time[1] as u64;
+                user_us + sys_us
+            } else {
+                0
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // /proc/self/stat: fields 14 (utime) and 15 (stime) are in clock ticks.
+        // sysconf(_SC_CLK_TCK) converts to Hz (typically 100).
+        if let Ok(s) = std::fs::read_to_string("/proc/self/stat") {
+            let fields: Vec<&str> = s.split_whitespace().collect();
+            if fields.len() > 15 {
+                let utime: u64 = fields[13].parse().unwrap_or(0);
+                let stime: u64 = fields[14].parse().unwrap_or(0);
+                let ticks_per_sec = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as u64;
+                if ticks_per_sec > 0 {
+                    return (utime + stime) * 1_000_000 / ticks_per_sec;
+                }
+            }
+        }
+        0
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        0
+    }
+}
+
 pub struct FooterComponent {
     cwd: String,
     git_branch: Option<String>,
@@ -120,6 +196,9 @@ pub struct FooterComponent {
     /// nervHud: current process RSS in KiB, written by a background thread.
     /// Only displayed when `NERV_DEBUG=1`.
     rss_kb: Arc<AtomicU64>,
+    /// nervHud: recent %CPU (f32 bits stored in u32), written by background thread.
+    /// Only displayed when `NERV_DEBUG=1`.
+    cpu_pct: Arc<AtomicU32>,
 }
 
 impl FooterComponent {
@@ -175,13 +254,39 @@ impl FooterComponent {
             rss_kb: {
                 let cell = Arc::new(AtomicU64::new(0));
                 if nerv_debug() {
-                    // nervHud background poller: sample RSS every 500 ms.
-                    let cell2 = cell.clone();
+                    // nervHud background poller: sample RSS + %CPU every 500 ms.
+                    let rss_cell = cell.clone();
                     std::thread::Builder::new()
                         .name("nerv-hud".into())
                         .spawn(move || loop {
-                            cell2.store(sample_rss_kb(), Ordering::Relaxed);
+                            rss_cell.store(sample_rss_kb(), Ordering::Relaxed);
                             std::thread::sleep(std::time::Duration::from_millis(500));
+                        })
+                        .ok();
+                }
+                cell
+            },
+            cpu_pct: {
+                let cell = Arc::new(AtomicU32::new(0));
+                if nerv_debug() {
+                    // CPU% poller: two samples 500 ms apart → delta CPU time / wall time.
+                    let cpu_cell = cell.clone();
+                    std::thread::Builder::new()
+                        .name("nerv-hud-cpu".into())
+                        .spawn(move || {
+                            let mut prev_us = sample_cpu_time_us();
+                            let mut prev_wall = std::time::Instant::now();
+                            loop {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                let cur_us   = sample_cpu_time_us();
+                                let cur_wall = std::time::Instant::now();
+                                let cpu_delta  = cur_us.saturating_sub(prev_us) as f64;
+                                let wall_delta = cur_wall.duration_since(prev_wall).as_micros() as f64;
+                                let pct = if wall_delta > 0.0 { (cpu_delta / wall_delta) * 100.0 } else { 0.0 };
+                                cpu_cell.store((pct as f32).to_bits(), Ordering::Relaxed);
+                                prev_us   = cur_us;
+                                prev_wall = cur_wall;
+                            }
                         })
                         .ok();
                 }
@@ -490,7 +595,7 @@ impl Component for FooterComponent {
         let cost_pad = w.saturating_sub(cost_width) / 2;
         let line5 = format!("{}{}", " ".repeat(cost_pad), cost_line);
 
-        // nervHud: process RSS — shown only when NERV_DEBUG=1
+        // nervHud: process RSS + %CPU — shown only when NERV_DEBUG=1
         if nerv_debug() {
             let rss = self.rss_kb.load(Ordering::Relaxed);
             let rss_str = if rss >= 1024 {
@@ -498,10 +603,12 @@ impl Component for FooterComponent {
             } else {
                 format!("{} KB", rss)
             };
+            let cpu = f32::from_bits(self.cpu_pct.load(Ordering::Relaxed));
             let hud_line = format!(
-                "{}nervHud  rss {}{}",
+                "{}nervHud  rss {}  cpu {:.1}%{}",
                 theme::HUD_PINK,
                 rss_str,
+                cpu,
                 r,
             );
             vec![line1, line2, hex_bar, line4, line5, hud_line]
@@ -583,5 +690,14 @@ mod tests {
         assert!(kb > 1024, "RSS {} KB is suspiciously low — probably not whole-process", kb);
         // And it shouldn't be insanely high (sanity: <16 GB).
         assert!(kb < 16 * 1024 * 1024, "RSS {} KB is suspiciously high", kb);
+    }
+
+    #[test]
+    fn sample_cpu_time_us_returns_nonzero() {
+        let us = sample_cpu_time_us();
+        eprintln!("sample_cpu_time_us() = {} µs ({:.3} s)", us, us as f64 / 1_000_000.0);
+        // Any running process should have consumed at least 1 ms of CPU by the
+        // time the test binary reaches this point.
+        assert!(us > 1_000, "CPU time {} µs is suspiciously low", us);
     }
 }
