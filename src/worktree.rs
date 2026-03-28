@@ -56,7 +56,7 @@ pub fn create_worktree(
     Ok(wt_path)
 }
 
-/// Merge worktree branch into its upstream, then remove the worktree and branch.
+/// Merge worktree branch into the main worktree's HEAD, then remove the worktree and branch.
 ///
 /// Returns the path to the main worktree (original repo) on success.
 pub fn merge_worktree(wt_path: &Path) -> anyhow::Result<PathBuf> {
@@ -64,22 +64,6 @@ pub fn merge_worktree(wt_path: &Path) -> anyhow::Result<PathBuf> {
     let branch = git_output(wt_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     if branch == "HEAD" {
         anyhow::bail!("worktree is in detached HEAD state");
-    }
-
-    // Get upstream (parent) branch
-    let upstream = git_output(
-        wt_path,
-        &[
-            "for-each-ref",
-            "--format=%(upstream:short)",
-            &format!("refs/heads/{}", branch),
-        ],
-    )?;
-    if upstream.is_empty() {
-        anyhow::bail!(
-            "branch '{}' has no upstream — cannot determine merge target",
-            branch
-        );
     }
 
     // Find the main worktree (first entry in `git worktree list --porcelain`)
@@ -90,6 +74,10 @@ pub fn merge_worktree(wt_path: &Path) -> anyhow::Result<PathBuf> {
         .and_then(|line| line.strip_prefix("worktree "))
         .map(PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("could not determine main worktree"))?;
+
+    // Determine the main branch name for informational messages
+    let main_branch = git_output(&main_wt, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|_| "HEAD".into());
 
     // Check for uncommitted changes in the worktree
     let status = git_output(wt_path, &["status", "--porcelain"])?;
@@ -120,7 +108,7 @@ pub fn merge_worktree(wt_path: &Path) -> anyhow::Result<PathBuf> {
             main_wt.display(),
             branch,
             branch,
-            upstream,
+            main_branch,
             main_wt.display(),
         );
     }
