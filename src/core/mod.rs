@@ -3,6 +3,7 @@ pub mod auth;
 pub mod config;
 pub mod local_models;
 pub mod model_registry;
+pub mod notifications;
 pub mod permissions;
 pub mod resource_loader;
 pub mod retry;
