@@ -1023,6 +1023,14 @@ pub fn session_task(
                     .new_session(&session.cwd, session.worktree.as_deref());
                 session.agent.state.messages.clear();
                 session.session_cost = Cost::default();
+                session.session_named = false;
+                let _ = event_tx.send(AgentSessionEvent::SessionStarted {
+                    id: session.session_manager.session_id().to_string(),
+                    name: None,
+                });
+                let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
+                    messages: vec![],
+                });
             }
             SessionCommand::LoadSession { id } => session.load_session(&id, &event_tx),
             SessionCommand::SetModel { provider, model_id } => {

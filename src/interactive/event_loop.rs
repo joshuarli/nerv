@@ -358,7 +358,11 @@ impl InteractiveMode {
                 layout.footer.reset_context();
                 layout.footer.set_context_used(context_tokens as u32);
 
-                self.status_message = Some(format!("Loaded ({} messages)", messages.len()));
+                self.status_message = if messages.is_empty() {
+                    Some("New session started.".into())
+                } else {
+                    Some(format!("Loaded ({} messages)", messages.len()))
+                };
                 tui.request_render(true); // full redraw — content replaced
             }
             AgentSessionEvent::AutoCompactionStart { reason } => {
@@ -851,8 +855,6 @@ impl InteractiveMode {
             }
             "/new" => {
                 let _ = self.cmd_tx.send(SessionCommand::NewSession);
-                self.session_id = None;
-                self.status_message = Some("New session started.".into());
             }
             "/copy" => {
                 if let Some(ref text) = self.last_response.clone() {
