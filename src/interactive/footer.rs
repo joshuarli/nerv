@@ -179,6 +179,14 @@ impl FooterComponent {
         self.api_calls += 1;
     }
 
+    /// Restore accumulated cost from a loaded session. Sets cost_input to the
+    /// full restored total (we don't have input/output split from legacy entries,
+    /// so we put everything in cost_input for display).
+    pub fn restore_cost(&mut self, total_usd: f64) {
+        self.cost_input = total_usd;
+        self.cost_output = 0.0;
+    }
+
     pub fn add_cost(&mut self, usage: &Usage, pricing: &ModelPricing) {
         // usage.input is the full context window (uncached + cache_read + cache_write).
         // Only the uncached slice is billed at the regular input rate; cache tokens are

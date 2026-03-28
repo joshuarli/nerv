@@ -74,6 +74,8 @@ pub enum AgentSessionEvent {
     /// Session loaded — clear UI and display history.
     SessionLoaded {
         messages: Vec<AgentMessage>,
+        /// Accumulated cost in USD for this session (restored from DB on load).
+        cost_usd: f64,
     },
     /// A worktree was created (via /wt). UI should update cwd display.
     WorktreeCreated {
@@ -527,6 +529,16 @@ impl AgentSession {
                 let cache_read = a.usage.as_ref().map(|u| u.cache_read).unwrap_or(0);
                 let cache_write = a.usage.as_ref().map(|u| u.cache_write).unwrap_or(0);
                 last_input = input;
+                // Compute cost at record time so we can restore it on session load.
+                let cost_usd = if let Some(ref pricing) = model_pricing {
+                    let uncached = input.saturating_sub(cache_read + cache_write);
+                    (pricing.input / 1_000_000.0) * uncached as f64
+                        + (pricing.output / 1_000_000.0) * output as f64
+                        + (pricing.cache_read / 1_000_000.0) * cache_read as f64
+                        + (pricing.cache_write / 1_000_000.0) * cache_write as f64
+                } else {
+                    0.0
+                };
                 Some(crate::session::types::TokenInfo {
                     input,
                     output,
@@ -534,6 +546,7 @@ impl AgentSession {
                     cache_write,
                     context_used: input + output,
                     context_window,
+                    cost_usd,
                 })
             } else {
                 None
@@ -765,7 +778,15 @@ impl AgentSession {
     pub fn load_session(&mut self, session_id: &str, event_tx: &Sender<AgentSessionEvent>) {
         match self.session_manager.load_session(session_id) {
             Ok(ctx) => {
+                // Extract fields we need for deferred use before partial moves of ctx.
+                let full_history = ctx.full_history;
+                let cost_usd = ctx.cost_usd;
+
                 self.agent.state.messages = ctx.messages;
+
+                // Restore accumulated session cost from persisted per-call cost_usd values.
+                self.session_cost = Cost::default();
+                self.session_cost.total = cost_usd;
 
                 // Restore thinking level
                 self.agent.state.thinking_level = ctx.thinking_level;
@@ -846,7 +867,8 @@ impl AgentSession {
                     name: self.session_manager.name().map(|s| s.to_string()),
                 });
                 let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
-                    messages: self.agent.state.messages.clone(),
+                    messages: full_history,
+                    cost_usd,
                 });
                 self.load_permission_cache();
                 if let Some(pct) = self.apply_saved_compact_threshold() {
@@ -1058,6 +1080,7 @@ pub fn session_task(
                 });
                 let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
                     messages: vec![],
+                    cost_usd: 0.0,
                 });
             }
             SessionCommand::LoadSession { id } => session.load_session(&id, &event_tx),
@@ -1220,6 +1243,8 @@ pub fn session_task(
                     session.session_manager.branch(&entry_id);
                 }
                 let ctx = session.session_manager.build_session_context();
+                let full_history = ctx.full_history;
+                let cost_usd = ctx.cost_usd;
                 session.agent.state.messages = ctx.messages;
                 session.agent.state.thinking_level = ctx.thinking_level;
                 let _ = event_tx.send(AgentSessionEvent::ThinkingLevelChanged {
@@ -1229,7 +1254,8 @@ pub fn session_task(
                     session.set_model(&provider, &model_id, &event_tx);
                 }
                 let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
-                    messages: session.agent.state.messages.clone(),
+                    messages: full_history,
+                    cost_usd,
                 });
             }
             SessionCommand::CreateWorktree {
