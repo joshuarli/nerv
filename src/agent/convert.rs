@@ -215,9 +215,9 @@ pub fn transform_context(
     _context_window: u32,
     stale_cutoff: Option<usize>,
 ) -> Vec<AgentMessage> {
-    // Pass 0: find superseded reads — walk backwards, track latest read per path.
-    // Earlier reads of the same file are replaced with a short marker.
-    let superseded_ids = find_superseded_reads(&messages);
+    // Pass 0: find superseded tool calls — walk backwards, track latest call per key.
+    // Earlier calls of the same file/path/pattern are replaced with a short marker.
+    let superseded_ids = find_superseded_results(&messages);
 
     // Pass 0b: map tool_call_id → tool name for bash success detection
     let tool_names: std::collections::HashMap<String, String> = messages
@@ -337,7 +337,7 @@ pub fn transform_context(
                 Some(AgentMessage::ToolResult {
                     tool_call_id,
                     content: vec![ContentItem::Text {
-                        text: "[superseded by later read]".into(),
+                        text: "[superseded by later call]".into(),
                     }],
                     is_error,
                     display: None,
@@ -489,12 +489,28 @@ fn compress_bash_success(text: &str) -> Option<String> {
 /// Walk backwards through messages. For each "read" tool call, track the path.
 /// If an earlier read targeted the same path, mark its tool_call_id as superseded.
 /// Only supersede successful reads (not errors) — the model may need error context.
-fn find_superseded_reads(messages: &[AgentMessage]) -> std::collections::HashSet<String> {
-    let mut latest_read_path: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
-    let mut superseded = std::collections::HashSet::new();
+/// Find tool call IDs whose results can be replaced with a short marker because
+/// a later call supersedes them:
+/// - **read**: later read of the same path supersedes earlier reads
+/// - **edit/write**: later edit of the same path supersedes earlier edit results
+/// - **grep**: later grep with the same pattern and a path that is a child of
+///   (or equal to) the earlier grep's path supersedes the earlier result
+/// - **ls/find**: later ls/find whose path is a child of the earlier one supersedes it
+fn find_superseded_results(messages: &[AgentMessage]) -> std::collections::HashSet<String> {
+    use std::collections::{HashMap, HashSet};
 
-    // Walk backwards: the first read we see for a path is the latest
+    let mut superseded = HashSet::new();
+
+    // read: path → latest tool_call_id
+    let mut latest_read: HashMap<String, String> = HashMap::new();
+    // edit/write: path → latest tool_call_id
+    let mut latest_edit: HashMap<String, String> = HashMap::new();
+    // grep: (pattern, path) → latest tool_call_id + path
+    let mut latest_grep: Vec<(String, String, String)> = Vec::new(); // (pattern, path, id)
+    // ls/find: path → latest tool_call_id
+    let mut latest_ls: Vec<(String, String)> = Vec::new(); // (path, id)
+
+    // Walk backwards: the first call we encounter for a key is the latest
     for msg in messages.iter().rev() {
         if let AgentMessage::Assistant(a) = msg {
             for block in &a.content {
@@ -504,22 +520,68 @@ fn find_superseded_reads(messages: &[AgentMessage]) -> std::collections::HashSet
                     arguments,
                 } = block
                 {
-                    if name == "read" {
-                        if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
-                            if let Some(_latest_id) = latest_read_path.get(path) {
-                                // This is an earlier read of the same path — supersede it
-                                superseded.insert(id.clone());
-                            } else {
-                                latest_read_path.insert(path.to_string(), id.clone());
+                    match name.as_str() {
+                        "read" => {
+                            if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+                                if latest_read.contains_key(path) {
+                                    superseded.insert(id.clone());
+                                } else {
+                                    latest_read.insert(path.to_string(), id.clone());
+                                }
                             }
                         }
+                        "edit" | "write" => {
+                            if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+                                if latest_edit.contains_key(path) {
+                                    superseded.insert(id.clone());
+                                } else {
+                                    latest_edit.insert(path.to_string(), id.clone());
+                                }
+                            }
+                        }
+                        "grep" => {
+                            let pattern = arguments
+                                .get("pattern")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let path = arguments
+                                .get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            // A later grep supersedes this one if same pattern and
+                            // the later grep's path is equal to or a child of this path.
+                            let is_superseded = latest_grep.iter().any(|(p, gp, _)| {
+                                p == pattern && (gp == path || gp.starts_with(&format!("{}/", path.trim_end_matches('/'))))
+                            });
+                            if is_superseded {
+                                superseded.insert(id.clone());
+                            } else {
+                                latest_grep.push((pattern.to_string(), path.to_string(), id.clone()));
+                            }
+                        }
+                        "ls" | "find" => {
+                            let path = arguments
+                                .get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(".");
+                            // A later ls of a child path supersedes this one.
+                            let is_superseded = latest_ls.iter().any(|(lp, _)| {
+                                lp == path || lp.starts_with(&format!("{}/", path.trim_end_matches('/')))
+                            });
+                            if is_superseded {
+                                superseded.insert(id.clone());
+                            } else {
+                                latest_ls.push((path.to_string(), id.clone()));
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
         }
     }
 
-    // Don't supersede reads whose results were errors (model may need to see the error)
+    // Don't supersede calls whose results were errors
     for msg in messages {
         if let AgentMessage::ToolResult {
             tool_call_id,
@@ -1644,11 +1706,119 @@ FAILED (failures=1)";
         }
     }
 
+    // --- generalized superseded dedup ---
+
+    #[test]
+    fn superseded_grep_narrower_search_supersedes_broader() {
+        let msgs = vec![
+            user("find the function"),
+            // Broad grep across src/
+            assistant_tool_call("g1", "grep", serde_json::json!({"pattern": "fn foo", "path": "src/"})),
+            tool_result("g1", "src/main.rs:10: fn foo()\nsrc/lib.rs:5: fn foo_bar()"),
+            // Narrower grep in src/main.rs (same pattern, narrower path)
+            assistant_tool_call("g2", "grep", serde_json::json!({"pattern": "fn foo", "path": "src/main.rs"})),
+            tool_result("g2", "src/main.rs:10: fn foo()"),
+            assistant_text("Found it."),
+        ];
+
+        let result = transform_context(msgs, 200_000, None);
+        let first_grep = match &result[2] {
+            AgentMessage::ToolResult { content, .. } => content_text(content),
+            _ => panic!("expected tool result"),
+        };
+        assert!(
+            first_grep.contains("superseded"),
+            "broad grep should be superseded by narrower grep: {}",
+            first_grep
+        );
+    }
+
+    #[test]
+    fn superseded_grep_different_pattern_not_superseded() {
+        let msgs = vec![
+            user("search"),
+            assistant_tool_call("g1", "grep", serde_json::json!({"pattern": "fn foo", "path": "src/"})),
+            tool_result("g1", "src/main.rs:10: fn foo()"),
+            // Different pattern — should NOT supersede
+            assistant_tool_call("g2", "grep", serde_json::json!({"pattern": "fn bar", "path": "src/"})),
+            tool_result("g2", "src/lib.rs:5: fn bar()"),
+            assistant_text("Done."),
+        ];
+
+        let result = transform_context(msgs, 200_000, None);
+        let first_grep = match &result[2] {
+            AgentMessage::ToolResult { content, .. } => content_text(content),
+            _ => panic!("expected tool result"),
+        };
+        assert!(
+            !first_grep.contains("superseded"),
+            "different pattern greps should not supersede each other"
+        );
+    }
+
+    #[test]
+    fn superseded_ls_child_supersedes_parent() {
+        let msgs = vec![
+            user("explore the codebase"),
+            // List parent dir
+            assistant_tool_call("l1", "ls", serde_json::json!({"path": "src/"})),
+            tool_result("l1", "src/main.rs\nsrc/lib.rs\nsrc/agent/\nsrc/tools/"),
+            // List child dir (narrower)
+            assistant_tool_call("l2", "ls", serde_json::json!({"path": "src/agent/"})),
+            tool_result("l2", "src/agent/agent.rs\nsrc/agent/convert.rs"),
+            assistant_text("Found the agent module."),
+        ];
+
+        let result = transform_context(msgs, 200_000, None);
+        let parent_ls = match &result[2] {
+            AgentMessage::ToolResult { content, .. } => content_text(content),
+            _ => panic!("expected tool result"),
+        };
+        assert!(
+            parent_ls.contains("superseded"),
+            "parent ls should be superseded by child ls: {}",
+            parent_ls
+        );
+    }
+
+    #[test]
+    fn superseded_edit_intermediate_results_collapsed() {
+        let msgs = vec![
+            user("refactor"),
+            // Three edits to the same file
+            assistant_tool_call("e1", "edit", serde_json::json!({"path": "src/main.rs", "old_text": "a", "new_text": "b"})),
+            tool_result("e1", "Edited src/main.rs\n--- a/src/main.rs\n+++ b/src/main.rs\n-a\n+b"),
+            assistant_tool_call("e2", "edit", serde_json::json!({"path": "src/main.rs", "old_text": "b", "new_text": "c"})),
+            tool_result("e2", "Edited src/main.rs\n--- a/src/main.rs\n+++ b/src/main.rs\n-b\n+c"),
+            assistant_tool_call("e3", "edit", serde_json::json!({"path": "src/main.rs", "old_text": "c", "new_text": "d"})),
+            tool_result("e3", "Edited src/main.rs\n--- a/src/main.rs\n+++ b/src/main.rs\n-c\n+d"),
+            assistant_text("Done."),
+        ];
+
+        let result = transform_context(msgs, 200_000, None);
+        // First two edit results should be superseded, last preserved
+        let edit1 = match &result[2] {
+            AgentMessage::ToolResult { content, .. } => content_text(content),
+            _ => panic!("expected tool result"),
+        };
+        let edit2 = match &result[4] {
+            AgentMessage::ToolResult { content, .. } => content_text(content),
+            _ => panic!("expected tool result"),
+        };
+        let edit3 = match &result[6] {
+            AgentMessage::ToolResult { content, .. } => content_text(content),
+            _ => panic!("expected tool result"),
+        };
+        assert!(edit1.contains("superseded"), "first edit should be superseded: {}", edit1);
+        assert!(edit2.contains("superseded"), "second edit should be superseded: {}", edit2);
+        assert!(!edit3.contains("superseded"), "last edit should be preserved");
+    }
+
     #[test]
     fn frozen_cutoff_stable_with_superseded_reads() {
         // Superseded reads are another source of prefix instability: when a
         // new read of the same file arrives, earlier reads get replaced with
-        // "[superseded by later read]". Verify that reads already superseded
+        // "[superseded by later call]". Verify that reads already superseded
         // before the loop stay stable when a new read arrives during the loop.
         let mut msgs = vec![
             user("check the file"),
