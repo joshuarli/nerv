@@ -15,12 +15,70 @@ pub enum Permission {
 
 /// Check whether a tool call should be auto-approved or needs user confirmation.
 pub fn check(tool: &str, args: &serde_json::Value, repo_root: Option<&Path>) -> Permission {
+    check_with_allowed_dirs(tool, args, repo_root, &[])
+}
+
+/// Like [`check`], but also auto-approves any path that falls within one of
+/// the user-granted `allowed_dirs` (populated by the "allow directory" prompt
+/// response).
+pub fn check_with_allowed_dirs(
+    tool: &str,
+    args: &serde_json::Value,
+    repo_root: Option<&Path>,
+    allowed_dirs: &[PathBuf],
+) -> Permission {
+    // If the user has granted a directory, auto-approve paths inside it.
+    if !allowed_dirs.is_empty() {
+        if let Some(path) = path_for_args(tool, args) {
+            let resolved = resolve_path(&path, repo_root);
+            let resolved = normalize_path(&resolved);
+            for dir in allowed_dirs {
+                let dir = normalize_path(dir);
+                if resolved.starts_with(&dir) {
+                    return Permission::Allow;
+                }
+            }
+        }
+    }
+
     match tool {
         "read" | "grep" | "find" | "ls" | "symbols" | "codemap" => check_read_tool(args, repo_root),
         "edit" | "write" => check_write_tool(tool, args, repo_root),
         "bash" => check_bash(args, repo_root),
         "memory" => Permission::Allow,
         _ => Permission::Ask(format!("unknown tool: {}", tool)),
+    }
+}
+
+/// Extract the primary filesystem path from a tool call's args, if present.
+/// Used to determine whether a path falls within a user-granted directory.
+pub fn path_for_args(tool: &str, args: &serde_json::Value) -> Option<String> {
+    match tool {
+        "read" | "edit" | "write" | "grep" | "find" | "ls" | "symbols" | "codemap" => {
+            args["path"].as_str().map(|s| s.to_string())
+        }
+        "bash" => args["command"].as_str().map(|s| s.to_string()),
+        _ => None,
+    }
+}
+
+/// Resolve a raw path string to an absolute PathBuf (without touching filesystem).
+fn resolve_path(path: &str, repo_root: Option<&Path>) -> PathBuf {
+    if path.starts_with('/') {
+        PathBuf::from(path)
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = crate::home_dir() {
+            home.join(rest)
+        } else {
+            PathBuf::from(path)
+        }
+    } else {
+        // Relative — resolve against repo root if available.
+        if let Some(root) = repo_root {
+            root.join(path)
+        } else {
+            PathBuf::from(path)
+        }
     }
 }
 
@@ -440,6 +498,35 @@ mod tests {
         let cmd = format!("cat {}/.config/some-tool/config.yml", home.display());
         let args = serde_json::json!({"command": cmd});
         assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn allowed_dir_grants_access_to_path_within_it() {
+        let allowed = PathBuf::from("/Users/josh/external");
+        let args = serde_json::json!({"path": "/Users/josh/external/foo.rs"});
+        assert_eq!(
+            check_with_allowed_dirs("read", &args, Some(&repo()), &[allowed]),
+            Permission::Allow
+        );
+    }
+
+    #[test]
+    fn allowed_dir_does_not_grant_access_outside_it() {
+        let allowed = PathBuf::from("/Users/josh/external");
+        let args = serde_json::json!({"path": "/etc/passwd"});
+        assert!(matches!(
+            check_with_allowed_dirs("read", &args, Some(&repo()), &[allowed]),
+            Permission::Ask(_)
+        ));
+    }
+
+    #[test]
+    fn allowed_dir_empty_falls_back_to_normal_check() {
+        let args = serde_json::json!({"path": "/etc/passwd"});
+        assert!(matches!(
+            check_with_allowed_dirs("read", &args, Some(&repo()), &[]),
+            Permission::Ask(_)
+        ));
     }
 
     #[test]

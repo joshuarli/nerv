@@ -1,5 +1,6 @@
 use crossbeam_channel as channel;
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use super::layout::AppLayout;
 use super::theme;
@@ -62,6 +63,8 @@ pub struct InteractiveMode {
     pub plan_mode: bool,
     /// Current auto-compact threshold (0–100). Mirrors what was last sent to the session.
     pub compact_threshold: u8,
+    /// Directories the user has granted full access to (shared with the session thread).
+    pub allowed_dirs: Arc<Mutex<Vec<PathBuf>>>,
 }
 
 impl InteractiveMode {
@@ -74,6 +77,7 @@ impl InteractiveMode {
         skills: Vec<crate::core::skills::Skill>,
         repo_root: Option<String>,
         repo_id: Option<String>,
+        allowed_dirs: Arc<Mutex<Vec<PathBuf>>>,
     ) -> Self {
         Self {
             cmd_tx,
@@ -100,6 +104,7 @@ impl InteractiveMode {
             pending_permission_details: None,
             plan_mode: false,
             compact_threshold: 50,
+            allowed_dirs,
         }
     }
 
@@ -191,7 +196,7 @@ impl InteractiveMode {
                     reason.clone()
                 };
                 self.status_message = Some(format!(
-                    "⚠ Permission: {}\n  {}\n  y = allow, n = deny",
+                    "⚠ Permission: {}\n  {}\n  y = allow, n = deny, a = allow dir",
                     tool, detail
                 ));
                 self.status_is_error = true;
