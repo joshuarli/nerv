@@ -45,6 +45,18 @@ harness = false
 name = "sse_parsing"
 harness = false
 
+[[bench]]
+name = "highlight"
+harness = false
+
+[[bench]]
+name = "chat_writer"
+harness = false
+
+[[bench]]
+name = "index"
+harness = false
+
 [profile.dev]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"

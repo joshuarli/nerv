@@ -1,7 +1,8 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use std::time::Duration;
 
-use nerv::agent::convert::{LlmMessage, convert_to_llm, transform_context};
+use nerv::agent::convert::{LlmMessage, convert_to_llm};
+use nerv::agent::transform::transform_context;
 use nerv::agent::provider::*;
 use nerv::agent::types::*;
 use nerv::agent::{AnthropicProvider, OpenAICompatProvider};
@@ -95,6 +96,7 @@ fn make_conversation_with_tools(turns: usize) -> Vec<AgentMessage> {
                 ),
             }],
             is_error: false,
+            display: None,
             timestamp: 3000 + i as u64,
         });
         messages.push(AgentMessage::Assistant(AssistantMessage {
@@ -135,13 +137,13 @@ fn make_completion_request(
 
 fn bench_convert_to_llm(c: &mut Criterion) {
     let mut group = c.benchmark_group("convert_to_llm");
-    for turns in [5, 20, 50] {
+    for turns in [5, 20, 50, 100, 200] {
         let messages = make_conversation(turns);
         group.bench_with_input(BenchmarkId::new("text_only", turns), &turns, |b, _| {
             b.iter(|| black_box(convert_to_llm(&messages)));
         });
     }
-    for turns in [5, 20, 50] {
+    for turns in [5, 20, 50, 100, 200] {
         let messages = make_conversation_with_tools(turns);
         group.bench_with_input(BenchmarkId::new("with_tools", turns), &turns, |b, _| {
             b.iter(|| black_box(convert_to_llm(&messages)));
@@ -152,10 +154,12 @@ fn bench_convert_to_llm(c: &mut Criterion) {
 
 fn bench_transform_context(c: &mut Criterion) {
     let mut group = c.benchmark_group("transform_context");
-    for turns in [5, 20, 50] {
+    // 100 and 200 turns exercise the stale-truncation and dedup optimisations
+    // that only activate once the context grows beyond RECENT_TURNS
+    for turns in [5, 20, 50, 100, 200] {
         let messages = make_conversation_with_tools(turns);
         group.bench_with_input(BenchmarkId::new("turns", turns), &turns, |b, _| {
-            b.iter(|| black_box(transform_context(messages.clone(), 200_000)));
+            b.iter(|| black_box(transform_context(messages.clone(), 200_000, None)));
         });
     }
     group.finish();
@@ -233,7 +237,7 @@ fn bench_full_pipeline(c: &mut Criterion) {
         // End-to-end: AgentMessage[] → transform → convert → build body → serialize
         group.bench_with_input(BenchmarkId::new("agent_to_json", turns), &turns, |b, _| {
             b.iter(|| {
-                let transformed = transform_context(messages.clone(), 200_000);
+                let transformed = transform_context(messages.clone(), 200_000, None);
                 let llm = convert_to_llm(&transformed);
                 let req = make_completion_request(&system, &llm, &tools);
                 let body = provider.build_request_body(&req);

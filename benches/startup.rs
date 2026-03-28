@@ -17,6 +17,7 @@ fn fast() -> Criterion {
 
 fn nerv_dir() -> PathBuf {
     nerv::home_dir()
+        .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join(".nerv")
 }
@@ -34,7 +35,7 @@ fn bench_model_registry(c: &mut Criterion) {
     c.bench_function("model_registry_new", |b| {
         b.iter(|| {
             let mut auth = nerv::core::auth::AuthStorage::load(&dir);
-            black_box(ModelRegistry::new(&config, &mut auth))
+            black_box(ModelRegistry::new(&config, &mut auth, &dir))
         });
     });
 }
@@ -75,7 +76,7 @@ fn bench_session_manager_new(c: &mut Criterion) {
     c.bench_function("session_manager_new", |b| {
         b.iter(|| {
             let mut sm = SessionManager::new(&dir);
-            sm.new_session(&cwd).ok();
+            sm.new_session(&cwd, None).ok();
             black_box(sm)
         });
     });
@@ -135,7 +136,7 @@ fn bench_full_startup(c: &mut Criterion) {
         b.iter(|| {
             let config = NervConfig::load(&dir);
             let mut auth = nerv::core::auth::AuthStorage::load(&dir);
-            let model_registry = Arc::new(ModelRegistry::new(&config, &mut auth));
+            let model_registry = Arc::new(ModelRegistry::new(&config, &mut auth, &dir));
             let resources = nerv::core::resource_loader::load_resources(&cwd, &dir);
             let _skills = resources.skills.clone();
 
@@ -159,7 +160,7 @@ fn bench_full_startup(c: &mut Criterion) {
             let agent = Agent::new(provider_registry);
 
             let mut session_manager = SessionManager::new(&dir);
-            session_manager.new_session(&cwd).ok();
+            session_manager.new_session(&cwd, None).ok();
 
             let session = AgentSession::new(
                 agent,
