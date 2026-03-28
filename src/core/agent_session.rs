@@ -418,31 +418,12 @@ impl AgentSession {
             }
         }
 
-        // Session naming after first completed turn
-        if !self.session_named && self.session_manager.name().is_none() {
-            let config = NervConfig::load(crate::nerv_dir());
-            let naming_model_override: Option<Option<&str>> = config
-                .session_naming_model
-                .as_ref()
-                .map(|inner| inner.as_deref());
-            let should_name = !matches!(naming_model_override, Some(None));
-            if should_name {
-                let model_hint = naming_model_override.flatten();
-                if let Some((provider, model_id)) = self.resolve_utility_provider(model_hint) {
-                    if !user_text.is_empty() {
-                        match generate_session_name(user_text, provider, &model_id) {
-                            Ok(name) => {
-                                self.session_manager.set_name(&name);
-                                self.session_named = true;
-                                let _ = event_tx.send(AgentSessionEvent::SessionNamed { name });
-                            }
-                            Err(e) => {
-                                crate::log::info(&format!("session naming failed: {e}"));
-                            }
-                        }
-                    }
-                }
-            }
+        // Session naming after first completed turn — deterministic, no model call.
+        if !self.session_named && self.session_manager.name().is_none() && !user_text.is_empty() {
+            let name = generate_session_name(user_text);
+            self.session_manager.set_name(&name);
+            self.session_named = true;
+            let _ = event_tx.send(AgentSessionEvent::SessionNamed { name });
         }
     }
 
@@ -582,7 +563,7 @@ impl AgentSession {
     }
 
     /// Resolve the provider and model id to use for background utility tasks
-    /// (compaction, session naming). Resolution order:
+    /// (compaction). Resolution order:
     ///   1. The `model_override` from config (fuzzy-matched via ModelRegistry).
     ///   2. claude-haiku-4-5 on the anthropic provider (if registered).
     ///   3. The active session model as fallback.
@@ -602,11 +583,8 @@ impl AgentSession {
         }
 
         // 2. Default utility model (haiku) on anthropic
-        if let Some(provider) = registry.get(crate::compaction::summarize::DEFAULT_UTILITY_PROVIDER) {
-            return Some((
-                provider,
-                crate::compaction::summarize::DEFAULT_UTILITY_MODEL.to_string(),
-            ));
+        if let Some(provider) = registry.get("anthropic") {
+            return Some((provider, "claude-haiku-4-5".to_string()));
         }
 
         // 3. Fall back to the current session model

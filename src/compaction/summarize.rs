@@ -3,10 +3,6 @@ use std::sync::Arc;
 use crate::agent::provider::*;
 use crate::agent::types::*;
 
-/// Default lightweight model used for background tasks (compaction, session naming).
-pub const DEFAULT_UTILITY_MODEL: &str = "claude-haiku-4-5";
-pub const DEFAULT_UTILITY_PROVIDER: &str = "anthropic";
-
 pub fn serialize_conversation(messages: &[AgentMessage]) -> String {
     let mut out = String::new();
     for msg in messages {
@@ -93,50 +89,68 @@ pub fn generate_summary(
     Ok(result)
 }
 
-/// Generate a short session title (4–6 words) from the first user message.
-/// Returns an error if the provider call fails; callers should treat errors as non-fatal.
-pub fn generate_session_name(
-    first_user_message: &str,
-    provider: Arc<dyn Provider>,
-    model_id: &str,
-) -> anyhow::Result<String> {
-    // Truncate long messages so the naming call stays cheap.
-    let snippet = if first_user_message.len() > 400 {
+/// Stop-words filtered out when building a session title.
+const STOP_WORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "it", "its", "be", "as", "was",
+    "are", "were", "been", "has", "have", "had", "do", "does", "did",
+    "so", "if", "then", "that", "this", "these", "those", "my", "your",
+    "me", "i", "we", "us", "our", "can", "could", "would", "should",
+    "will", "may", "might", "just", "also", "not", "no", "up", "out",
+    "how", "what", "when", "where", "which", "who", "why", "about",
+    "into", "than", "there", "here", "all", "some", "any", "please",
+    "help", "like", "using", "use", "used",
+];
+
+/// Derive a short session title from the first user message without calling any model.
+///
+/// Strategy: split on whitespace/punctuation, drop stop-words and short tokens,
+/// take the first 5 meaningful words, title-case each one.
+pub fn generate_session_name(first_user_message: &str) -> String {
+    // Work only with the first 400 chars to keep things fast.
+    let text = if first_user_message.len() > 400 {
         let end = first_user_message.floor_char_boundary(400);
         &first_user_message[..end]
     } else {
         first_user_message
     };
 
-    let prompt = format!(
-        "Reply with only a short title of 4–6 words (no punctuation, no quotes) \
-         that describes this request: {snippet}"
-    );
+    // Split on anything that isn't a letter, digit, underscore, dot, or hyphen.
+    // This handles punctuation and whitespace in one pass.
+    let words: Vec<&str> = text
+        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '-')
+        .filter(|w| !w.is_empty())
+        .collect();
 
-    let request = CompletionRequest {
-        model_id: model_id.to_string(),
-        system_prompt: "You are a session title generator. Reply with only the title, nothing else.".to_string(),
-        messages: vec![crate::agent::convert::LlmMessage::User {
-            content: vec![crate::agent::convert::LlmContent::Text(prompt)],
-        }],
-        tools: vec![],
-        max_tokens: 20,
-        thinking: None,
-        cache: CacheConfig::default(),
-    };
-
-    let cancel = new_cancel_flag();
-    let mut result = String::new();
-    provider.stream_completion(&request, &cancel, &mut |event| {
-        if let ProviderEvent::TextDelta(delta) = event {
-            result.push_str(&delta);
+    let mut kept: Vec<String> = Vec::with_capacity(5);
+    for word in &words {
+        if kept.len() >= 5 {
+            break;
         }
-    })?;
-
-    // Strip surrounding whitespace and any wrapping quotes the model may add.
-    let name = result.trim().trim_matches('"').trim_matches('\'').trim().to_string();
-    if name.is_empty() {
-        anyhow::bail!("empty session name returned by model");
+        let lower = word.to_lowercase();
+        // Skip stop-words and single-character tokens.
+        if word.len() < 2 || STOP_WORDS.contains(&lower.as_str()) {
+            continue;
+        }
+        // Title-case: uppercase first char, rest as-is.
+        let mut chars = word.chars();
+        let titled = match chars.next() {
+            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+            None => continue,
+        };
+        kept.push(titled);
     }
-    Ok(name)
+
+    if kept.is_empty() {
+        // Absolute fallback: use the raw start of the message.
+        let fallback = text.trim();
+        let end = fallback
+            .char_indices()
+            .nth(40)
+            .map(|(i, _)| i)
+            .unwrap_or(fallback.len());
+        return fallback[..end].to_string();
+    }
+
+    kept.join(" ")
 }

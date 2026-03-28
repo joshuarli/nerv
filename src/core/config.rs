@@ -1,25 +1,6 @@
 use crate::agent::types::EffortLevel;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
-
-/// Deserializes an `Option<Option<String>>` so that:
-///   - field absent  → `None`            (caller uses its own default)
-///   - field = null  → `Some(None)`      (caller treats as explicitly disabled)
-///   - field = "…"   → `Some(Some(s))`   (caller uses the provided model id)
-fn deser_nullable_string<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let v: Option<String> = Option::deserialize(de)?;
-    // serde gives us Some(s) for a string value and None for a JSON null.
-    // We wrap it in an outer Some to mark "the field was present".
-    Ok(Some(v))
-}
-
-fn default_nullable_none() -> Option<Option<String>> {
-    None // field absent → outer None
-}
-
 /// Parse JSONC (JSON with `//` line comments). Strips comments before parsing.
 pub fn read_jsonc<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     let text = std::fs::read_to_string(path).ok()?;
@@ -38,16 +19,6 @@ pub struct NervConfig {
     /// Accepts any model id recognised by the model registry (fuzzy match).
     /// Defaults to "claude-haiku-4-5" on the anthropic provider when unset.
     pub compaction_model: Option<String>,
-    /// Model used for automatic session title generation after the first turn.
-    /// Accepts any model id recognised by the model registry (fuzzy match).
-    /// Set to `null` to disable automatic naming entirely.
-    /// Defaults to "claude-haiku-4-5" on the anthropic provider when unset.
-    #[serde(
-        default = "default_nullable_none",
-        deserialize_with = "deser_nullable_string",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub session_naming_model: Option<Option<String>>,
     /// Extra HTTP headers per provider, e.g. {"anthropic": {"user-agent": "claude-cli/1.0.0"}}
     #[serde(default)]
     pub headers: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
@@ -78,8 +49,6 @@ impl Default for NervConfig {
             default_effort_level: Some(EffortLevel::Medium),
             auto_compact: Some(true),
             compaction_model: Some("claude-haiku-4-5".to_string()),
-            // Explicit default so new config files document the option.
-            session_naming_model: Some(Some("claude-haiku-4-5".to_string())),
             headers: std::collections::HashMap::new(),
         }
     }
@@ -123,11 +92,6 @@ impl NervConfig {
         };
         if let Some(ref id) = self.compaction_model {
             if let Some(w) = check("compaction_model", id) {
-                warnings.push(w);
-            }
-        }
-        if let Some(Some(ref id)) = self.session_naming_model {
-            if let Some(w) = check("session_naming_model", id) {
                 warnings.push(w);
             }
         }
