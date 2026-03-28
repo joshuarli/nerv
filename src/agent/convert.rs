@@ -208,7 +208,60 @@ fn merge_into(existing: &mut LlmMessage, new: LlmMessage) {
 /// New messages added during the loop are always beyond the frozen cutoff
 /// and included in full, while older messages stay stable.
 pub const RECENT_TURNS: usize = 10;
+const RECENT_TURNS_MIN: usize = 6;
+const RECENT_TURNS_MAX: usize = 16;
 const TRUNCATED_MAX_CHARS: usize = 200;
+
+/// Compute how many recent messages to preserve verbatim, adapting based on
+/// the diversity of files targeted by recent tool calls.
+///
+/// - Focused editing (1-2 distinct files): shrink to `RECENT_TURNS_MIN`
+///   because the model only needs recent context for the file it's iterating on.
+/// - Broad exploration (5+ distinct files): expand to `RECENT_TURNS_MAX`
+///   because the model is building a mental model across many files.
+/// - Otherwise: return `RECENT_TURNS` (the base value).
+///
+/// Only considers the last `RECENT_TURNS_MAX` messages to avoid looking too far back.
+pub fn compute_adaptive_recent(messages: &[AgentMessage]) -> usize {
+    if messages.len() < RECENT_TURNS * 2 {
+        return RECENT_TURNS; // not enough history to adapt
+    }
+
+    // Look at recent tool calls within the analysis window
+    let window_start = messages.len().saturating_sub(RECENT_TURNS_MAX * 2);
+    let mut distinct_paths = std::collections::HashSet::new();
+
+    for msg in &messages[window_start..] {
+        if let AgentMessage::Assistant(a) = msg {
+            for block in &a.content {
+                if let ContentBlock::ToolCall { arguments, name, .. } = block {
+                    match name.as_str() {
+                        "read" | "edit" | "write" => {
+                            if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+                                distinct_paths.insert(path.to_string());
+                            }
+                        }
+                        "grep" | "find" | "ls" => {
+                            if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+                                distinct_paths.insert(path.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    let n = distinct_paths.len();
+    if n <= 2 {
+        RECENT_TURNS_MIN
+    } else if n >= 5 {
+        RECENT_TURNS_MAX
+    } else {
+        RECENT_TURNS
+    }
+}
 
 pub fn transform_context(
     messages: Vec<AgentMessage>,
@@ -1812,6 +1865,60 @@ FAILED (failures=1)";
         assert!(edit1.contains("superseded"), "first edit should be superseded: {}", edit1);
         assert!(edit2.contains("superseded"), "second edit should be superseded: {}", edit2);
         assert!(!edit3.contains("superseded"), "last edit should be preserved");
+    }
+
+    // --- adaptive stale cutoff ---
+
+    #[test]
+    fn adaptive_cutoff_shrinks_for_focused_editing() {
+        // All recent tool calls target the same 1-2 files → window shrinks
+        let mut msgs = vec![user("fix the bug")];
+        for i in 0..12 {
+            let id = format!("t{}", i);
+            // All edits/reads target the same file
+            let tool = if i % 2 == 0 { "edit" } else { "read" };
+            msgs.push(assistant_tool_call(&id, tool, serde_json::json!({"path": "src/main.rs"})));
+            msgs.push(tool_result(&id, "ok"));
+        }
+
+        let recent = compute_adaptive_recent(&msgs);
+        assert!(
+            recent < RECENT_TURNS,
+            "focused editing should shrink window below {}, got {}",
+            RECENT_TURNS, recent
+        );
+    }
+
+    #[test]
+    fn adaptive_cutoff_expands_for_exploration() {
+        // Recent tool calls target many different files → window expands
+        let mut msgs = vec![user("explore the codebase")];
+        for i in 0..12 {
+            let id = format!("t{}", i);
+            msgs.push(assistant_tool_call(
+                &id,
+                "read",
+                serde_json::json!({"path": format!("src/file_{}.rs", i)}),
+            ));
+            msgs.push(tool_result(&id, &format!("contents of file {}", i)));
+        }
+
+        let recent = compute_adaptive_recent(&msgs);
+        assert!(
+            recent >= RECENT_TURNS,
+            "exploration should keep window at or above {}, got {}",
+            RECENT_TURNS, recent
+        );
+    }
+
+    #[test]
+    fn adaptive_cutoff_returns_base_for_short_conversations() {
+        let msgs = vec![
+            user("hello"),
+            assistant_text("hi"),
+        ];
+        let recent = compute_adaptive_recent(&msgs);
+        assert_eq!(recent, RECENT_TURNS, "short conversations use base value");
     }
 
     #[test]

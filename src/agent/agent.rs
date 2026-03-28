@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use super::convert::{RECENT_TURNS, convert_to_llm, transform_context};
+use super::convert::{compute_adaptive_recent, convert_to_llm, transform_context};
 use super::provider::*;
 use super::types::*;
 
@@ -151,7 +151,8 @@ impl Agent {
 
         // Freeze the stale/recent cutoff so that transform_context produces a stable
         // prefix across all API calls in this tool loop — critical for cache reuse.
-        let stale_cutoff = self.state.messages.len().saturating_sub(RECENT_TURNS);
+        let adaptive_recent = compute_adaptive_recent(&self.state.messages);
+        let stale_cutoff = self.state.messages.len().saturating_sub(adaptive_recent);
 
         let mut has_tool_calls = true;
         while has_tool_calls {
