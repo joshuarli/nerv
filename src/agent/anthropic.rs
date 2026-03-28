@@ -160,7 +160,7 @@ impl AnthropicProvider {
         body["messages"] = serde_json::Value::Array(wire_messages);
 
         if !request.tools.is_empty() {
-            let tools: Vec<serde_json::Value> = request
+            let mut tools: Vec<serde_json::Value> = request
                 .tools
                 .iter()
                 .map(|t| {
@@ -171,6 +171,20 @@ impl AnthropicProvider {
                     })
                 })
                 .collect();
+            // Tool schemas are byte-identical on every request in a session, so they
+            // are ideal cache anchor material. Marking the last tool with cache_control
+            // pins a breakpoint at the end of the tools block, making all tool definitions
+            // an Rc (cache-read) hit after the very first request — including the first
+            // request after a compaction, when the conversation messages are cache-cold.
+            // Anthropic allows up to 4 cache_control breakpoints; nerv uses three:
+            //   1. system prompt  (stable for entire session)
+            //   2. tool definitions  (stable for entire session)  ← this one
+            //   3. last user message  (advances each turn, written in messages_to_wire)
+            if request.cache.retention != CacheRetention::None
+                && let Some(last_tool) = tools.last_mut()
+            {
+                last_tool["cache_control"] = cache_control_value(&request.cache, &self.base_url);
+            }
             body["tools"] = serde_json::Value::Array(tools);
         }
 

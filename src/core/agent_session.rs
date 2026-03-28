@@ -658,17 +658,28 @@ impl AgentSession {
             return Ok(None);
         }
 
-        // Find cut point using token-budget-aware algorithm
+        // The kept window is split into two parts for cache efficiency:
+        //   [first_kept_entry_index .. verbatim_start_index)  → summarized by LLM
+        //   [verbatim_start_index .. end)                      → kept verbatim in the DB
+        //
+        // The verbatim window covers the newest turns of the pre-compaction context,
+        // which were already cache-read (Rc) hits. Preserving them byte-for-byte means
+        // they remain Rc on the very next API call — only the new summary is cache-cold.
         let cut = compaction::find_cut_point(
             &branch,
             0,
             branch.len(),
             self.compaction_settings.keep_recent_tokens,
+            self.compaction_settings.verbatim_window_tokens,
         );
+        // first_kept_entry_id is the deletion boundary: the session DB removes everything
+        // before this entry and inserts the compaction summary in its place.
         let first_kept_id = branch[cut.first_kept_entry_index].id().to_string();
 
-        // Collect messages before the cut point for summarization
-        let to_summarize: Vec<AgentMessage> = branch[..cut.first_kept_entry_index]
+        // Summarize only the entries before verbatim_start_index. The verbatim window
+        // beyond that point is left untouched in the DB and will appear in the next
+        // API call byte-for-byte, recovering its Rc status immediately.
+        let to_summarize: Vec<AgentMessage> = branch[..cut.verbatim_start_index]
             .iter()
             .filter_map(|e| {
                 if let crate::session::types::SessionEntry::Message(me) = e {

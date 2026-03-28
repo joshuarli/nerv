@@ -7,7 +7,20 @@ pub struct CompactionSettings {
     pub enabled: bool,
     /// Fraction of the model's context window at which auto-compact triggers (0.0–1.0).
     pub threshold_pct: f64,
+    /// Total token budget for the post-compaction context (summary + verbatim window).
     pub keep_recent_tokens: usize,
+    /// How many tokens of the kept window to preserve verbatim rather than summarize.
+    ///
+    /// When compaction fires, the kept window (newest `keep_recent_tokens` of history)
+    /// is split into two parts:
+    ///   - oldest part  → passed to the summarizer, replaced by a compact summary
+    ///   - newest part  → kept verbatim in the DB (this is the verbatim window)
+    ///
+    /// The verbatim window exists for cache efficiency. Those recent turns were already
+    /// cache-read (Rc) hits in the conversation before compaction; keeping them byte-for-byte
+    /// means they remain Rc on the very next API call. Only the summary prefix is cache-cold
+    /// (Wc) post-compaction. Set to 0 to summarize the entire kept range (original behaviour).
+    pub verbatim_window_tokens: usize,
 }
 
 impl Default for CompactionSettings {
@@ -16,6 +29,7 @@ impl Default for CompactionSettings {
             enabled: true,
             threshold_pct: 0.50,
             keep_recent_tokens: 20_000,
+            verbatim_window_tokens: 5_000,
         }
     }
 }
@@ -87,9 +101,23 @@ pub struct CompactionResult {
 }
 
 /// Result of finding a cut point for compaction.
+///
+/// The session history is split into three regions:
+///
+/// ```text
+/// [0 .. first_kept_entry_index)         → deleted from DB, replaced by summary
+/// [first_kept_entry_index .. verbatim_start_index)  → summarized by LLM call
+/// [verbatim_start_index .. end)         → kept verbatim (cache-warm after compaction)
+/// ```
+///
+/// When `verbatim_window_tokens == 0`, `verbatim_start_index == first_kept_entry_index`
+/// and the entire kept range is summarized (no verbatim window).
 pub struct CutPointResult {
-    /// Index of first entry to keep.
+    /// First entry index to keep in the DB (deletion boundary).
     pub first_kept_entry_index: usize,
+    /// First entry of the verbatim window. Everything between here and `end` is left
+    /// byte-for-byte in the DB so it remains a cache-read hit post-compaction.
+    pub verbatim_start_index: usize,
     /// Index of user message that starts the turn being split, or None.
     pub turn_start_index: Option<usize>,
     /// Whether this cut splits a turn (cut point is not a user message).
@@ -163,12 +191,14 @@ pub fn find_cut_point(
     start: usize,
     end: usize,
     keep_recent_tokens: usize,
+    verbatim_window_tokens: usize,
 ) -> CutPointResult {
     let cut_points = find_valid_cut_points(entries, start, end);
 
     if cut_points.is_empty() {
         return CutPointResult {
             first_kept_entry_index: start,
+            verbatim_start_index: start,
             turn_start_index: None,
             is_split_turn: false,
         };
@@ -219,8 +249,39 @@ pub fn find_cut_point(
         find_turn_start(entries, cut_index, start)
     };
 
+    // Find the verbatim_start_index: the boundary within the kept window between
+    // "summarize this" and "keep this verbatim". Walk backwards from the end of the
+    // kept window, accumulating token counts, until we've claimed verbatim_window_tokens
+    // worth of entries. Everything older than that boundary is handed to the summarizer.
+    //
+    // Why: the entries in the verbatim window were cache-read (Rc) hits in the requests
+    // that preceded compaction. Keeping them byte-identical in the DB means they stay Rc
+    // on the first post-compaction API call. Only the new summary prefix is cache-cold.
+    let verbatim_start_index = if verbatim_window_tokens == 0 || verbatim_window_tokens >= keep_recent_tokens {
+        // No verbatim window — summarize the entire kept range.
+        cut_index
+    } else {
+        let mut verbatim_accum = 0usize;
+        let mut vs_idx = end; // fallback: keep everything verbatim
+        for i in (cut_index..end).rev() {
+            let Some(msg) = entry_message(&entries[i]) else {
+                continue;
+            };
+            verbatim_accum += estimate_tokens(msg);
+            if verbatim_accum >= verbatim_window_tokens {
+                // Find the nearest valid cut point at or after i
+                let vcp = cut_points.iter().find(|&&cp| cp >= i).copied().unwrap_or(cut_index);
+                vs_idx = vcp;
+                break;
+            }
+        }
+        // Clamp: verbatim_start must be >= first_kept_entry_index
+        vs_idx.max(cut_index)
+    };
+
     CutPointResult {
         first_kept_entry_index: cut_index,
+        verbatim_start_index,
         turn_start_index: turn_start,
         is_split_turn: turn_start.is_some(),
     }
