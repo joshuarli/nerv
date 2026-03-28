@@ -2,7 +2,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use super::convert::{compute_adaptive_recent, convert_to_llm, should_prune_tool_descriptions, transform_context};
+use super::convert::convert_to_llm;
+use super::transform::{compute_adaptive_recent, should_prune_tool_descriptions, transform_context};
 use super::provider::*;
 use super::types::*;
 
