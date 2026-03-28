@@ -82,7 +82,7 @@ fn round_trip_session_with_multiple_message_types() {
     .unwrap();
     mgr.append_model_change("anthropic", "claude-sonnet-4-6")
         .unwrap();
-    mgr.append_thinking_level_change(ThinkingLevel::High)
+    mgr.append_thinking_level_change(ThinkingLevel::On)
         .unwrap();
 
     let session_id = mgr.session_id().to_string();
@@ -98,7 +98,7 @@ fn round_trip_session_with_multiple_message_types() {
         ctx.model,
         Some(("anthropic".into(), "claude-sonnet-4-6".into()))
     );
-    assert_eq!(ctx.thinking_level, ThinkingLevel::High);
+    assert_eq!(ctx.thinking_level, ThinkingLevel::On);
 }
 
 #[test]
@@ -375,37 +375,225 @@ fn html_export_excludes_thinking() {
 
 // ── Session tree / branching ──
 
+// ── Branch-aware export ───────────────────────────────────────────────────────
+
 #[test]
-fn branch_creates_fork() {
+fn export_jsonl_includes_only_current_branch() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+    mgr.append_message(&user_msg("shared root"), None).unwrap();
+    let fork_point = mgr.leaf_id().unwrap().to_string();
+
+    // Branch A
+    mgr.append_message(&assistant_msg("BRANCH_A_ONLY"), None).unwrap();
+
+    // Branch B (fork from the shared root)
+    mgr.branch(&fork_point);
+    mgr.append_message(&assistant_msg("BRANCH_B_ONLY"), None).unwrap();
+
+    // Currently on branch B — export should contain B but not A
+    let jsonl = mgr.export_jsonl().unwrap();
+    assert!(jsonl.contains("BRANCH_B_ONLY"), "should include current branch");
+    assert!(!jsonl.contains("BRANCH_A_ONLY"), "should NOT include sibling branch");
+    assert!(jsonl.contains("shared root"), "should include shared ancestor");
+}
+
+#[test]
+fn export_jsonl_leaf_id_in_header() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+    mgr.append_message(&user_msg("hello"), None).unwrap();
+
+    let leaf = mgr.leaf_id().unwrap().to_string();
+    let jsonl = mgr.export_jsonl().unwrap();
+    let header: serde_json::Value = serde_json::from_str(jsonl.lines().next().unwrap()).unwrap();
+    assert_eq!(header["leaf_id"], leaf.as_str());
+}
+
+#[test]
+fn export_jsonl_branch_order_root_to_leaf() {
     let (_tmp, mut mgr) = setup();
     mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
 
     mgr.append_message(&user_msg("first"), None).unwrap();
-    let branch_point = mgr.leaf_id().unwrap().to_string();
-    mgr.append_message(&assistant_msg("response A"), None).unwrap();
+    mgr.append_message(&assistant_msg("second"), None).unwrap();
+    mgr.append_message(&user_msg("third"), None).unwrap();
 
-    // Branch back to the user message
-    mgr.branch(&branch_point);
-    mgr.append_message(&assistant_msg("response B"), None).unwrap();
-
-    // Tree should have branches
-    assert!(mgr.has_branches());
-
-    // Current branch should have response B, not A
-    let branch = mgr.get_branch();
-    let texts: Vec<String> = branch
-        .iter()
-        .filter_map(|e| {
-            if let nerv::session::SessionEntry::Message(me) = e {
-                if let AgentMessage::Assistant(a) = &me.message {
-                    return Some(a.text_content());
-                }
-            }
-            None
-        })
+    let jsonl = mgr.export_jsonl().unwrap();
+    // Skip header line; entries should appear in root→leaf order
+    let texts: Vec<&str> = jsonl.lines()
+        .skip(1)
+        .filter(|l| l.contains("first") || l.contains("second") || l.contains("third"))
         .collect();
-    assert!(texts.contains(&"response B".to_string()));
-    assert!(!texts.contains(&"response A".to_string()));
+    assert_eq!(texts.len(), 3);
+    let first_pos = jsonl.find("first").unwrap();
+    let second_pos = jsonl.find("second").unwrap();
+    let third_pos = jsonl.find("third").unwrap();
+    assert!(first_pos < second_pos && second_pos < third_pos,
+        "entries should be in root→leaf order");
+}
+
+// ── Branch-aware compaction ───────────────────────────────────────────────────
+
+#[test]
+fn compaction_only_removes_current_branch_entries() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+    // Shared root
+    mgr.append_message(&user_msg("shared"), None).unwrap();
+    let fork_point = mgr.leaf_id().unwrap().to_string();
+
+    // Branch A: old messages that will be compacted
+    mgr.append_message(&assistant_msg("branch_a_old_1"), None).unwrap();
+    mgr.append_message(&user_msg("branch_a_old_2"), None).unwrap();
+    let branch_a_keep_id = mgr.leaf_id().unwrap().to_string();
+    mgr.append_message(&assistant_msg("branch_a_keep"), None).unwrap();
+
+    // Branch B: fork from the shared root, independent
+    mgr.branch(&fork_point);
+    mgr.append_message(&assistant_msg("BRANCH_B_SENTINEL"), None).unwrap();
+
+    // Re-enter branch A
+    mgr.branch(&branch_a_keep_id);
+    // Compact branch A: remove entries before branch_a_keep_id
+    mgr.append_compaction("summary of A".into(), branch_a_keep_id.clone(), 500).unwrap();
+
+    // Branch B sentinel should still be in the DB
+    let all_entries = mgr.entries();
+    let has_b = all_entries.iter().any(|e| {
+        if let nerv::session::SessionEntry::Message(me) = e {
+            if let AgentMessage::Assistant(a) = &me.message {
+                return a.text_content().contains("BRANCH_B_SENTINEL");
+            }
+        }
+        false
+    });
+    assert!(has_b, "compaction should not remove sibling branch B entries");
+}
+
+#[test]
+fn compaction_removes_pre_cut_entries_on_current_branch() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+    for i in 0..6 {
+        mgr.append_message(&user_msg(&format!("msg_{}", i)), None).unwrap();
+    }
+
+    // Cut at entry index 3 (keep entries 3,4,5)
+    let cut_id = mgr.get_branch()[3].id().to_string();
+    mgr.append_compaction("summary".into(), cut_id, 1000).unwrap();
+
+    let ctx = mgr.build_session_context();
+    // summary + 3 kept messages
+    assert_eq!(ctx.messages.len(), 4);
+    // First message is the summary
+    assert!(matches!(ctx.messages[0], AgentMessage::CompactionSummary { .. }));
+    // Last message is msg_5
+    if let AgentMessage::User { content, .. } = &ctx.messages[3] {
+        let text = match &content[0] { ContentItem::Text { text } => text, _ => panic!() };
+        assert!(text.contains("msg_5"));
+    }
+}
+
+// ── get_tree structure ────────────────────────────────────────────────────────
+
+#[test]
+fn get_tree_linear_session_is_single_chain() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+    mgr.append_message(&user_msg("a"), None).unwrap();
+    mgr.append_message(&assistant_msg("b"), None).unwrap();
+    mgr.append_message(&user_msg("c"), None).unwrap();
+
+    let tree = mgr.get_tree();
+    // One root with a single child chain — each node has at most 1 child
+    fn max_branch_width(nodes: &[nerv::session::types::SessionTreeNode]) -> usize {
+        let mut max = nodes.len();
+        for n in nodes {
+            max = max.max(max_branch_width(&n.children));
+        }
+        max
+    }
+    // No branching: every node has 0 or 1 children
+    fn all_single_child(nodes: &[nerv::session::types::SessionTreeNode]) -> bool {
+        nodes.iter().all(|n| n.children.len() <= 1 && all_single_child(&n.children))
+    }
+    assert!(all_single_child(&tree), "linear session should have no branch points");
+}
+
+#[test]
+fn get_tree_fork_produces_two_children() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+    mgr.append_message(&user_msg("root"), None).unwrap();
+    let fork = mgr.leaf_id().unwrap().to_string();
+    mgr.append_message(&assistant_msg("branch_a"), None).unwrap();
+    mgr.branch(&fork);
+    mgr.append_message(&assistant_msg("branch_b"), None).unwrap();
+
+    let tree = mgr.get_tree();
+
+    // Walk to the fork node (the "root" user message)
+    fn find_fork(nodes: &[nerv::session::types::SessionTreeNode]) -> Option<usize> {
+        for n in nodes {
+            if n.children.len() == 2 { return Some(2); }
+            if let Some(c) = find_fork(&n.children) { return Some(c); }
+        }
+        None
+    }
+    assert_eq!(find_fork(&tree), Some(2), "should find a node with exactly 2 children");
+}
+
+#[test]
+fn get_tree_empty_session_returns_empty() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+    assert!(mgr.get_tree().is_empty());
+}
+
+// ── Search: branch-aware behaviour ────────────────────────────────────────────
+
+#[test]
+fn search_deduplicates_hits_across_branches_same_session() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+    mgr.append_message(&user_msg("xylophone question"), None).unwrap();
+    let fork = mgr.leaf_id().unwrap().to_string();
+
+    // Both branches mention the keyword
+    mgr.append_message(&assistant_msg("xylophone answer branch A"), None).unwrap();
+    mgr.branch(&fork);
+    mgr.append_message(&assistant_msg("xylophone answer branch B"), None).unwrap();
+
+    let results = mgr.search_sessions("xylophone");
+    // Both hits are in the same session — should deduplicate to 1 result
+    assert_eq!(results.len(), 1, "multiple branch hits in one session → 1 search result");
+}
+
+#[test]
+fn search_hit_in_inactive_branch_still_returns_session() {
+    let (_tmp, mut mgr) = setup();
+    mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+    mgr.append_message(&user_msg("shared"), None).unwrap();
+    let fork = mgr.leaf_id().unwrap().to_string();
+
+    // Branch A: has the keyword
+    mgr.append_message(&assistant_msg("OBSCURE_TERM_47X branch A"), None).unwrap();
+
+    // Branch B: active, no keyword
+    mgr.branch(&fork);
+    mgr.append_message(&assistant_msg("unrelated content"), None).unwrap();
+
+    // Search should still find the session even though the hit is on the inactive branch
+    let results = mgr.search_sessions("OBSCURE_TERM_47X");
+    assert_eq!(results.len(), 1, "should find session even if hit is on inactive branch");
 }
 
 #[test]

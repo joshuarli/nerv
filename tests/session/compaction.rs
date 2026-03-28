@@ -76,22 +76,14 @@ fn estimate_tokens_includes_overhead() {
 
 #[test]
 fn should_compact_threshold() {
-    let s = CompactionSettings {
-        enabled: true,
-        reserve_tokens: 10_000,
-        keep_recent_tokens: 20_000,
-    };
-    assert!(!should_compact(50_000, 100_000, &s)); // well under threshold
+    // Default threshold_pct = 0.50 → threshold at 50k of 100k window
+    let s = CompactionSettings { enabled: true, threshold_pct: 0.90, keep_recent_tokens: 20_000 };
+    assert!(!should_compact(50_000, 100_000, &s)); // well under
     assert!(!should_compact(89_999, 100_000, &s)); // just under
-    assert!(should_compact(90_001, 100_000, &s)); // just over
-    assert!(!should_compact(
-        99_999,
-        100_000,
-        &CompactionSettings {
-            enabled: false,
-            ..s
-        }
-    ));
+    assert!(should_compact(90_001, 100_000, &s));  // just over
+
+    let disabled = CompactionSettings { enabled: false, ..s };
+    assert!(!should_compact(99_999, 100_000, &disabled));
 }
 
 #[test]
