@@ -39,8 +39,9 @@ fn read_tool_offset_and_limit() {
     std::fs::write(&file, "a\nb\nc\nd\ne\n").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
+    // offset is 1-based: offset=3, limit=2 → lines 3 and 4 (c, d)
     let result = tool.execute(
-        serde_json::json!({"path": "test.txt", "offset": 2, "limit": 2}),
+        serde_json::json!({"path": "test.txt", "offset": 3, "limit": 2}),
         noop_update(),
     );
 
@@ -861,6 +862,60 @@ fn edit_multi_large_file_rejected() {
 }
 
 // ── Read tool ──
+
+#[test]
+fn edit_multi_fuzzy_match_trailing_whitespace() {
+    // old_text with trailing whitespace stripped should still match file content
+    // that has trailing whitespace (or vice-versa). This mirrors the real failure
+    // mode where a model sends old_text with trailing spaces trimmed.
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.rs");
+    std::fs::write(&file, "fn alpha() {  \nfn beta() {\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.rs",
+            "edits": [
+                {"old_text": "fn alpha() {", "new_text": "fn one() {"},
+                {"old_text": "fn beta() {", "new_text": "fn two() {"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "multi fuzzy match failed: {}", result.content);
+    let written = std::fs::read_to_string(&file).unwrap();
+    assert!(written.contains("fn one()"), "first edit not applied: {}", written);
+    assert!(written.contains("fn two()"), "second edit not applied: {}", written);
+}
+
+#[test]
+fn edit_multi_fuzzy_match_smart_quotes() {
+    // Same fuzzy normalization (smart quotes → ASCII) should work in multi-edit
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("test.txt");
+    std::fs::write(&file, "say \u{201C}hello\u{201D}\nsay \u{201C}world\u{201D}\n").unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.txt",
+            "edits": [
+                {"old_text": "say \"hello\"", "new_text": "say \"goodbye\""},
+                {"old_text": "say \"world\"", "new_text": "say \"earth\""}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "multi fuzzy smart-quote match failed: {}", result.content);
+    let written = std::fs::read_to_string(&file).unwrap();
+    assert!(written.contains("goodbye"), "first edit not applied: {}", written);
+    assert!(written.contains("earth"), "second edit not applied: {}", written);
+}
 
 #[test]
 fn read_empty_file() {

@@ -30,7 +30,7 @@ pub fn truncate_tail(data: &[u8], max_bytes: usize, max_lines: usize) -> Truncat
         let kept: Vec<&str> = lines[lines.len() - max_lines..].to_vec();
         let omitted = lines.len() - max_lines;
         let content = format!(
-            "[{} lines omitted, showing last {}]\n{}",
+            "[{} lines omitted, showing last {}]\n{}\n",
             omitted,
             max_lines,
             kept.join("\n")
@@ -73,7 +73,7 @@ pub fn truncate_head(text: &str, max_lines: usize) -> (String, bool) {
     }
     let kept = &lines[..max_lines];
     let omitted = lines.len() - max_lines;
-    let content = format!("{}\n[{} more lines omitted]", kept.join("\n"), omitted);
+    let content = format!("{}\n[{} more lines omitted]\n", kept.join("\n"), omitted);
     (content, true)
 }
 

@@ -335,6 +335,7 @@ fn apply_multi_edit(
 ) -> ToolResult {
     // Normalize and validate all old_text values
     let mut positioned: Vec<(usize, &Edit, String)> = Vec::with_capacity(edits.len());
+    let fuzzy_content = normalize_for_fuzzy(normalized);
     for (i, edit) in edits.iter().enumerate() {
         let norm_old = normalize_crlf(&edit.old_text).into_owned();
         if norm_old.is_empty() {
@@ -349,14 +350,56 @@ fn apply_multi_edit(
         let first = match occurrences.next() {
             Some((pos, _)) => pos,
             None => {
-                return ToolResult {
-                    content: format!(
-                        "Error: edits[{}].old_text not found in {}",
-                        i, path_str
-                    ),
-                    details: None,
-                    is_error: true,
+                // Fuzzy match fallback (same as single-edit path)
+                let fuzzy_old = normalize_for_fuzzy(&norm_old);
+                let mut fuzzy_occurrences = fuzzy_content.match_indices(&fuzzy_old);
+                let fuzzy_first = match fuzzy_occurrences.next() {
+                    Some((pos, _)) => pos,
+                    None => {
+                        return ToolResult {
+                            content: format!(
+                                "Error: edits[{}].old_text not found in {}",
+                                i, path_str
+                            ),
+                            details: None,
+                            is_error: true,
+                        }
+                    }
+                };
+                if fuzzy_occurrences.next().is_some() {
+                    return ToolResult {
+                        content: format!(
+                            "Error: edits[{}].old_text fuzzy-matches multiple times in {}. Must be unique.",
+                            i, path_str
+                        ),
+                        details: None,
+                        is_error: true,
+                    };
                 }
+                // Map fuzzy position back to a byte position in `normalized`
+                let fuzzy_line = fuzzy_content[..fuzzy_first].matches('\n').count();
+                let fuzzy_end_line = fuzzy_line + fuzzy_old.matches('\n').count();
+                let orig_lines: Vec<&str> = normalized.lines().collect();
+                if fuzzy_end_line >= orig_lines.len() {
+                    return ToolResult {
+                        content: format!(
+                            "Error: edits[{}].old_text not found in {}",
+                            i, path_str
+                        ),
+                        details: None,
+                        is_error: true,
+                    };
+                }
+                let orig_start: usize = orig_lines[..fuzzy_line].iter().map(|l| l.len() + 1).sum();
+                let orig_end: usize = orig_lines[..=fuzzy_end_line]
+                    .iter()
+                    .map(|l| l.len() + 1)
+                    .sum::<usize>()
+                    .saturating_sub(1);
+                // Replace norm_old with the actual matched slice so apply step uses the right length
+                let actual_slice = &normalized[orig_start..orig_end.min(normalized.len())];
+                positioned.push((orig_start, edit, actual_slice.to_string()));
+                continue;
             }
         };
         if occurrences.next().is_some() {

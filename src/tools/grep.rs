@@ -168,6 +168,10 @@ fn truncate_long_lines(text: &str, max_chars: usize) -> String {
             out.push_str(line);
         }
     }
+    // Preserve trailing newline from subprocess output
+    if text.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
     out
 }
 

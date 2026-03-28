@@ -101,7 +101,7 @@ impl AgentTool for MemoryTool {
                         .enumerate()
                         .map(|(i, m)| format!("{}. {}", i + 1, m))
                         .collect();
-                    ToolResult::ok(lines.join("\n"))
+                    ToolResult::ok(lines.join("\n") + "\n")
                 }
             }
             "add" => {

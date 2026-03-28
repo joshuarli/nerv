@@ -119,11 +119,16 @@ impl AgentTool for ReadTool {
                 }
 
                 // Apply truncation only when no explicit range was given
-                let (content, truncated) = if has_range {
+                let (mut content, truncated) = if has_range {
                     (content, false)
                 } else {
                     truncate_head(&content, DEFAULT_MAX_LINES)
                 };
+
+                // Ensure trailing newline
+                if !content.is_empty() && !content.ends_with('\n') {
+                    content.push('\n');
+                }
 
                 let display = if total_lines == 0 {
                     format!("{} (empty)", path_str)
