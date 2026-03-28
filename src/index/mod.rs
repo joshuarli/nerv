@@ -215,7 +215,8 @@ impl SymbolCache {
 pub struct SymbolIndex {
     files: HashMap<PathBuf, FileEntry>,
     parser: Parser,
-    query: Query,
+    /// Per-language queries: [rust, go, python, typescript].
+    queries: [Query; 4],
     last_scan: Option<Instant>,
     /// Optional on-disk cache. `None` if `~/.nerv/` is unavailable.
     cache: Option<SymbolCache>,
@@ -224,10 +225,11 @@ pub struct SymbolIndex {
 /// Minimum interval between full directory scans.
 const SCAN_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// tree-sitter query for Rust symbol definitions.
+/// Per-language tree-sitter queries.
 ///
-/// Captures: @name = symbol name, @def = whole node (for range/signature).
-/// Tag names after @def encode the SymbolKind.
+/// Every query uses two capture names:
+///   @name — the symbol's identifier node
+///   @definition.<kind> — the whole node; the tag suffix maps to SymbolKind.
 const RUST_QUERY: &str = r#"
 (struct_item name: (type_identifier) @name) @definition.struct
 (enum_item name: (type_identifier) @name) @definition.enum
@@ -246,6 +248,33 @@ const RUST_QUERY: &str = r#"
     (function_signature_item name: (identifier) @name) @definition.method)
 
 (function_item name: (identifier) @name) @definition.function
+"#;
+
+const GO_QUERY: &str = r#"
+(function_declaration name: (identifier) @name) @definition.function
+(method_declaration name: (field_identifier) @name) @definition.method
+(type_spec name: (type_identifier) @name) @definition.struct
+"#;
+
+const PYTHON_QUERY: &str = r#"
+(class_definition
+    body: (block
+        (function_definition name: (identifier) @name) @definition.method))
+(function_definition name: (identifier) @name) @definition.function
+(class_definition name: (identifier) @name) @definition.struct
+"#;
+
+const TS_QUERY: &str = r#"
+(function_declaration name: (identifier) @name) @definition.function
+(method_definition name: (property_identifier) @name) @definition.method
+(class_declaration name: (type_identifier) @name) @definition.struct
+(interface_declaration name: (type_identifier) @name) @definition.interface
+(type_alias_declaration name: (type_identifier) @name) @definition.type
+(enum_declaration name: (identifier) @name) @definition.enum
+(lexical_declaration
+    (variable_declarator
+        name: (identifier) @name
+        value: [(arrow_function) (function_expression)]) @definition.function)
 "#;
 
 impl SymbolIndex {
@@ -267,14 +296,25 @@ impl SymbolIndex {
     }
 
     fn new_inner(cache: Option<SymbolCache>) -> Self {
-        let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+        let rust_lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+        let go_lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+        let py_lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+        let ts_lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+
         let mut parser = Parser::new();
-        parser.set_language(&language).expect("Rust grammar");
-        let query = Query::new(&language, RUST_QUERY).expect("valid query");
+        parser.set_language(&rust_lang).expect("Rust grammar");
+
+        let queries = [
+            Query::new(&rust_lang, RUST_QUERY).expect("valid Rust query"),
+            Query::new(&go_lang,   GO_QUERY).expect("valid Go query"),
+            Query::new(&py_lang,   PYTHON_QUERY).expect("valid Python query"),
+            Query::new(&ts_lang,   TS_QUERY).expect("valid TypeScript query"),
+        ];
+
         Self {
             files: HashMap::new(),
             parser,
-            query,
+            queries,
             last_scan: None,
             cache,
         }
@@ -439,24 +479,36 @@ impl SymbolIndex {
     }
 
     fn parse_symbols(&mut self, path: &Path, source: &str) -> Vec<SymbolDef> {
+        // Select language and query based on file extension.
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let (lang, query_idx, find_parent): (tree_sitter::Language, usize, fn(tree_sitter::Node, &[u8]) -> Option<String>) = match ext {
+            "go"  => (tree_sitter_go::LANGUAGE.into(), 1, find_go_method_parent),
+            "py"  => (tree_sitter_python::LANGUAGE.into(), 2, find_python_method_parent),
+            "ts" | "tsx" => (tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(), 3, find_ts_method_parent),
+            _     => (tree_sitter_rust::LANGUAGE.into(), 0, find_impl_parent), // default: Rust
+        };
+
+        // Set parser language for this file's extension.
+        self.parser.set_language(&lang).expect("grammar");
+
         let tree = match self.parser.parse(source.as_bytes(), None) {
             Some(t) => t,
             None => return vec![],
         };
 
-        let name_idx = self.query.capture_index_for_name("name").unwrap();
+        let query = &self.queries[query_idx];
+        let name_idx = query.capture_index_for_name("name").unwrap();
         let source_bytes = source.as_bytes();
         let mut cursor = QueryCursor::new();
         let mut symbols = Vec::new();
-        // A function_item inside a declaration_list matches both the method and
-        // free-function patterns. Track seen byte ranges to keep only the first
-        // (more specific) match.
+        // Track seen byte ranges to keep only the first (most specific) match
+        // when multiple patterns overlap the same node.
         let mut seen_ranges = std::collections::HashSet::new();
 
-        let mut matches = cursor.matches(&self.query, tree.root_node(), source_bytes);
+        let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
         while let Some(m) = { matches.advance(); matches.get() } {
             let name_capture = m.captures.iter().find(|c| c.index == name_idx);
-            let def_capture = m.captures.iter().find(|c| c.index != name_idx);
+            let def_capture  = m.captures.iter().find(|c| c.index != name_idx);
 
             let (name_capture, def_capture) = match (name_capture, def_capture) {
                 (Some(n), Some(d)) => (n, d),
@@ -474,7 +526,7 @@ impl SymbolIndex {
                 Err(_) => continue,
             };
 
-            let def_capture_name = &self.query.capture_names()[def_capture.index as usize];
+            let def_capture_name = &query.capture_names()[def_capture.index as usize];
             let kind = match SymbolKind::from_tag(def_capture_name) {
                 Some(k) => k,
                 None => continue,
@@ -491,7 +543,7 @@ impl SymbolIndex {
             let signature = source[start..sig_end].trim().to_string();
 
             let parent = if kind == SymbolKind::Method {
-                find_impl_parent(node, source_bytes)
+                find_parent(node, source_bytes)
             } else {
                 None
             };
@@ -565,7 +617,7 @@ impl SymbolIndex {
 
 }
 
-/// Walk up the tree from a method node to find the enclosing impl_item and extract its type.
+/// Walk up from a Rust method node to find the enclosing `impl` block.
 fn find_impl_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let mut current = node.parent();
     while let Some(n) = current {
@@ -587,11 +639,86 @@ fn find_impl_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     None
 }
 
-/// Collect all `.rs` files under `root`, respecting .gitignore via `fd`.
+/// Walk up from a Go method_declaration to extract the receiver type name.
+/// The receiver parameter looks like: `(receiver_list (parameter_declaration type: ...))`
+fn find_go_method_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    // The method_declaration itself has a `receiver` field.
+    let recv = node.child_by_field_name("receiver")?;
+    // Walk children to find a type_identifier or pointer_type > type_identifier.
+    for i in 0..recv.named_child_count() {
+        let child = recv.named_child(i)?;
+        let ty = extract_go_type_name(child, source);
+        if ty.is_some() {
+            return ty;
+        }
+    }
+    None
+}
+
+fn extract_go_type_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "type_identifier" => node.utf8_text(source).ok().map(str::to_string),
+        "pointer_type" => {
+            // (*T) — descend to the type_identifier child
+            for i in 0..node.named_child_count() {
+                let child = node.named_child(i)?;
+                if let Some(name) = extract_go_type_name(child, source) {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        "parameter_declaration" => {
+            node.child_by_field_name("type")
+                .and_then(|t| extract_go_type_name(t, source))
+        }
+        _ => None,
+    }
+}
+
+/// Walk up from a Python function_definition to find an enclosing class_definition.
+fn find_python_method_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if n.kind() == "class_definition" {
+            return n
+                .child_by_field_name("name")
+                .and_then(|t| t.utf8_text(source).ok())
+                .map(str::to_string);
+        }
+        current = n.parent();
+    }
+    None
+}
+
+/// Walk up from a TypeScript method_definition to find the enclosing class_declaration.
+fn find_ts_method_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if n.kind() == "class_declaration" || n.kind() == "class" {
+            return n
+                .child_by_field_name("name")
+                .and_then(|t| t.utf8_text(source).ok())
+                .map(str::to_string);
+        }
+        current = n.parent();
+    }
+    None
+}
+
+const SOURCE_EXTENSIONS: &[&str] = &["rs", "go", "py", "ts", "tsx"];
+
+/// Collect all indexable source files under `root`, respecting .gitignore via `fd`.
 fn collect_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
     // Prefer fd: respects .gitignore by default.
+    let ext_args: Vec<_> = SOURCE_EXTENSIONS
+        .iter()
+        .flat_map(|e| ["--extension", e])
+        .collect();
     let output = std::process::Command::new("fd")
-        .args(["--type", "f", "--extension", "rs", "--absolute-path"])
+        .arg("--type").arg("f")
+        .args(&ext_args)
+        .arg("--absolute-path")
         .current_dir(root)
         .output();
 
@@ -612,8 +739,13 @@ fn collect_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
     }
 
     // Fallback: `git ls-files` also respects .gitignore.
+    let glob_args: Vec<_> = SOURCE_EXTENSIONS
+        .iter()
+        .map(|e| format!("*.{}", e))
+        .collect();
     let output = std::process::Command::new("git")
-        .args(["ls-files", "--cached", "--others", "--exclude-standard", "*.rs"])
+        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+        .args(&glob_args)
         .current_dir(root)
         .output();
 
@@ -635,11 +767,6 @@ fn collect_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
 
     // Last resort: manual walk. Only skips obvious non-source dirs; does not
     // read .gitignore. Should rarely be reached in practice.
-    walk_rs_files(root)
-}
-
-/// Fallback: walk the directory manually if neither `fd` nor `git` is available.
-fn walk_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
     let mut result = HashMap::new();
     walk_dir_recursive(root, &mut result);
     result
@@ -658,7 +785,7 @@ fn walk_dir_recursive(dir: &Path, out: &mut HashMap<PathBuf, SystemTime>) {
                 continue;
             }
             walk_dir_recursive(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
+        } else if path.extension().and_then(|e| e.to_str()).is_some_and(|e| SOURCE_EXTENSIONS.contains(&e)) {
             if let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) {
                 let path = path.canonicalize().unwrap_or(path);
                 out.insert(path, mtime);
@@ -674,6 +801,21 @@ mod tests {
     fn parse_source(source: &str) -> Vec<SymbolDef> {
         let mut index = SymbolIndex::new();
         index.parse_symbols(Path::new("test.rs"), source)
+    }
+
+    fn parse_go(source: &str) -> Vec<SymbolDef> {
+        let mut index = SymbolIndex::new();
+        index.parse_symbols(Path::new("test.go"), source)
+    }
+
+    fn parse_py(source: &str) -> Vec<SymbolDef> {
+        let mut index = SymbolIndex::new();
+        index.parse_symbols(Path::new("test.py"), source)
+    }
+
+    fn parse_ts(source: &str) -> Vec<SymbolDef> {
+        let mut index = SymbolIndex::new();
+        index.parse_symbols(Path::new("test.ts"), source)
     }
 
     #[test]
@@ -1329,5 +1471,103 @@ mod tests {
         let slice = &source[alpha.start_byte as usize..alpha.end_byte as usize];
         assert!(!slice.contains("beta"),  "alpha slice bleeds into beta:  {:?}", slice);
         assert!(!slice.contains("gamma"), "alpha slice bleeds into gamma: {:?}", slice);
+    }
+
+    // ── Go ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn go_free_function() {
+        let syms = parse_go("package main\n\nfunc Hello(x int) bool {\n\treturn true\n}\n");
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "Hello");
+        assert_eq!(syms[0].kind, SymbolKind::Function);
+        assert!(syms[0].parent.is_none());
+    }
+
+    #[test]
+    fn go_method() {
+        let src = "package main\n\ntype Dog struct{}\n\nfunc (d Dog) Speak() string {\n\treturn \"woof\"\n}\n";
+        let syms = parse_go(src);
+        let method = syms.iter().find(|s| s.name == "Speak").unwrap();
+        assert_eq!(method.kind, SymbolKind::Method);
+        assert_eq!(method.parent.as_deref(), Some("Dog"));
+    }
+
+    #[test]
+    fn go_struct_type() {
+        let syms = parse_go("package main\n\ntype Point struct {\n\tX, Y int\n}\n");
+        let s = syms.iter().find(|s| s.name == "Point").unwrap();
+        assert_eq!(s.kind, SymbolKind::Struct);
+    }
+
+    // ── Python ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn python_free_function() {
+        let syms = parse_py("def greet(name: str) -> str:\n    return f'hello {name}'\n");
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "greet");
+        assert_eq!(syms[0].kind, SymbolKind::Function);
+    }
+
+    #[test]
+    fn python_class() {
+        let syms = parse_py("class Animal:\n    pass\n");
+        let c = syms.iter().find(|s| s.name == "Animal").unwrap();
+        assert_eq!(c.kind, SymbolKind::Struct);
+    }
+
+    #[test]
+    fn python_method() {
+        let src = "class Dog:\n    def speak(self) -> str:\n        return 'woof'\n";
+        let syms = parse_py(src);
+        let method = syms.iter().find(|s| s.name == "speak").unwrap();
+        assert_eq!(method.kind, SymbolKind::Method);
+        assert_eq!(method.parent.as_deref(), Some("Dog"));
+    }
+
+    // ── TypeScript ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn ts_free_function() {
+        let syms = parse_ts("function greet(name: string): string {\n  return `hello ${name}`;\n}\n");
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "greet");
+        assert_eq!(syms[0].kind, SymbolKind::Function);
+    }
+
+    #[test]
+    fn ts_class_and_method() {
+        let src = "class Animal {\n  speak(): string {\n    return 'roar';\n  }\n}\n";
+        let syms = parse_ts(src);
+        let cls = syms.iter().find(|s| s.name == "Animal").unwrap();
+        assert_eq!(cls.kind, SymbolKind::Struct);
+        let method = syms.iter().find(|s| s.name == "speak").unwrap();
+        assert_eq!(method.kind, SymbolKind::Method);
+        assert_eq!(method.parent.as_deref(), Some("Animal"));
+    }
+
+    #[test]
+    fn ts_interface_and_type_alias() {
+        let src = "interface Shape { area(): number; }\ntype Color = string;\n";
+        let syms = parse_ts(src);
+        let iface = syms.iter().find(|s| s.name == "Shape").unwrap();
+        assert_eq!(iface.kind, SymbolKind::Trait);
+        let alias = syms.iter().find(|s| s.name == "Color").unwrap();
+        assert_eq!(alias.kind, SymbolKind::Type);
+    }
+
+    #[test]
+    fn ts_enum() {
+        let syms = parse_ts("enum Direction { Up, Down, Left, Right }\n");
+        let e = syms.iter().find(|s| s.name == "Direction").unwrap();
+        assert_eq!(e.kind, SymbolKind::Enum);
+    }
+
+    #[test]
+    fn ts_arrow_function_const() {
+        let syms = parse_ts("const add = (a: number, b: number): number => a + b;\n");
+        let f = syms.iter().find(|s| s.name == "add").unwrap();
+        assert_eq!(f.kind, SymbolKind::Function);
     }
 }
