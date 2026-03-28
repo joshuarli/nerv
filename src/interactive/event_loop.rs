@@ -652,6 +652,11 @@ impl InteractiveMode {
         // Reset history browse on submit
         self.history_index = None;
 
+        // Record in history (avoid consecutive duplicates)
+        if self.message_history.last().map(|s| s.as_str()) != Some(text.as_str()) {
+            self.message_history.push(text.clone());
+        }
+
         if text.starts_with('/') {
             return self.handle_slash_command(&text);
         }
@@ -661,11 +666,6 @@ impl InteractiveMode {
             self.plan_mode = true;
             let _ = self.cmd_tx.try_send(SessionCommand::SetPlanMode { enabled: true });
             return None;
-        }
-
-        // Record in history (avoid consecutive duplicates)
-        if self.message_history.last().map(|s| s.as_str()) != Some(text.as_str()) {
-            self.message_history.push(text.clone());
         }
 
         if self.is_streaming {

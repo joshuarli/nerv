@@ -54,15 +54,28 @@ impl Terminal for ProcessTerminal {
 
         // Hide cursor, enable bracketed paste, disable line wrap
         let _ = self.stdout.write_all(b"\x1b[?25l\x1b[?2004h\x1b[?7l");
-        // xterm modifyOtherKeys mode 2
-        let _ = self.stdout.write_all(b"\x1b[>4;2m");
+        // xterm modifyOtherKeys mode 2.
+        // In tmux we must wrap the escape in a DCS passthrough so it reaches the
+        // outer terminal; tmux then re-encodes the extended key sequences it
+        // receives and forwards them to us (requires `extended-keys on` in
+        // tmux.conf, or tmux ≥ 3.3 with the default).
+        if std::env::var_os("TMUX").is_some() {
+            // DCS passthrough: ESC P tmux ; ESC <payload> ESC backslash
+            let _ = self.stdout.write_all(b"\x1bPtmux;\x1b\x1b[>4;2m\x1b\\");
+        } else {
+            let _ = self.stdout.write_all(b"\x1b[>4;2m");
+        }
         let _ = self.stdout.flush();
         self.kitty_active = false;
     }
 
     fn stop(&mut self) {
-        // Disable modifyOtherKeys
-        let _ = self.stdout.write_all(b"\x1b[>4;0m");
+        // Disable modifyOtherKeys (wrapped in DCS passthrough when in tmux)
+        if std::env::var_os("TMUX").is_some() {
+            let _ = self.stdout.write_all(b"\x1bPtmux;\x1b\x1b[>4;0m\x1b\\");
+        } else {
+            let _ = self.stdout.write_all(b"\x1b[>4;0m");
+        }
         // Show cursor, disable bracketed paste, enable line wrap
         // Position cursor at bottom-left so shell prompt appears cleanly
         let rows = terminal_size().1;
