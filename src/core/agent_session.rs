@@ -159,6 +159,9 @@ pub struct AgentSession {
     /// Cache of accepted permissions: (tool, args_json) keyed by args hash
     /// Shared arc for use in permission_fn closure
     permission_cache: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Directories the user has granted full access to via the "allow dir" prompt response.
+    /// Shared with the main thread so new entries can be pushed from the UI.
+    pub allowed_dirs: Arc<std::sync::Mutex<Vec<PathBuf>>>,
     /// Worktree path tied to this session (set via --wt or /wt).
     worktree: Option<PathBuf>,
     /// Plan mode: restrict tools to read-only, steer model toward planning.
@@ -190,6 +193,7 @@ impl AgentSession {
             last_input_tokens: 0,
             permissions_enabled: false,
             permission_cache: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            allowed_dirs: Arc::new(std::sync::Mutex::new(Vec::new())),
             worktree: None,
             plan_mode: false,
             talk_mode: false,
@@ -263,6 +267,7 @@ impl AgentSession {
             let repo_root = crate::find_repo_root(&self.cwd);
             let perm_tx = event_tx.clone();
             let cache = self.permission_cache.clone();
+            let allowed_dirs = self.allowed_dirs.clone();
 
             self.agent.state.permission_fn = Some(std::sync::Arc::new(
                 move |tool: &str, args: &serde_json::Value| {
@@ -272,7 +277,13 @@ impl AgentSession {
                         return true;
                     }
 
-                    let perm = super::permissions::check(tool, args, repo_root.as_deref());
+                    let dirs = allowed_dirs.lock().unwrap().clone();
+                    let perm = super::permissions::check_with_allowed_dirs(
+                        tool,
+                        args,
+                        repo_root.as_deref(),
+                        &dirs,
+                    );
                     match perm {
                         super::permissions::Permission::Allow => true,
                         super::permissions::Permission::Ask(reason) => {

@@ -845,6 +845,9 @@ fn main() {
     // Capture initial state before session is moved to its thread
     let initial_thinking_level = session.agent.state.thinking_level;
     let initial_effort_level = session.agent.state.effort_level;
+    // Clone the allowed_dirs Arc so the main thread (UI) can add entries while
+    // the session thread's permission_fn reads them.
+    let allowed_dirs = session.allowed_dirs.clone();
 
     // Session thread
     let evt_tx = event_tx.clone();
@@ -926,6 +929,7 @@ fn main() {
         skills,
         repo_root,
         repo_id,
+        allowed_dirs,
     );
 
     layout
@@ -1085,8 +1089,36 @@ fn main() {
                 for event in events {
                     match event {
                         StdinEvent::Sequence(ref seq) => {
-                            // Permission prompt input (y/n)
+                            // Permission prompt input (y/n/a)
                             if interactive.pending_permission.is_some() {
+                                // 'a' / 'A' — allow the entire directory containing the path
+                                if seq == b"a" || seq == b"A" {
+                                    // Extract path from pending details and find its parent dir.
+                                    if let Some((tool, ref args)) = interactive.pending_permission_details.clone() {
+                                        if let Some(path_str) = nerv::core::permissions::path_for_args(&tool, &args) {
+                                            let path = std::path::PathBuf::from(&path_str);
+                                            let dir = if path.is_dir() {
+                                                path.clone()
+                                            } else {
+                                                path.parent().map(|p| p.to_path_buf()).unwrap_or(path)
+                                            };
+                                            interactive.allowed_dirs.lock().unwrap().push(dir.clone());
+                                            layout.chat.push_styled(
+                                                nerv::interactive::theme::SUCCESS,
+                                                &format!("  → allowed dir: {}", dir.display()),
+                                            );
+                                        }
+                                    }
+                                    if let Some(tx) = interactive.pending_permission.take() {
+                                        let _ = tx.send(true);
+                                    }
+                                    interactive.pending_permission_details = None;
+                                    interactive.status_message = None;
+                                    interactive.status_is_error = false;
+                                    tui.request_render(false); tui.maybe_render(&layout);
+                                    continue;
+                                }
+
                                 let approved = if seq == b"y" || seq == b"Y" {
                                     Some(true)
                                 } else if seq == b"n" || seq == b"N"
