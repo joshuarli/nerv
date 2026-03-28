@@ -521,7 +521,7 @@ impl Agent {
                     id: id.clone(),
                     result: ToolResultData {
                         content: result.content.clone(),
-                        display,
+                        display: display.clone(),
                         is_error: result.is_error,
                     },
                 });
@@ -532,6 +532,7 @@ impl Agent {
                         text: result.content,
                     }],
                     is_error: result.is_error,
+                    display: display.clone(),
                     timestamp: now_millis(),
                 }
             })

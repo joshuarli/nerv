@@ -75,6 +75,9 @@ pub enum AgentMessage {
         tool_call_id: String,
         content: MessageContent,
         is_error: bool,
+        /// Rich display text for the TUI/HTML (e.g. unified diff). Not sent to the LLM.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
         timestamp: u64,
     },
     #[serde(rename = "custom")]

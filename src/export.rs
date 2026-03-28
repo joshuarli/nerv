@@ -164,6 +164,35 @@ pub fn export_entries_html(
     }
 }
 
+/// Render a unified diff string as HTML with line-level color highlighting.
+fn highlight_diff_html(diff: &str) -> String {
+    let mut out = String::with_capacity(diff.len() * 2);
+    for line in diff.lines() {
+        let (cls, content) = if line.starts_with("--- ") || line.starts_with("+++ ") {
+            ("diff-header", line)
+        } else if line.starts_with("@@") {
+            ("diff-hunk", line)
+        } else if line.starts_with('+') {
+            ("diff-add", line)
+        } else if line.starts_with('-') {
+            ("diff-del", line)
+        } else {
+            ("", line)
+        };
+        if cls.is_empty() {
+            out.push_str(&html_escape_no_br(content));
+        } else {
+            out.push_str(&format!(
+                "<span class='{}'>{}</span>",
+                cls,
+                html_escape_no_br(content)
+            ));
+        }
+        out.push('\n');
+    }
+    out
+}
+
 fn highlight_for_html(text: &str) -> String {
     use crate::tui::highlight::{highlight_line_html, rules_for_lang, HlState};
 
@@ -241,6 +270,10 @@ body{font-family:-apple-system,system-ui,'Segoe UI',sans-serif;max-width:720px;m
 .hl-bracket{color:#e2e8f0}
 .hl-constant{color:#fb923c}
 .hl-macro{color:#e879f9}
+.diff-add{color:#86efac;background:rgba(134,239,172,0.08);display:block}
+.diff-del{color:#fca5a5;background:rgba(252,165,165,0.08);display:block}
+.diff-hunk{color:#67e8f9;font-style:italic;display:block}
+.diff-header{color:#94a3b8;display:block}
 .meta{font-size:0.75rem;color:#999;margin-top:0.25rem}
 .controls{margin-bottom:1.5rem;padding:1rem;background:#fafafa;border-radius:6px;border:1px solid #eee}
 .controls button{padding:0.5rem 1rem;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:500;transition:background 0.2s}
@@ -345,24 +378,35 @@ function toggleTool(header) {
                     html.push_str("</div>\n");
                 }
                 AgentMessage::ToolResult {
-                    content, is_error, ..
+                    content, is_error, display, ..
                 } => {
-                    let text: String = content
-                        .iter()
-                        .filter_map(|c| {
-                            if let ContentItem::Text { text } = c {
-                                Some(text.as_str())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("");
-                    if !text.is_empty() && tool_idx > 0 {
+                    // Prefer the rich display (e.g. unified diff) over the terse LLM content.
+                    let display_text: String = if let Some(d) = display {
+                        d.clone()
+                    } else {
+                        content
+                            .iter()
+                            .filter_map(|c| {
+                                if let ContentItem::Text { text } = c {
+                                    Some(text.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("")
+                    };
+                    if !display_text.is_empty() && tool_idx > 0 {
                         let class = if *is_error {
                             "tool-output"
                         } else {
                             "tool-output hidden"
+                        };
+                        // Unified diffs get syntax-highlighted diff rendering.
+                        let rendered = if display_text.starts_with("--- ") {
+                            highlight_diff_html(&display_text)
+                        } else {
+                            highlight_for_html(&display_text)
                         };
                         html.push_str(&format!(
                             "<div class='tool-wrapper'>\
@@ -372,7 +416,7 @@ function toggleTool(header) {
                             <div class='{}'>{}</div></div>\n",
                             if *is_error { "" } else { " collapsed" },
                             class,
-                            highlight_for_html(&text),
+                            rendered,
                         ));
                     }
                 }
@@ -415,6 +459,12 @@ fn markdown_to_html(markdown: &str) -> String {
     let mut html_output = String::new();
     pulldown_cmark::html::push_html(&mut html_output, parser);
     html_output
+}
+
+fn html_escape_no_br(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn html_escape(s: &str) -> String {

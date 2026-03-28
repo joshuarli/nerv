@@ -56,6 +56,7 @@ fn tool_result_msg(id: &str, content: &str) -> AgentMessage {
             text: content.into(),
         }],
         is_error: false,
+        display: None,
         timestamp: now_millis(),
     }
 }
@@ -75,6 +76,7 @@ fn round_trip_session_with_multiple_message_types() {
                 text: "result".into(),
             }],
             is_error: false,
+            display: None,
             timestamp: now_millis(),
         },
         None,

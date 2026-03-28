@@ -44,6 +44,7 @@ fn tool_result_entry(text: &str, id: &str, parent: &str) -> SessionEntry {
             tool_call_id: "tc1".into(),
             content: vec![ContentItem::Text { text: text.into() }],
             is_error: false,
+            display: None,
             timestamp: now_millis(),
         },
     })

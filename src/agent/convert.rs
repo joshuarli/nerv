@@ -331,6 +331,7 @@ pub fn transform_context(
                 tool_call_id,
                 content: _,
                 is_error,
+                display: _,
                 timestamp,
             } if superseded_ids.contains(&tool_call_id) => {
                 Some(AgentMessage::ToolResult {
@@ -339,6 +340,7 @@ pub fn transform_context(
                         text: "[superseded by later read]".into(),
                     }],
                     is_error,
+                    display: None,
                     timestamp,
                 })
             }
@@ -346,6 +348,7 @@ pub fn transform_context(
                 tool_call_id,
                 content,
                 is_error: false,
+                display: _,
                 timestamp,
             } if tool_names.get(&tool_call_id).map(|n| n.as_str()) == Some("bash") => {
                 let text = content_text(&content);
@@ -354,6 +357,7 @@ pub fn transform_context(
                         tool_call_id,
                         content: vec![ContentItem::Text { text: compressed }],
                         is_error: false,
+                        display: None,
                         timestamp,
                     })
                 } else if i < cutoff {
@@ -362,6 +366,7 @@ pub fn transform_context(
                         tool_call_id,
                         content: vec![ContentItem::Text { text: summary }],
                         is_error: false,
+                        display: None,
                         timestamp,
                     })
                 } else {
@@ -369,6 +374,7 @@ pub fn transform_context(
                         tool_call_id,
                         content,
                         is_error: false,
+                        display: None,
                         timestamp,
                     })
                 }
@@ -377,6 +383,7 @@ pub fn transform_context(
                 tool_call_id,
                 content,
                 is_error,
+                display: _,
                 timestamp,
             } if i < cutoff => {
                 let summary = summarize_tool_content(&content);
@@ -384,6 +391,7 @@ pub fn transform_context(
                     tool_call_id,
                     content: vec![ContentItem::Text { text: summary }],
                     is_error,
+                    display: None,
                     timestamp,
                 })
             }
@@ -575,6 +583,7 @@ mod tests {
                     text: "result".into(),
                 }],
                 is_error: false,
+                display: None,
                 timestamp: 1,
             },
         ];
@@ -659,6 +668,7 @@ mod tests {
                 text: content.into(),
             }],
             is_error: false,
+            display: None,
             timestamp: 0,
         }
     }
@@ -670,6 +680,7 @@ mod tests {
                 text: content.into(),
             }],
             is_error: true,
+            display: None,
             timestamp: 0,
         }
     }
@@ -769,6 +780,7 @@ mod tests {
                     text: "Tool call denied by user.".into(),
                 }],
                 is_error: true,
+                display: None,
                 timestamp: 1,
             },
         ];
@@ -807,6 +819,7 @@ mod tests {
                     text: "file contents...".into(),
                 }],
                 is_error: false,
+                display: None,
                 timestamp: 1,
             },
         ];

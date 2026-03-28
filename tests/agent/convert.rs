@@ -45,6 +45,7 @@ fn tool_result_stays_separate_from_assistant() {
                 text: "file contents".into(),
             }],
             is_error: false,
+            display: None,
             timestamp: 1,
         },
     ];
@@ -70,6 +71,7 @@ fn transform_context_truncates_old_large_tool_results() {
                 text: "x".repeat(500),
             }],
             is_error: false,
+            display: None,
             timestamp: i as u64 + 1,
         });
     }
@@ -128,6 +130,7 @@ fn transform_context_preserves_small_old_results() {
                 text: "tiny".into(),
             }],
             is_error: false,
+            display: None,
             timestamp: 99,
         },
     );
@@ -245,6 +248,7 @@ fn answered_tool_calls_preserved() {
                 text: "file contents".into(),
             }],
             is_error: false,
+            display: None,
             timestamp: 2,
         },
     ];
@@ -276,6 +280,7 @@ fn transform_context_passthrough_when_few_messages() {
                 text: "x".repeat(500),
             }],
             is_error: false,
+            display: None,
             timestamp: 1,
         },
     ];
