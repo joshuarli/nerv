@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use super::convert::convert_to_llm;
-use super::transform::{compute_adaptive_recent, should_prune_tool_descriptions, transform_context};
+use super::transform::{prepare_context, transform_context};
 use super::provider::*;
 use super::types::*;
 
@@ -150,16 +150,13 @@ impl Agent {
             });
         }
 
-        // Freeze the stale/recent cutoff so that transform_context produces a stable
-        // prefix across all API calls in this tool loop — critical for cache reuse.
-        let adaptive_recent = compute_adaptive_recent(&self.state.messages);
-        let stale_cutoff = self.state.messages.len().saturating_sub(adaptive_recent);
-        // Freeze tool pruning decision for cache stability within the loop.
-        let prune_tools = should_prune_tool_descriptions(&self.state.messages);
+        // Freeze all context decisions once before the tool loop — critical for
+        // prompt-cache prefix stability across consecutive API calls.
+        let ctx = prepare_context(&self.state.messages);
 
         let mut has_tool_calls = true;
         while has_tool_calls {
-            let assistant = self.stream_response(on_event, stale_cutoff, prune_tools);
+            let assistant = self.stream_response(on_event, &ctx);
             let assistant_msg = AgentMessage::Assistant(assistant.clone());
             new_messages.push(assistant_msg.clone());
             if let Some(ref mut f) = persist_fn {
@@ -217,7 +214,7 @@ impl Agent {
         new_messages
     }
 
-    fn stream_response(&mut self, on_event: &dyn Fn(AgentEvent), stale_cutoff: usize, prune_tools: bool) -> AssistantMessage {
+    fn stream_response(&mut self, on_event: &dyn Fn(AgentEvent), ctx: &super::transform::ContextConfig) -> AssistantMessage {
         let model = match &self.state.model {
             Some(m) => m.clone(),
             None => {
@@ -259,7 +256,7 @@ impl Agent {
             }
         };
 
-        let transformed = transform_context(self.state.messages.clone(), model.context_window, Some(stale_cutoff));
+        let transformed = transform_context(self.state.messages.clone(), model.context_window, Some(ctx.stale_cutoff));
         let estimated_tokens: usize = transformed.iter().map(crate::compaction::estimate_tokens).sum();
 
         // Circuit breaker: if context grew by >10% since last call (and we're past 10k),
@@ -298,7 +295,7 @@ impl Agent {
             .iter()
             .map(|t| WireTool {
                 name: t.name().to_string(),
-                description: if prune_tools {
+                description: if ctx.prune_tools {
                     String::new()
                 } else {
                     t.description().to_string()

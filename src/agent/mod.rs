@@ -11,7 +11,7 @@ pub use agent::{Agent, AgentTool, ToolResult, UpdateCallback};
 pub use anthropic::AnthropicProvider;
 pub use convert::{LlmContent, LlmMessage, convert_to_llm};
 pub use openai_compat::OpenAICompatProvider;
-pub use transform::transform_context;
+pub use transform::{ContextConfig, prepare_context, transform_context};
 pub use provider::{
     CacheConfig, CacheRetention, CancelFlag, CompletionRequest, Provider,
     ProviderEvent, ProviderRegistry, ThinkingRequest, WireTool, adjust_max_tokens_for_thinking,

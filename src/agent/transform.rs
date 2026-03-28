@@ -1,5 +1,25 @@
 use super::types::*;
 
+/// Frozen context decisions for one prompt loop. Computed once before the
+/// while loop in `Agent::prompt` so that every API call within the loop
+/// sees identical values — critical for prompt-cache prefix stability.
+pub struct ContextConfig {
+    /// Messages before this index are "stale" (eligible for truncation/folding).
+    pub stale_cutoff: usize,
+    /// Whether to strip tool descriptions from wire tools.
+    pub prune_tools: bool,
+}
+
+/// Compute all frozen context decisions from the current message history.
+/// Call once before the tool loop and pass the result through unchanged.
+pub fn prepare_context(messages: &[AgentMessage]) -> ContextConfig {
+    let adaptive_recent = compute_adaptive_recent(messages);
+    ContextConfig {
+        stale_cutoff: messages.len().saturating_sub(adaptive_recent),
+        prune_tools: should_prune_tool_descriptions(messages),
+    }
+}
+
 /// Pre-LLM context transform:
 /// 1. Strip orphaned tool calls (no matching ToolResult)
 /// 2. Strip thinking blocks (never referenced by the model)
@@ -96,6 +116,22 @@ pub fn transform_context(
     _context_window: u32,
     stale_cutoff: Option<usize>,
 ) -> Vec<AgentMessage> {
+    let config = match stale_cutoff {
+        Some(c) => ContextConfig { stale_cutoff: c, prune_tools: false },
+        // Fallback for callers without a frozen cutoff (tests, one-shot mode).
+        // Uses the fixed base window, not adaptive, for backwards compatibility.
+        None => ContextConfig {
+            stale_cutoff: messages.len().saturating_sub(RECENT_TURNS),
+            prune_tools: false,
+        },
+    };
+    transform_context_with_config(messages, &config)
+}
+
+fn transform_context_with_config(
+    messages: Vec<AgentMessage>,
+    config: &ContextConfig,
+) -> Vec<AgentMessage> {
     // Pass 0: find superseded tool calls — walk backwards, track latest call per key.
     // Earlier calls of the same file/path/pattern are replaced with a short marker.
     let superseded_ids = find_superseded_results(&messages);
@@ -158,7 +194,7 @@ pub fn transform_context(
     // When stale_cutoff is provided (frozen at the start of a prompt loop), use it
     // so that the stale/recent boundary doesn't shift between consecutive API calls
     // within the same tool loop — this keeps the message prefix stable for caching.
-    let cutoff = stale_cutoff.unwrap_or_else(|| messages.len().saturating_sub(RECENT_TURNS));
+    let cutoff = config.stale_cutoff;
     messages
         .into_iter()
         .enumerate()
