@@ -1228,4 +1228,78 @@ mod tests {
             h.join().unwrap();
         }
     }
+
+    // --- byte offset tests (added with commit 5daf22f) ---
+
+    #[test]
+    fn byte_offsets_point_to_exact_source() {
+        // start_byte/end_byte must slice back to the exact symbol text.
+        let source = "fn first() {}\nfn second() { let x = 1; }\n";
+        let syms = parse_source(source);
+        for sym in &syms {
+            let slice = &source[sym.start_byte as usize..sym.end_byte as usize];
+            assert!(
+                slice.contains(&sym.name),
+                "byte slice for '{}' should contain the name; got: {:?}",
+                sym.name,
+                slice
+            );
+            // The slice must start with `fn`
+            assert!(
+                slice.trim_start().starts_with("fn "),
+                "byte slice for '{}' should start with 'fn': {:?}",
+                sym.name,
+                slice
+            );
+        }
+    }
+
+    #[test]
+    fn byte_offsets_with_unicode_prefix() {
+        // Multi-byte characters before the target symbol shift byte offsets.
+        // If start_byte/end_byte are char offsets instead of byte offsets this
+        // will slice at the wrong position or panic.
+        let source = "// café ☕ unicode comment\nfn after_unicode() { let x = 42; }\n";
+        let syms = parse_source(source);
+        assert_eq!(syms.len(), 1);
+        let sym = &syms[0];
+        assert_eq!(sym.name, "after_unicode");
+        // Verify the slice is valid UTF-8 and contains the function.
+        let slice = &source[sym.start_byte as usize..sym.end_byte as usize];
+        assert!(slice.contains("after_unicode"), "wrong byte slice: {:?}", slice);
+        assert!(slice.contains("42"), "body should be included: {:?}", slice);
+    }
+
+    #[test]
+    fn byte_offsets_multiple_symbols_are_independent() {
+        // Each symbol's byte range must cover only its own body, not bleed into
+        // adjacent symbols.
+        let source = concat!(
+            "fn alpha() { let a = 1; }\n",
+            "fn beta()  { let b = 2; }\n",
+            "fn gamma() { let c = 3; }\n",
+        );
+        let syms = parse_source(source);
+        assert_eq!(syms.len(), 3);
+        // Ranges must be non-overlapping and in order.
+        let mut sorted = syms.clone();
+        sorted.sort_by_key(|s| s.start_byte);
+        for w in sorted.windows(2) {
+            assert!(
+                w[0].end_byte <= w[1].start_byte,
+                "ranges overlap: {:?} and {:?}",
+                w[0],
+                w[1]
+            );
+        }
+        // Each slice must contain only that function's body.
+        for sym in &sorted {
+            let slice = &source[sym.start_byte as usize..sym.end_byte as usize];
+            assert!(slice.contains(&sym.name), "slice for '{}' missing name", sym.name);
+        }
+        let alpha = sorted.iter().find(|s| s.name == "alpha").unwrap();
+        let slice = &source[alpha.start_byte as usize..alpha.end_byte as usize];
+        assert!(!slice.contains("beta"),  "alpha slice bleeds into beta:  {:?}", slice);
+        assert!(!slice.contains("gamma"), "alpha slice bleeds into gamma: {:?}", slice);
+    }
 }

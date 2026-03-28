@@ -567,4 +567,59 @@ impl Foo {
             assert!(line.contains("(impl Foo)"), "method should show parent: {}", line);
         }
     }
+
+    // --- byte-slice render tests (added with commit 5daf22f) ---
+
+    #[test]
+    fn full_body_mid_file_correct() {
+        // The target function is NOT at the start of the file.  The old line-Vec
+        // approach and the new byte-slice approach must agree on the output.
+        let source = concat!(
+            "fn preamble_a() { let _ = 1; }\n",
+            "fn preamble_b() { let _ = 2; }\n",
+            "\n",
+            "fn target() {\n",
+            "    let answer = 42;\n",
+            "    answer\n",
+            "}\n",
+        );
+        let (tmp, index) = setup_index(&[("lib.rs", source)]);
+        let params = CodemapParams {
+            query: "target",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+        };
+        let out = codemap(&index, tmp.path(), &params);
+        assert!(out.contains("fn target()"),    "should have signature: {}", out);
+        assert!(out.contains("answer = 42"),    "should have body line: {}", out);
+        assert!(!out.contains("preamble"),      "should not include preamble: {}", out);
+        // Line numbers: fn target() is on line 4
+        assert!(out.contains("4     fn target()"), "line number should be 4: {}", out);
+    }
+
+    #[test]
+    fn full_body_unicode_before_symbol() {
+        // Multi-byte characters in preceding code must not corrupt the byte-slice
+        // used to extract the target symbol's body.
+        let source = concat!(
+            "// 日本語 comment: こんにちは\n",
+            "fn before() { let _emoji = '🦀'; }\n",
+            "\n",
+            "fn after_unicode() {\n",
+            "    let x = 99;\n",
+            "}\n",
+        );
+        let (tmp, index) = setup_index(&[("lib.rs", source)]);
+        let params = CodemapParams {
+            query: "after_unicode",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+        };
+        let out = codemap(&index, tmp.path(), &params);
+        assert!(out.contains("fn after_unicode()"), "should have signature: {}", out);
+        assert!(out.contains("x = 99"),             "should have body: {}", out);
+        assert!(!out.contains("emoji"),             "should not bleed into before(): {}", out);
+    }
 }
