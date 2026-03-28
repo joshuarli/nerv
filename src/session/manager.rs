@@ -288,42 +288,44 @@ impl SessionManager {
         first_kept_entry_id: String,
         tokens_before: u32,
     ) -> anyhow::Result<()> {
-        let session_id = self
-            .session_id
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no active session"))?
-            .clone();
+        if self.session_id.is_none() {
+            anyhow::bail!("no active session");
+        }
 
-        // Find the seq of the first kept entry
-        let kept_seq = {
-            let mut stmt = self
-                .db
-                .prepare("SELECT seq FROM entries WHERE session_id = ? AND id = ?")?;
-            stmt.bind((1, session_id.as_str()))?;
-            stmt.bind((2, first_kept_entry_id.as_str()))?;
-            if stmt.next()? == sqlite::State::Row {
-                stmt.read::<i64, _>("seq")?
-            } else {
-                0
+        // Collect the IDs of branch ancestors that fall before the cut point.
+        // We only delete entries on the current branch (root → leaf), not siblings.
+        // take_while stops before first_kept_entry_id, so that entry and everything
+        // after it (on any branch) is preserved.
+        let branch_ids_to_delete: Vec<String> = self
+            .get_branch()
+            .iter()
+            .map(|e| e.id().to_string())
+            .take_while(|id| id != &first_kept_entry_id)
+            .collect();
+
+        if !branch_ids_to_delete.is_empty() {
+            // Build a parameterised IN list
+            let placeholders = branch_ids_to_delete
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(",");
+
+            let fts_sql = format!(
+                "DELETE FROM search_index WHERE entry_id IN ({})",
+                placeholders
+            );
+            let mut stmt = self.db.prepare(&fts_sql)?;
+            for (i, id) in branch_ids_to_delete.iter().enumerate() {
+                stmt.bind((i + 1, id.as_str()))?;
             }
-        };
-
-        // Delete entries before the cut point (and their FTS index rows)
-        {
-            let mut stmt = self.db.prepare(
-                "DELETE FROM search_index WHERE entry_id IN (
-                    SELECT id FROM entries WHERE session_id = ? AND seq < ?
-                )",
-            )?;
-            stmt.bind((1, session_id.as_str()))?;
-            stmt.bind((2, kept_seq))?;
             stmt.next()?;
 
-            let mut stmt = self
-                .db
-                .prepare("DELETE FROM entries WHERE session_id = ? AND seq < ?")?;
-            stmt.bind((1, session_id.as_str()))?;
-            stmt.bind((2, kept_seq))?;
+            let del_sql = format!("DELETE FROM entries WHERE id IN ({})", placeholders);
+            let mut stmt = self.db.prepare(&del_sql)?;
+            for (i, id) in branch_ids_to_delete.iter().enumerate() {
+                stmt.bind((i + 1, id.as_str()))?;
+            }
             stmt.next()?;
         }
 
@@ -856,30 +858,32 @@ impl SessionManager {
         }
     }
 
-    /// Export all entries for the current session as JSONL lines.
+    /// Export the current branch (leaf → root) as JSONL lines.
+    ///
+    /// Walks the parent_id chain from the current leaf back to the root so only
+    /// the linear history for this branch is included, not sibling branches.
     pub fn export_jsonl(&self) -> Option<String> {
         let session_id = self.session_id.as_ref()?;
+        let leaf_id = self.leaf_id.as_deref()?;
+        let branch = self.get_branch();
         let mut lines = Vec::new();
 
-        // Header line
+        // Header line — include leaf_id so the file is unambiguous.
         let header = serde_json::json!({
             "type": "session",
             "version": CURRENT_SESSION_VERSION,
             "id": session_id,
+            "leaf_id": leaf_id,
             "timestamp": now_iso(),
             "cwd": "",
         });
         lines.push(serde_json::to_string(&header).ok()?);
 
-        // Entry lines
-        let mut stmt = self
-            .db
-            .prepare("SELECT data FROM entries WHERE session_id = ? ORDER BY seq")
-            .ok()?;
-        stmt.bind((1, session_id.as_str())).ok()?;
-        while stmt.next().ok()? == sqlite::State::Row {
-            let data: String = stmt.read("data").ok()?;
-            lines.push(data);
+        // Serialize each entry in branch order (root → leaf).
+        for entry in &branch {
+            if let Ok(data) = serde_json::to_string(entry) {
+                lines.push(data);
+            }
         }
 
         Some(lines.join("\n"))

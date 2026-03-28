@@ -652,22 +652,24 @@ impl AgentSession {
                         .to_string()
                 })?;
 
-        let entries = self.session_manager.entries();
-        if entries.is_empty() {
+        // Operate only on the current branch (root → leaf), not the whole tree.
+        // Using entries() would compact entries from sibling branches too.
+        let branch = self.session_manager.current_branch_entries();
+        if branch.is_empty() {
             return Ok(None);
         }
 
         // Find cut point using token-budget-aware algorithm
         let cut = compaction::find_cut_point(
-            entries,
+            &branch,
             0,
-            entries.len(),
+            branch.len(),
             self.compaction_settings.keep_recent_tokens,
         );
-        let first_kept_id = entries[cut.first_kept_entry_index].id().to_string();
+        let first_kept_id = branch[cut.first_kept_entry_index].id().to_string();
 
         // Collect messages before the cut point for summarization
-        let to_summarize: Vec<AgentMessage> = entries[..cut.first_kept_entry_index]
+        let to_summarize: Vec<AgentMessage> = branch[..cut.first_kept_entry_index]
             .iter()
             .filter_map(|e| {
                 if let crate::session::types::SessionEntry::Message(me) = e {
@@ -1092,9 +1094,11 @@ pub fn session_task(
             SessionCommand::ExportJsonl => {
                 let sid = session.session_manager.session_id().to_string();
                 let sid_short = if sid.len() >= 8 { &sid[..8] } else { &sid };
+                let leaf = session.session_manager.leaf_id().unwrap_or("").to_string();
+                let leaf_short = if leaf.len() >= 6 { &leaf[..6] } else { &leaf };
                 let exports_dir = crate::nerv_dir().join("exports");
                 let _ = std::fs::create_dir_all(&exports_dir);
-                let path = exports_dir.join(format!("{sid_short}.jsonl"));
+                let path = exports_dir.join(format!("{sid_short}-{leaf_short}.jsonl"));
                 let result = if let Some(content) = session.session_manager.export_jsonl() {
                     std::fs::write(&path, content)
                         .map(|_| path.to_string_lossy().to_string())
@@ -1107,11 +1111,15 @@ pub fn session_task(
             SessionCommand::ExportHtml => {
                 let sid = session.session_manager.session_id().to_string();
                 let sid_short = if sid.len() >= 8 { &sid[..8] } else { &sid };
+                let leaf = session.session_manager.leaf_id().unwrap_or("").to_string();
+                let leaf_short = if leaf.len() >= 6 { &leaf[..6] } else { &leaf };
                 let exports_dir = crate::nerv_dir().join("exports");
                 let _ = std::fs::create_dir_all(&exports_dir);
-                let path = exports_dir.join(format!("{sid_short}.html"));
+                let path = exports_dir.join(format!("{sid_short}-{leaf_short}.html"));
+                // Export only the current branch (root → leaf), not all branches.
+                let branch_entries = session.session_manager.current_branch_entries();
                 let result = crate::export::export_entries_html(
-                    session.session_manager.entries(),
+                    &branch_entries,
                     &session.agent.state.messages,
                     &path,
                 );

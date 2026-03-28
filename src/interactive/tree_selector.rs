@@ -270,8 +270,8 @@ impl FullscreenList for TreeSelector {
 
     fn render(&self, out: &mut dyn Write, cols: u16, rows: u16) {
         let cols = cols as usize;
-        // Reserve 2 rows for header + footer; use half-terminal height per spec.
-        let list_rows = (rows as usize / 2).saturating_sub(2).max(4);
+        // 1 row for header, 1 row for footer, rest for list.
+        let list_rows = (rows as usize).saturating_sub(3).max(1);
 
         // ── header ─────────────────────────────────────────────────────────
         let filter_label = match self.filter {
@@ -338,23 +338,28 @@ impl FullscreenList for TreeSelector {
             };
             let active_dot = if is_active && !fold_indicator.is_empty() { "•" } else { "" };
 
-            // ── role marker ────────────────────────────────────────────────
-            let (marker, style) = if node.is_meta {
-                ("~", theme::DIM)
+            // ── role label ─────────────────────────────────────────────────
+            let (label, style) = if node.is_meta {
+                ("[compaction]", theme::DIM)
             } else if node.is_user {
-                (">", theme::ACCENT)
+                ("user:", theme::ACCENT)
             } else if node.has_tool_calls {
-                ("⚙", theme::TOOL_NAME)
+                ("assistant:", theme::TOOL_NAME)
             } else {
-                ("●", "")
+                ("assistant:", "")
             };
 
-            let summary = if node.summary.is_empty() { "(empty)" } else { &node.summary };
-            // Extra chars: " marker " + fold_indicator + active_dot + " ← active"
-            let extra = 3 + fold_indicator.len() + active_dot.len();
-            let content_width = cols.saturating_sub(prefix.len() + extra + 10);
-            // Safe substring at char boundary
-            let summary = char_truncate(summary, content_width);
+            let raw = if node.summary.is_empty() { "(empty)" } else { &node.summary };
+            // Extra: prefix + " label \"...\"" + fold + " ← active"
+            let extra = prefix.len() + 1 + label.len() + 3 + fold_indicator.len() + active_dot.len() + 10;
+            let content_width = cols.saturating_sub(extra);
+            let trimmed = char_truncate(raw, content_width);
+            // Non-meta summaries are wrapped in quotes.
+            let quoted = if node.is_meta {
+                trimmed.to_string()
+            } else {
+                format!("\"{}\"", trimmed)
+            };
 
             let active_suffix = if is_current { " ← active" } else { "" };
             let fold_part = format!("{}{}", fold_indicator, active_dot);
@@ -362,34 +367,34 @@ impl FullscreenList for TreeSelector {
             if is_selected {
                 let _ = write!(
                     out,
-                    "{rev}{prefix} {marker} {fold}{summary}{active}{reset}\x1b[K\r\n",
+                    "{rev}{prefix} {label} {fold}{quoted}{active}{reset}\x1b[K\r\n",
                     rev = theme::REVERSE, reset = theme::RESET,
-                    prefix = prefix, marker = marker, fold = fold_part,
-                    summary = summary, active = active_suffix,
+                    prefix = prefix, label = label, fold = fold_part,
+                    quoted = quoted, active = active_suffix,
                 );
             } else if is_current {
                 let _ = write!(
                     out,
-                    "{bold}{prefix} {marker} {fold}{summary}{active}{reset}\x1b[K\r\n",
+                    "{bold}{prefix} {label} {fold}{quoted}{active}{reset}\x1b[K\r\n",
                     bold = theme::ACCENT_BOLD, reset = theme::RESET,
-                    prefix = prefix, marker = marker, fold = fold_part,
-                    summary = summary, active = active_suffix,
+                    prefix = prefix, label = label, fold = fold_part,
+                    quoted = quoted, active = active_suffix,
                 );
             } else if is_active {
                 let _ = write!(
                     out,
-                    "{style}{prefix} {marker} {fold}{summary}{active}{reset}\x1b[K\r\n",
+                    "{style}{prefix} {label} {fold}{quoted}{active}{reset}\x1b[K\r\n",
                     style = style, reset = theme::RESET,
-                    prefix = prefix, marker = marker, fold = fold_part,
-                    summary = summary, active = active_suffix,
+                    prefix = prefix, label = label, fold = fold_part,
+                    quoted = quoted, active = active_suffix,
                 );
             } else {
                 let _ = write!(
                     out,
-                    "{muted}{prefix} {marker} {fold}{summary}{active}{reset}\x1b[K\r\n",
+                    "{muted}{prefix} {label} {fold}{quoted}{active}{reset}\x1b[K\r\n",
                     muted = theme::MUTED, reset = theme::RESET,
-                    prefix = prefix, marker = marker, fold = fold_part,
-                    summary = summary, active = active_suffix,
+                    prefix = prefix, label = label, fold = fold_part,
+                    quoted = quoted, active = active_suffix,
                 );
             }
         }
@@ -528,22 +533,27 @@ fn flatten(
         }
 
         let multi = visible_children.len() > 1;
-        // Only increase indent when branching; linear chains stay at same level.
-        let child_indent = if multi { indent + 1 } else { indent };
 
-        // Build the ancestors_with_more for children.
-        // If branching: children are at indent+1, and the current level "has_more_siblings"
-        // propagates to whether this level still has continuations.
-        let child_ancestors = if multi {
-            // Children at indent+1 need to know their parent level (indent) has_more_siblings?
-            // No — ancestors_with_more tracks whether *ancestor levels* still have siblings.
-            // When we branch, children are one level deeper, so we extend with: does this
-            // parent level have more siblings below? (has_more_siblings for the current node)
+        // Indentation rules:
+        // - Hidden nodes (system_prompt etc.) are transparent — pass through
+        //   indent and ancestors unchanged so they don't add visual depth.
+        // - Visible nodes always indent their children one level deeper,
+        //   whether branching or not. Gives a nested tree appearance.
+        // - Only at branch points do we record a │ continuation flag.
+        let (child_indent, child_ancestors) = if !visible {
+            // Hidden: fully transparent.
+            (indent, ancestors_with_more.clone())
+        } else if multi {
+            // Branch point: record whether this level has more siblings so
+            // │ continuation lines are drawn at child levels.
             let mut a = ancestors_with_more.clone();
             a.push(has_more_siblings);
-            a
+            (indent + 1, a)
         } else {
-            ancestors_with_more.clone()
+            // Single visible child: increase indent, no │ continuation.
+            let mut a = ancestors_with_more.clone();
+            a.push(false);
+            (indent + 1, a)
         };
 
         // Push in reverse order so first child is popped first.
