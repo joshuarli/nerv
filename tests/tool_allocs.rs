@@ -5,6 +5,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::Arc;
 
 use nerv::agent::agent::{AgentTool, UpdateCallback};
+use nerv::agent::provider::{CancelFlag, new_cancel_flag};
 use nerv::tools::*;
 
 std::thread_local! {
@@ -59,6 +60,10 @@ fn noop_update() -> UpdateCallback {
     Arc::new(|_| {})
 }
 
+fn noop_cancel() -> CancelFlag {
+    new_cancel_flag()
+}
+
 #[test]
 fn read_100_lines_allocs() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -70,9 +75,9 @@ fn read_100_lines_allocs() {
     let update = noop_update();
 
     // Warm up (first call may trigger lazy init)
-    let _ = tool.execute(input.clone(), update.clone());
+    let _ = tool.execute(input.clone(), update.clone(), &noop_cancel());
 
-    let (result, stats) = measure_allocs(|| tool.execute(input.clone(), update.clone()));
+    let (result, stats) = measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
     assert!(!result.is_error);
     eprintln!(
         "read 100 lines: {} allocs, {} bytes",
@@ -107,11 +112,11 @@ fn edit_single_500_lines_allocs() {
         "old_text": "fn func_250() {}",
         "new_text": "fn func_250_renamed() {}"
     });
-    let _ = tool.execute(input.clone(), update.clone());
+    let _ = tool.execute(input.clone(), update.clone(), &noop_cancel());
 
     // Measure
     std::fs::write(tmp.path().join("code.rs"), &original).unwrap();
-    let (result, stats) = measure_allocs(|| tool.execute(input.clone(), update.clone()));
+    let (result, stats) = measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
     assert!(!result.is_error, "{}", result.content);
     eprintln!(
         "edit single 500 lines: {} allocs, {} bytes",
@@ -152,11 +157,11 @@ fn edit_multi_5x_500_lines_allocs() {
 
     // Warm up
     std::fs::write(tmp.path().join("code.rs"), &original).unwrap();
-    let _ = tool.execute(input.clone(), update.clone());
+    let _ = tool.execute(input.clone(), update.clone(), &noop_cancel());
 
     // Measure
     std::fs::write(tmp.path().join("code.rs"), &original).unwrap();
-    let (result, stats) = measure_allocs(|| tool.execute(input.clone(), update.clone()));
+    let (result, stats) = measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
     assert!(!result.is_error, "{}", result.content);
     eprintln!(
         "edit multi 5x 500 lines: {} allocs, {} bytes",
@@ -215,9 +220,9 @@ fn write_10kb_allocs() {
     let input = serde_json::json!({"path": "out.txt", "content": &content});
 
     // Warm up
-    let _ = tool.execute(input.clone(), update.clone());
+    let _ = tool.execute(input.clone(), update.clone(), &noop_cancel());
 
-    let (result, stats) = measure_allocs(|| tool.execute(input.clone(), update.clone()));
+    let (result, stats) = measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
     assert!(!result.is_error);
     eprintln!(
         "write 10kb: {} allocs, {} bytes",
@@ -252,16 +257,16 @@ fn edit_lf_vs_crlf_overhead() {
 
     // Measure LF
     std::fs::write(tmp.path().join("test.txt"), &lf_content).unwrap();
-    let _ = tool.execute(input.clone(), update.clone()); // warm up
+    let _ = tool.execute(input.clone(), update.clone(), &noop_cancel()); // warm up
     std::fs::write(tmp.path().join("test.txt"), &lf_content).unwrap();
-    let (r1, lf_stats) = measure_allocs(|| tool.execute(input.clone(), update.clone()));
+    let (r1, lf_stats) = measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
     assert!(!r1.is_error, "{}", r1.content);
 
     // Measure CRLF
     std::fs::write(tmp.path().join("test.txt"), &crlf_content).unwrap();
-    let _ = tool.execute(input.clone(), update.clone()); // warm up
+    let _ = tool.execute(input.clone(), update.clone(), &noop_cancel()); // warm up
     std::fs::write(tmp.path().join("test.txt"), &crlf_content).unwrap();
-    let (r2, crlf_stats) = measure_allocs(|| tool.execute(input.clone(), update.clone()));
+    let (r2, crlf_stats) = measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
     assert!(!r2.is_error, "{}", r2.content);
 
     eprintln!(

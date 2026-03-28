@@ -19,6 +19,14 @@ impl SymbolsTool {
         }
     }
 
+    /// Construct with a persistent on-disk symbol cache stored in `nerv_dir`.
+    pub fn new_with_cache(cwd: PathBuf, nerv_dir: &std::path::Path) -> Self {
+        Self {
+            cwd,
+            index: Arc::new(Mutex::new(SymbolIndex::new_with_cache(nerv_dir))),
+        }
+    }
+
     pub fn index(&self) -> Arc<Mutex<SymbolIndex>> {
         self.index.clone()
     }
@@ -243,6 +251,7 @@ fn find_references(symbol: &str, cwd: &std::path::Path) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::agent::agent::AgentTool;
+    use crate::agent::provider::new_cancel_flag;
     use std::sync::Arc;
 
     #[test]
@@ -253,7 +262,8 @@ mod tests {
         std::fs::write(tmp.path().join("docs.md"), "# Docs\n").unwrap();
 
         let tool = SymbolsTool::new(tmp.path().to_path_buf());
-        let result = tool.execute(serde_json::json!({"query": ""}), Arc::new(|_| {}));
+        let cancel = new_cancel_flag();
+        let result = tool.execute(serde_json::json!({"query": ""}), Arc::new(|_| {}), &cancel);
         assert!(result.content.contains("DOCS:"), "should have DOCS section: {}", result.content);
         assert!(result.content.contains("README.md"), "should list README.md: {}", result.content);
         assert!(result.content.contains("docs.md"), "should list docs.md: {}", result.content);
@@ -266,7 +276,8 @@ mod tests {
         std::fs::write(tmp.path().join("README.md"), "# Hello\n").unwrap();
 
         let tool = SymbolsTool::new(tmp.path().to_path_buf());
-        let result = tool.execute(serde_json::json!({"query": "hello"}), Arc::new(|_| {}));
+        let cancel = new_cancel_flag();
+        let result = tool.execute(serde_json::json!({"query": "hello"}), Arc::new(|_| {}), &cancel);
         assert!(!result.content.contains("DOCS:"), "specific query should NOT have DOCS: {}", result.content);
     }
 
@@ -277,9 +288,11 @@ mod tests {
         std::fs::write(tmp.path().join("README.md"), "# Hello\n").unwrap();
 
         let tool = SymbolsTool::new(tmp.path().to_path_buf());
+        let cancel = new_cancel_flag();
         let result = tool.execute(
             serde_json::json!({"query": "", "file": "lib.rs"}),
             Arc::new(|_| {}),
+            &cancel,
         );
         assert!(!result.content.contains("DOCS:"), "file-filtered query should NOT have DOCS: {}", result.content);
     }

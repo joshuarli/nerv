@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nerv::agent::agent::{AgentTool, UpdateCallback};
+use nerv::agent::provider::{CancelFlag, new_cancel_flag};
 use nerv::tools::*;
 
 fn fast() -> Criterion {
@@ -15,6 +16,10 @@ fn noop_update() -> UpdateCallback {
     Arc::new(|_| {})
 }
 
+fn noop_cancel() -> CancelFlag {
+    new_cancel_flag()
+}
+
 fn bench_read_small(c: &mut Criterion) {
     let tmp = tempfile::TempDir::new().unwrap();
     let lines: Vec<String> = (1..=100).map(|i| format!("line {}", i)).collect();
@@ -24,7 +29,7 @@ fn bench_read_small(c: &mut Criterion) {
     let input = serde_json::json!({"path": "small.txt"});
 
     c.bench_function("read_100_lines", |b| {
-        b.iter(|| black_box(tool.execute(input.clone(), noop_update())));
+        b.iter(|| black_box(tool.execute(input.clone(), noop_update(), &noop_cancel())));
     });
 }
 
@@ -37,7 +42,7 @@ fn bench_read_large(c: &mut Criterion) {
     let input = serde_json::json!({"path": "large.txt"});
 
     c.bench_function("read_5000_lines", |b| {
-        b.iter(|| black_box(tool.execute(input.clone(), noop_update())));
+        b.iter(|| black_box(tool.execute(input.clone(), noop_update(), &noop_cancel())));
     });
 }
 
@@ -57,7 +62,7 @@ fn bench_edit_single(c: &mut Criterion) {
                 "old_text": "fn func_250() {}",
                 "new_text": "fn func_250_renamed() {}"
             });
-            black_box(tool.execute(input, noop_update()))
+            black_box(tool.execute(input, noop_update(), &noop_cancel()))
         });
     });
 }
@@ -83,7 +88,7 @@ fn bench_edit_multi(c: &mut Criterion) {
                     {"old_text": "fn func_450() {}", "new_text": "fn e() {}"},
                 ]
             });
-            black_box(tool.execute(input, noop_update()))
+            black_box(tool.execute(input, noop_update(), &noop_cancel()))
         });
     });
 }
@@ -97,7 +102,7 @@ fn bench_write(c: &mut Criterion) {
     c.bench_function("write_10kb", |b| {
         b.iter(|| {
             let input = serde_json::json!({"path": "out.txt", "content": &content});
-            black_box(tool.execute(input, noop_update()))
+            black_box(tool.execute(input, noop_update(), &noop_cancel()))
         });
     });
 }

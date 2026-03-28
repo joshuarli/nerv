@@ -245,6 +245,50 @@ next interaction.
 
 ## Infrastructure
 
+### Tree-sitter symbol index (`index/mod.rs`, `index/codemap.rs`)
+
+`symbols` and `codemap` are backed by an in-process tree-sitter parse of the
+project. The index maps file paths to their parsed `SymbolDef` list (name,
+kind, start/end byte offsets, one-line signature). Currently indexed languages:
+Rust, TypeScript/TSX, Python, Go, C/C++.
+
+**Lazy, query-time indexing.** The index is not updated when `edit` or `write`
+runs — it is rebuilt on each `symbols`/`codemap` call. `force_index_dir` walks
+the directory, compares stored mtimes against the current filesystem, and
+re-parses only changed or new files. Deleted files are evicted. This means a
+`symbols` call immediately after an `edit` sees the updated symbols; there is
+no background watcher or stale-index window.
+
+**On-disk SQLite cache (`~/.nerv/symbol_cache.db`).** Parsing is the expensive
+step. The cache stores `(path, mtime) → JSON-serialized Vec<SymbolDef>` so
+that unchanged files skip tree-sitter entirely on the next run. Schema:
+
+```sql
+CREATE TABLE symbol_cache (
+    path  TEXT    NOT NULL,
+    mtime INTEGER NOT NULL,
+    data  TEXT    NOT NULL,
+    PRIMARY KEY (path, mtime)
+);
+```
+
+Cache lifecycle:
+- **Hit**: file path + mtime matches a row → deserialize, skip parse.
+- **Miss**: parse with tree-sitter → insert new row.
+- **Stale eviction**: when a file's mtime has changed, the old row is
+  implicitly bypassed (different mtime key) and a fresh row is written.
+  `remove()` explicitly deletes all rows for a path when the file is deleted.
+- **Graceful degradation**: if the cache DB can't be opened (permissions,
+  missing `~/.nerv/` dir), `SymbolIndex` falls back to in-memory-only mode
+  with no error.
+
+The cache is a separate file from `sessions.db` to avoid schema coupling.
+WAL journal mode is enabled for concurrent reads.
+
+`SymbolIndex::new()` creates an index with no persistent cache (used by
+tests). `SymbolIndex::new_with_cache(nerv_dir)` is the production path, wired
+up in bootstrap.
+
 ### Output truncation (`truncate.rs`)
 
 All external command output is truncated to prevent context blowup:

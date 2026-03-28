@@ -18,6 +18,10 @@ pub fn noop_update() -> UpdateCallback {
     Arc::new(|_| {})
 }
 
+pub fn noop_cancel() -> CancelFlag {
+    new_cancel_flag()
+}
+
 pub struct MockProvider {
     responses: std::sync::Mutex<Vec<Vec<ProviderEvent>>>,
     /// Captured wire tools from each request (for verifying tool pruning etc.)
@@ -73,7 +77,7 @@ impl AgentTool for EchoTool {
     fn validate(&self, _input: &serde_json::Value) -> Result<(), ToolError> {
         Ok(())
     }
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
         ToolResult::ok(format!(
             "echo: {}",
             input["text"].as_str().unwrap_or("(no input)")

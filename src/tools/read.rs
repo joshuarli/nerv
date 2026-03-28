@@ -202,6 +202,7 @@ fn digit_width(line_count: usize) -> usize {
 mod tests {
     use super::*;
     use crate::agent::agent::AgentTool;
+    use crate::agent::provider::new_cancel_flag;
     use std::sync::Arc;
 
     fn make_tool(dir: &Path) -> Arc<ReadTool> {
@@ -210,11 +211,13 @@ mod tests {
 
     fn read(tool: &dyn AgentTool, path: &str) -> ToolResult {
         let cb: UpdateCallback = Arc::new(|_| {});
-        tool.execute(serde_json::json!({"path": path}), cb)
+        let cancel = new_cancel_flag();
+        tool.execute(serde_json::json!({"path": path}), cb, &cancel)
     }
 
     fn read_range(tool: &dyn AgentTool, path: &str, offset: Option<u64>, limit: Option<u64>) -> ToolResult {
         let cb: UpdateCallback = Arc::new(|_| {});
+        let cancel = new_cancel_flag();
         let mut args = serde_json::json!({"path": path});
         if let Some(o) = offset {
             args["offset"] = serde_json::json!(o);
@@ -222,7 +225,7 @@ mod tests {
         if let Some(l) = limit {
             args["limit"] = serde_json::json!(l);
         }
-        tool.execute(args, cb)
+        tool.execute(args, cb, &cancel)
     }
 
     #[test]

@@ -1,5 +1,9 @@
 ## General
 
+- [ ] Skip `force_index_dir` in `symbols`/`codemap` if no mutating tools have
+      run since the last index scan (track a `dirty` flag in `SymbolIndex`,
+      set by `edit`/`write` via a shared atomic or by checking the mutation
+      queue generation counter)
 - [ ] Image input — paste/drag screenshots
 - [ ] MCP server support — external tool providers
 - [x] Session tree browser (`/tree`)

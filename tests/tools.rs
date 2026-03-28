@@ -4,11 +4,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use nerv::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use nerv::agent::provider::{CancelFlag, new_cancel_flag};
 use nerv::tools::*;
 use tempfile::TempDir;
 
 fn noop_update() -> UpdateCallback {
     Arc::new(|_| {})
+}
+
+fn noop_cancel() -> CancelFlag {
+    new_cancel_flag()
 }
 
 /// Count approximate tokens in a tool result (chars/4 heuristic).
@@ -23,7 +28,7 @@ fn read_tool_returns_numbered_lines() {
     std::fs::write(&file, "line1\nline2\nline3\n").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"path": "test.txt"}), noop_update());
+    let result = tool.execute(serde_json::json!({"path": "test.txt"}), noop_update(), &noop_cancel());
 
     assert!(!result.is_error);
     assert!(result.content.contains("line1"));
@@ -43,6 +48,7 @@ fn read_tool_offset_and_limit() {
     let result = tool.execute(
         serde_json::json!({"path": "test.txt", "offset": 3, "limit": 2}),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error);
@@ -58,6 +64,7 @@ fn read_tool_nonexistent_file() {
     let result = tool.execute(
         serde_json::json!({"path": "nonexistent.txt"}),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(result.is_error);
@@ -72,6 +79,7 @@ fn write_tool_creates_file_and_dirs() {
     let result = tool.execute(
         serde_json::json!({"path": "sub/dir/file.txt", "content": "hello world"}),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error);
@@ -94,6 +102,7 @@ fn edit_tool_exact_match_replacement() {
             "new_text": "println!(\"new\")"
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error);
@@ -120,6 +129,7 @@ fn edit_tool_rejects_ambiguous_match() {
             "new_text": "baz"
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(result.is_error);
@@ -141,6 +151,7 @@ fn edit_tool_not_found() {
             "new_text": "replacement"
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(result.is_error);
@@ -162,6 +173,7 @@ fn edit_tool_preserves_crlf_line_endings() {
             "new_text": "replaced"
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error);
@@ -191,6 +203,7 @@ fn edit_multi_basic() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "multi-edit failed: {}", result.content);
@@ -219,6 +232,7 @@ fn edit_multi_out_of_order() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "failed: {}", result.content);
@@ -243,6 +257,7 @@ fn edit_multi_overlap_rejected() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(result.is_error);
@@ -269,6 +284,7 @@ fn edit_multi_not_found() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(result.is_error);
@@ -295,6 +311,7 @@ fn edit_multi_preserves_crlf() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "failed: {}", result.content);
@@ -321,6 +338,7 @@ fn edit_multi_returns_diff() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error);
@@ -351,6 +369,7 @@ fn edit_multi_single_edit_in_array() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "failed: {}", result.content);
@@ -377,6 +396,7 @@ fn edit_multi_adjacent_edits() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "failed: {}", result.content);
@@ -405,6 +425,7 @@ fn edit_multi_multiline_replacements() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "failed: {}", result.content);
@@ -506,6 +527,7 @@ fn edit_single_fuzzy_match_smart_quotes() {
             "new_text": "say \"world\""
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "fuzzy match failed: {}", result.content);
@@ -524,6 +546,7 @@ fn edit_single_nonexistent_file() {
             "new_text": "b"
         }),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(result.is_error);
     assert!(result.content.contains("Error reading"));
@@ -545,6 +568,7 @@ fn edit_single_empty_replacement() {
             "new_text": ""
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "failed: {}", result.content);
@@ -567,6 +591,7 @@ fn edit_single_absolute_path() {
             "new_text": "new"
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "failed: {}", result.content);
@@ -591,6 +616,7 @@ fn edit_multi_deletion_and_insertion() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "failed: {}", result.content);
@@ -602,7 +628,7 @@ fn edit_multi_deletion_and_insertion() {
 fn bash_tool_runs_command() {
     let tmp = TempDir::new().unwrap();
     let tool = BashTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"command": "echo hello"}), noop_update());
+    let result = tool.execute(serde_json::json!({"command": "echo hello"}), noop_update(), &noop_cancel());
 
     assert!(!result.is_error, "bash failed: {}", result.content);
     assert!(result.content.contains("hello"));
@@ -612,7 +638,7 @@ fn bash_tool_runs_command() {
 fn bash_tool_reports_nonzero_exit() {
     let tmp = TempDir::new().unwrap();
     let tool = BashTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"command": "exit 42"}), noop_update());
+    let result = tool.execute(serde_json::json!({"command": "exit 42"}), noop_update(), &noop_cancel());
 
     assert!(result.is_error);
     assert!(result.content.contains("42"));
@@ -643,6 +669,7 @@ fn edit_single_preserves_bom() {
             "new_text": "goodbye"
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "failed: {}", result.content);
@@ -670,6 +697,7 @@ fn edit_multi_preserves_bom() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "failed: {}", result.content);
@@ -695,6 +723,7 @@ fn edit_single_no_change_rejected() {
             "new_text": "hello"
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(result.is_error);
@@ -718,6 +747,7 @@ fn edit_multi_no_change_rejected() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(result.is_error);
@@ -747,6 +777,7 @@ fn edit_multi_ambiguous_old_text_rejected() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(result.is_error, "should reject ambiguous match: {}", result.content);
@@ -774,6 +805,7 @@ fn edit_multi_two_edits_same_old_text_rejected() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(result.is_error, "should reject duplicate targets: {}", result.content);
@@ -799,6 +831,7 @@ fn edit_multi_empty_old_text_rejected() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(result.is_error, "empty old_text should be rejected: {}", result.content);
@@ -827,6 +860,7 @@ fn edit_multi_error_reports_original_index() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(result.is_error);
@@ -855,6 +889,7 @@ fn edit_multi_large_file_rejected() {
             "new_text": "y"
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(result.is_error, "should reject large file: {}", result.content);
@@ -883,6 +918,7 @@ fn edit_multi_fuzzy_match_trailing_whitespace() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "multi fuzzy match failed: {}", result.content);
@@ -909,6 +945,7 @@ fn edit_multi_fuzzy_match_smart_quotes() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "multi fuzzy smart-quote match failed: {}", result.content);
@@ -923,7 +960,7 @@ fn read_empty_file() {
     std::fs::write(tmp.path().join("empty.txt"), "").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"path": "empty.txt"}), noop_update());
+    let result = tool.execute(serde_json::json!({"path": "empty.txt"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.is_empty() || result.content.trim().is_empty());
 }
@@ -934,7 +971,7 @@ fn read_binary_file_does_not_panic() {
     std::fs::write(tmp.path().join("bin"), b"\x00\x01\xff\xfe").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"path": "bin"}), noop_update());
+    let result = tool.execute(serde_json::json!({"path": "bin"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
 }
 
@@ -944,7 +981,7 @@ fn read_unicode() {
     std::fs::write(tmp.path().join("uni.txt"), "héllo 世界\nñ\n").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"path": "uni.txt"}), noop_update());
+    let result = tool.execute(serde_json::json!({"path": "uni.txt"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("héllo"));
     assert!(result.content.contains("世界"));
@@ -959,6 +996,7 @@ fn read_offset_past_end() {
     let result = tool.execute(
         serde_json::json!({"path": "small.txt", "offset": 999}),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error);
     assert!(result.content.is_empty() || result.content.trim().is_empty());
@@ -974,6 +1012,7 @@ fn read_absolute_path() {
     let result = tool.execute(
         serde_json::json!({"path": file.to_str().unwrap()}),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error);
     assert!(result.content.contains("content"));
@@ -987,7 +1026,7 @@ fn read_output_token_efficiency() {
     std::fs::write(tmp.path().join("code.rs"), lines.join("\n")).unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"path": "code.rs"}), noop_update());
+    let result = tool.execute(serde_json::json!({"path": "code.rs"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
 
     let tokens = approx_tokens(&result);
@@ -1012,6 +1051,7 @@ fn write_overwrites_existing() {
     let result = tool.execute(
         serde_json::json!({"path": "test.txt", "content": "new content"}),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "new content");
@@ -1025,6 +1065,7 @@ fn write_empty_content() {
     let result = tool.execute(
         serde_json::json!({"path": "empty.txt", "content": ""}),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error);
     assert_eq!(std::fs::read_to_string(tmp.path().join("empty.txt")).unwrap(), "");
@@ -1038,6 +1079,7 @@ fn write_unicode_content() {
     let result = tool.execute(
         serde_json::json!({"path": "uni.txt", "content": "héllo 世界\n"}),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error);
     assert!(std::fs::read_to_string(tmp.path().join("uni.txt")).unwrap().contains("世界"));
@@ -1051,6 +1093,7 @@ fn write_deeply_nested_path() {
     let result = tool.execute(
         serde_json::json!({"path": "a/b/c/d/e.txt", "content": "deep"}),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error);
     assert_eq!(
@@ -1068,6 +1111,7 @@ fn write_absolute_path() {
     let result = tool.execute(
         serde_json::json!({"path": file.to_str().unwrap(), "content": "abs"}),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "abs");
@@ -1174,6 +1218,7 @@ fn edit_single_output_token_efficiency() {
             "new_text": "fn func_100_renamed() {}"
         }),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error, "{}", result.content);
 
@@ -1203,6 +1248,7 @@ fn edit_multi_output_token_efficiency() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error, "{}", result.content);
 
@@ -1235,6 +1281,7 @@ fn edit_content_includes_diff() {
             "new_text": "println!(\"new\")"
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error);
@@ -1263,6 +1310,7 @@ fn edit_content_diff_is_compact() {
             "new_text": "line FIFTY"
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error);
@@ -1304,6 +1352,7 @@ fn edit_multi_content_includes_diff() {
             ]
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error);
@@ -1333,6 +1382,7 @@ fn edit_fuzzy_content_includes_diff() {
             "new_text": "println!(\"world\")"
         }),
         noop_update(),
+        &noop_cancel(),
     );
 
     assert!(!result.is_error, "{}", result.content);
@@ -1355,12 +1405,12 @@ fn symbols_tool_finds_definitions() {
     let tool = SymbolsTool::new(tmp.path().to_path_buf());
 
     // Search by type name
-    let result = tool.execute(serde_json::json!({"query": "Config"}), noop_update());
+    let result = tool.execute(serde_json::json!({"query": "Config"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("struct"), "should find struct: {}", result.content);
 
     // Search by method name — should show parent impl
-    let result = tool.execute(serde_json::json!({"query": "load"}), noop_update());
+    let result = tool.execute(serde_json::json!({"query": "load"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("fn"), "should find method: {}", result.content);
     assert!(result.content.contains("impl Config"), "should show parent: {}", result.content);
@@ -1379,6 +1429,7 @@ fn symbols_tool_kind_filter() {
     let result = tool.execute(
         serde_json::json!({"query": "foo", "kind": "function"}),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error);
     assert!(result.content.contains("fn foo"), "{}", result.content);
@@ -1391,7 +1442,7 @@ fn symbols_tool_no_results() {
     std::fs::write(tmp.path().join("lib.rs"), "fn hello() {}\n").unwrap();
 
     let tool = SymbolsTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"query": "nonexistent"}), noop_update());
+    let result = tool.execute(serde_json::json!({"query": "nonexistent"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("No definitions found"), "{}", result.content);
 }
@@ -1416,6 +1467,7 @@ fn codemap_tool_full_depth() {
     let result = tool.execute(
         serde_json::json!({"query": "hello", "depth": "full"}),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error);
     assert!(result.content.contains("fn hello()"), "{}", result.content);
@@ -1434,6 +1486,7 @@ fn codemap_tool_signatures_depth() {
     let result = tool.execute(
         serde_json::json!({"query": "hello", "depth": "signatures"}),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error);
     assert!(result.content.contains("fn hello()"), "{}", result.content);
@@ -1449,6 +1502,7 @@ fn codemap_tool_no_results() {
     let result = tool.execute(
         serde_json::json!({"query": "nonexistent"}),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error);
     // Non-empty query with definitions in scope → redirect message
@@ -1467,6 +1521,7 @@ fn codemap_tool_kind_filter() {
     let result = tool.execute(
         serde_json::json!({"query": "", "kind": "struct", "depth": "full"}),
         noop_update(),
+        &noop_cancel(),
     );
     assert!(!result.is_error);
     assert!(result.content.contains("Foo"), "{}", result.content);

@@ -47,7 +47,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     // immediately so it runs in parallel with config/auth/resource loading.
     // The mutex serves as the join: if `symbols` is called before this
     // finishes, it blocks on lock() until the scan completes.
-    let symbols_tool = Arc::new(SymbolsTool::new(cwd.to_path_buf()));
+    let symbols_tool = Arc::new(SymbolsTool::new_with_cache(cwd.to_path_buf(), nerv_dir));
     let symbol_index = symbols_tool.index();
     {
         let idx = symbol_index.clone();

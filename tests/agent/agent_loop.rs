@@ -188,7 +188,7 @@ fn cancel_flag_stops_agent() {
         fn description(&self) -> &str { "Sets cancel flag" }
         fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({"type":"object"}) }
         fn validate(&self, _: &serde_json::Value) -> Result<(), nerv::errors::ToolError> { Ok(()) }
-        fn execute(&self, _: serde_json::Value, _: UpdateCallback) -> nerv::agent::agent::ToolResult {
+        fn execute(&self, _: serde_json::Value, _: UpdateCallback, _: &nerv::agent::provider::CancelFlag) -> nerv::agent::agent::ToolResult {
             self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             nerv::agent::agent::ToolResult::ok("cancelled")
         }

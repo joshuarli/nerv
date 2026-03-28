@@ -2,11 +2,11 @@ pub mod codemap;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tree_sitter::{Parser, Query, QueryCursor, StreamingIterator};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SymbolKind {
     Function,
     Method,
@@ -53,7 +53,7 @@ impl SymbolKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SymbolDef {
     pub name: String,
     pub kind: SymbolKind,
@@ -69,11 +69,115 @@ struct FileEntry {
     symbols: Vec<SymbolDef>,
 }
 
+/// Persistent on-disk cache of parsed symbol data, keyed by (path, mtime).
+///
+/// Stored in `~/.nerv/symbol_cache.db` (SQLite). On a warm start every
+/// unchanged file is a cache hit, so tree-sitter only runs for files that
+/// have been modified since the last scan.
+struct SymbolCache {
+    db: sqlite::Connection,
+}
+
+impl SymbolCache {
+    fn open(nerv_dir: &Path) -> Option<Self> {
+        let path = nerv_dir.join("symbol_cache.db");
+        let db = match sqlite::open(&path) {
+            Ok(db) => db,
+            Err(e) => {
+                crate::log::warn(&format!("symbol cache: open failed: {}", e));
+                return None;
+            }
+        };
+        db.execute("PRAGMA journal_mode=WAL").ok();
+        db.execute("PRAGMA synchronous=NORMAL").ok();
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS symbol_cache (
+                path  TEXT NOT NULL,
+                mtime INTEGER NOT NULL,
+                data  TEXT NOT NULL,
+                PRIMARY KEY (path, mtime)
+            )",
+        )
+        .ok()?;
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cache_path ON symbol_cache(path)",
+        )
+        .ok();
+        // Evict rows older than 30 days to bound cache growth.
+        let cutoff_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64
+            - 30 * 24 * 3600 * 1000;
+        if let Ok(mut stmt) = db.prepare("DELETE FROM symbol_cache WHERE mtime < ?") {
+            stmt.bind((1, cutoff_ms)).ok();
+            stmt.next().ok();
+        }
+        Some(Self { db })
+    }
+
+    /// Return cached symbols for `path` if the stored mtime matches `mtime`.
+    fn get(&self, path: &Path, mtime: u128) -> Option<Vec<SymbolDef>> {
+        let path_str = path.to_string_lossy();
+        let mut stmt = self
+            .db
+            .prepare("SELECT data FROM symbol_cache WHERE path = ? AND mtime = ?")
+            .ok()?;
+        stmt.bind((1, path_str.as_ref())).ok()?;
+        stmt.bind((2, mtime as i64)).ok()?;
+        if stmt.next().ok()? == sqlite::State::Row {
+            let json: String = stmt.read("data").ok()?;
+            serde_json::from_str(&json).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Store symbols for `path` at `mtime`, evicting any older entries.
+    fn put(&self, path: &Path, mtime: u128, symbols: &[SymbolDef]) {
+        let path_str = path.to_string_lossy();
+        let json = match serde_json::to_string(symbols) {
+            Ok(j) => j,
+            Err(e) => {
+                crate::log::warn(&format!("symbol cache: serialize failed for {}: {}", path_str, e));
+                return;
+            }
+        };
+        // Delete all rows for this path, then insert the fresh one.
+        if let Ok(mut stmt) = self.db.prepare("DELETE FROM symbol_cache WHERE path = ?") {
+            stmt.bind((1, path_str.as_ref())).ok();
+            stmt.next().ok();
+        }
+        if let Ok(mut stmt) = self
+            .db
+            .prepare("INSERT INTO symbol_cache (path, mtime, data) VALUES (?, ?, ?)")
+        {
+            stmt.bind((1, path_str.as_ref())).ok();
+            stmt.bind((2, mtime as i64)).ok();
+            stmt.bind((3, json.as_str())).ok();
+            if let Err(e) = stmt.next() {
+                crate::log::warn(&format!("symbol cache: insert failed for {}: {}", path_str, e));
+            }
+        }
+    }
+
+    /// Remove the cache entry for a deleted file.
+    fn remove(&self, path: &Path) {
+        let path_str = path.to_string_lossy();
+        if let Ok(mut stmt) = self.db.prepare("DELETE FROM symbol_cache WHERE path = ?") {
+            stmt.bind((1, path_str.as_ref())).ok();
+            stmt.next().ok();
+        }
+    }
+}
+
 pub struct SymbolIndex {
     files: HashMap<PathBuf, FileEntry>,
     parser: Parser,
     query: Query,
     last_scan: Option<Instant>,
+    /// Optional on-disk cache. `None` if `~/.nerv/` is unavailable.
+    cache: Option<SymbolCache>,
 }
 
 /// Minimum interval between full directory scans.
@@ -105,6 +209,15 @@ const RUST_QUERY: &str = r#"
 
 impl SymbolIndex {
     pub fn new() -> Self {
+        Self::new_inner(None)
+    }
+
+    /// Construct with a persistent on-disk cache at `nerv_dir/symbol_cache.db`.
+    pub fn new_with_cache(nerv_dir: &Path) -> Self {
+        Self::new_inner(SymbolCache::open(nerv_dir))
+    }
+
+    fn new_inner(cache: Option<SymbolCache>) -> Self {
         let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
         let mut parser = Parser::new();
         parser.set_language(&language).expect("Rust grammar");
@@ -114,6 +227,7 @@ impl SymbolIndex {
             parser,
             query,
             last_scan: None,
+            cache,
         }
     }
 
@@ -131,15 +245,41 @@ impl SymbolIndex {
     /// Full scan ignoring debounce. Used in tests and after known-dirty events.
     pub fn force_index_dir(&mut self, root: &Path) {
         let rs_files = collect_rs_files(root);
-        self.files.retain(|path, _| rs_files.contains_key(path));
+        // Remove entries for files that no longer exist, cleaning up cache too.
+        let removed: Vec<PathBuf> = self
+            .files
+            .keys()
+            .filter(|p| !rs_files.contains_key(*p))
+            .cloned()
+            .collect();
+        for path in removed {
+            self.files.remove(&path);
+            if let Some(ref cache) = self.cache {
+                cache.remove(&path);
+            }
+        }
         for (path, mtime) in rs_files {
             if let Some(entry) = self.files.get(&path) {
                 if entry.mtime == mtime {
                     continue;
                 }
             }
+            let mtime_ms = mtime
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            // Try the on-disk cache before running tree-sitter.
+            if let Some(ref cache) = self.cache {
+                if let Some(symbols) = cache.get(&path, mtime_ms) {
+                    self.files.insert(path, FileEntry { mtime, symbols });
+                    continue;
+                }
+            }
             if let Ok(source) = std::fs::read_to_string(&path) {
                 let symbols = self.parse_symbols(&path, &source);
+                if let Some(ref cache) = self.cache {
+                    cache.put(&path, mtime_ms, &symbols);
+                }
                 self.files.insert(path, FileEntry { mtime, symbols });
             }
         }
@@ -157,6 +297,9 @@ impl SymbolIndex {
             Ok(p) => p,
             Err(_) => {
                 self.files.remove(path);
+                if let Some(ref cache) = self.cache {
+                    cache.remove(path);
+                }
                 return;
             }
         };
@@ -164,11 +307,28 @@ impl SymbolIndex {
             Ok(t) => t,
             Err(_) => {
                 self.files.remove(&canonical);
+                if let Some(ref cache) = self.cache {
+                    cache.remove(&canonical);
+                }
                 return;
             }
         };
+        let mtime_ms = mtime
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        // Try cache first.
+        if let Some(ref cache) = self.cache {
+            if let Some(symbols) = cache.get(&canonical, mtime_ms) {
+                self.files.insert(canonical, FileEntry { mtime, symbols });
+                return;
+            }
+        }
         if let Ok(source) = std::fs::read_to_string(&canonical) {
             let symbols = self.parse_symbols(&canonical, &source);
+            if let Some(ref cache) = self.cache {
+                cache.put(&canonical, mtime_ms, &symbols);
+            }
             self.files.insert(canonical, FileEntry { mtime, symbols });
         }
     }
@@ -718,5 +878,115 @@ mod tests {
         index.mark_dirty();
         index.index_dir(tmp.path());
         assert_eq!(index.search("second", None, None).len(), 1);
+    }
+
+    // --- SymbolCache tests ---
+
+    fn cached_index(dir: &Path) -> SymbolIndex {
+        let cache_dir = dir.join(".nerv");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        SymbolIndex::new_with_cache(&cache_dir)
+    }
+
+    #[test]
+    fn cache_survives_new_index_instance() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("lib.rs"), "fn cached_fn() {}\n").unwrap();
+
+        // First index: parses and populates cache.
+        let mut idx1 = cached_index(tmp.path());
+        idx1.force_index_dir(tmp.path());
+        assert_eq!(idx1.search("cached_fn", None, None).len(), 1);
+
+        // Second index: loads from cache without re-parsing.
+        let mut idx2 = cached_index(tmp.path());
+        idx2.force_index_dir(tmp.path());
+        assert_eq!(idx2.search("cached_fn", None, None).len(), 1);
+    }
+
+    #[test]
+    fn cache_invalidates_on_edit() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let f = tmp.path().join("lib.rs");
+        std::fs::write(&f, "fn original() {}\n").unwrap();
+
+        let mut idx = cached_index(tmp.path());
+        idx.force_index_dir(tmp.path());
+        assert_eq!(idx.search("original", None, None).len(), 1);
+
+        // Modify file — cache entry should be invalidated on next scan.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&f, "fn replaced() {}\n").unwrap();
+
+        let mut idx2 = cached_index(tmp.path());
+        idx2.force_index_dir(tmp.path());
+        assert_eq!(idx2.search("original", None, None).len(), 0);
+        assert_eq!(idx2.search("replaced", None, None).len(), 1);
+    }
+
+    #[test]
+    fn cache_handles_deleted_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let f = tmp.path().join("lib.rs");
+        std::fs::write(&f, "fn doomed() {}\n").unwrap();
+
+        let mut idx = cached_index(tmp.path());
+        idx.force_index_dir(tmp.path());
+        assert_eq!(idx.search("doomed", None, None).len(), 1);
+
+        std::fs::remove_file(&f).unwrap();
+
+        let mut idx2 = cached_index(tmp.path());
+        idx2.force_index_dir(tmp.path());
+        assert_eq!(idx2.search("doomed", None, None).len(), 0);
+    }
+
+    #[test]
+    fn cache_index_file_roundtrip() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let f = tmp.path().join("one.rs");
+        std::fs::write(&f, "fn alpha() {}\n").unwrap();
+
+        let mut idx = cached_index(tmp.path());
+        idx.index_file(&f);
+        assert_eq!(idx.search("alpha", None, None).len(), 1);
+
+        // New index: should load from cache via index_file.
+        let mut idx2 = cached_index(tmp.path());
+        idx2.index_file(&f);
+        assert_eq!(idx2.search("alpha", None, None).len(), 1);
+    }
+
+    #[test]
+    fn cache_no_nerv_dir_falls_back() {
+        // If the cache dir doesn't exist, SymbolIndex still works (in-memory only).
+        let bogus = Path::new("/tmp/nerv-test-nonexistent-dir-12345");
+        let mut idx = SymbolIndex::new_with_cache(bogus);
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("lib.rs"), "fn fallback() {}\n").unwrap();
+        idx.force_index_dir(tmp.path());
+        assert_eq!(idx.search("fallback", None, None).len(), 1);
+    }
+
+    #[test]
+    fn cache_millis_precision() {
+        // Verify that two writes within the same second produce different cache entries
+        // (i.e., millisecond precision is used, not second precision).
+        let tmp = tempfile::TempDir::new().unwrap();
+        let f = tmp.path().join("lib.rs");
+        std::fs::write(&f, "fn version_one() {}\n").unwrap();
+
+        let mut idx = cached_index(tmp.path());
+        idx.force_index_dir(tmp.path());
+        assert_eq!(idx.search("version_one", None, None).len(), 1);
+
+        // Sleep just enough for mtime to differ at ms precision.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&f, "fn version_two() {}\n").unwrap();
+
+        let mut idx2 = cached_index(tmp.path());
+        idx2.force_index_dir(tmp.path());
+        assert_eq!(idx2.search("version_one", None, None).len(), 0, "stale cache entry should not persist");
+        assert_eq!(idx2.search("version_two", None, None).len(), 1);
     }
 }
