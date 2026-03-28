@@ -311,3 +311,70 @@ fn persist_fn_order_matches_returned_messages() {
         );
     }
 }
+
+// --- tool description pruning ---
+
+#[test]
+fn tool_descriptions_pruned_after_threshold() {
+    let provider = Arc::new(MockProvider::new(vec![simple_response("done")]));
+    let provider_clone = provider.clone();
+    let mut registry = ProviderRegistry::new();
+    registry.register("mock", provider);
+    let mut agent = Agent::new(Arc::new(RwLock::new(registry)));
+    agent.state.model = Some(test_model());
+    agent.state.system_prompt = "Test.".into();
+    agent.state.tools = vec![Arc::new(EchoTool)];
+
+    // Seed enough prior assistant messages to trigger pruning
+    for i in 0..5 {
+        agent.state.messages.push(user_msg(&format!("q{}", i)));
+        agent.state.messages.push(AgentMessage::Assistant(AssistantMessage {
+            content: vec![ContentBlock::Text { text: format!("a{}", i) }],
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+            timestamp: 1000,
+        }));
+    }
+
+    let _ = collect_events(&mut agent, vec![user_msg("go")]);
+
+    let captured = provider_clone.captured_tools.lock().unwrap();
+    assert_eq!(captured.len(), 1, "should have one API call");
+    let tools = &captured[0];
+    assert!(!tools.is_empty(), "should have tools");
+    for tool in tools {
+        assert!(
+            tool.description.is_empty(),
+            "tool '{}' description should be pruned, got: {}",
+            tool.name,
+            tool.description,
+        );
+    }
+}
+
+#[test]
+fn tool_descriptions_kept_for_early_turns() {
+    let provider = Arc::new(MockProvider::new(vec![simple_response("done")]));
+    let provider_clone = provider.clone();
+    let mut registry = ProviderRegistry::new();
+    registry.register("mock", provider);
+    let mut agent = Agent::new(Arc::new(RwLock::new(registry)));
+    agent.state.model = Some(test_model());
+    agent.state.system_prompt = "Test.".into();
+    agent.state.tools = vec![Arc::new(EchoTool)];
+
+    // No prior messages — first turn
+    let _ = collect_events(&mut agent, vec![user_msg("hello")]);
+
+    let captured = provider_clone.captured_tools.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    let tools = &captured[0];
+    assert!(!tools.is_empty());
+    for tool in tools {
+        assert!(
+            !tool.description.is_empty(),
+            "tool '{}' description should be present on first turn",
+            tool.name,
+        );
+    }
+}

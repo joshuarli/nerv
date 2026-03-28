@@ -212,6 +212,21 @@ const RECENT_TURNS_MIN: usize = 6;
 const RECENT_TURNS_MAX: usize = 16;
 const TRUNCATED_MAX_CHARS: usize = 200;
 
+/// Number of prior assistant messages before tool descriptions are pruned.
+/// After this many responses, the model has internalized the tool interfaces.
+const TOOL_PRUNE_THRESHOLD: usize = 4;
+
+/// Returns true if there are enough prior assistant turns that tool descriptions
+/// can be safely pruned to save tokens. The decision must be frozen once per
+/// prompt loop for cache prefix stability.
+pub fn should_prune_tool_descriptions(messages: &[AgentMessage]) -> bool {
+    let assistant_count = messages
+        .iter()
+        .filter(|m| matches!(m, AgentMessage::Assistant(_)))
+        .count();
+    assistant_count >= TOOL_PRUNE_THRESHOLD
+}
+
 /// Compute how many recent messages to preserve verbatim, adapting based on
 /// the diversity of files targeted by recent tool calls.
 ///
@@ -2108,6 +2123,41 @@ FAILED (failures=1)";
         ];
         let recent = compute_adaptive_recent(&msgs);
         assert_eq!(recent, RECENT_TURNS, "short conversations use base value");
+    }
+
+    // --- tool description pruning ---
+
+    #[test]
+    fn tool_pruning_false_for_short_conversations() {
+        let msgs = vec![
+            user("hi"),
+            assistant_text("hello"),
+            user("do something"),
+            assistant_text("ok"),
+        ];
+        assert!(!should_prune_tool_descriptions(&msgs));
+    }
+
+    #[test]
+    fn tool_pruning_true_after_threshold() {
+        let mut msgs = vec![user("start")];
+        for i in 0..TOOL_PRUNE_THRESHOLD {
+            msgs.push(assistant_text(&format!("response {}", i)));
+            msgs.push(user(&format!("follow up {}", i)));
+        }
+        assert!(should_prune_tool_descriptions(&msgs));
+    }
+
+    #[test]
+    fn tool_pruning_counts_only_assistants() {
+        // Many user messages but fewer assistant messages than threshold
+        let msgs = vec![
+            user("a"), user("b"), user("c"), user("d"), user("e"),
+            assistant_text("one"),
+            user("f"),
+            assistant_text("two"),
+        ];
+        assert!(!should_prune_tool_descriptions(&msgs));
     }
 
     // --- read result folding ---

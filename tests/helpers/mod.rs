@@ -20,12 +20,15 @@ pub fn noop_update() -> UpdateCallback {
 
 pub struct MockProvider {
     responses: std::sync::Mutex<Vec<Vec<ProviderEvent>>>,
+    /// Captured wire tools from each request (for verifying tool pruning etc.)
+    pub captured_tools: std::sync::Mutex<Vec<Vec<WireTool>>>,
 }
 
 impl MockProvider {
     pub fn new(responses: Vec<Vec<ProviderEvent>>) -> Self {
         Self {
             responses: std::sync::Mutex::new(responses),
+            captured_tools: std::sync::Mutex::new(Vec::new()),
         }
     }
 }
@@ -36,10 +39,14 @@ impl Provider for MockProvider {
     }
     fn stream_completion(
         &self,
-        _request: &CompletionRequest,
+        request: &CompletionRequest,
         _cancel: &CancelFlag,
         on_event: &mut dyn FnMut(ProviderEvent),
     ) -> Result<(), nerv::errors::ProviderError> {
+        self.captured_tools
+            .lock()
+            .unwrap()
+            .push(request.tools.clone());
         for event in self.responses.lock().unwrap().remove(0) {
             on_event(event);
         }

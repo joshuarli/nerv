@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use super::convert::{compute_adaptive_recent, convert_to_llm, transform_context};
+use super::convert::{compute_adaptive_recent, convert_to_llm, should_prune_tool_descriptions, transform_context};
 use super::provider::*;
 use super::types::*;
 
@@ -153,10 +153,12 @@ impl Agent {
         // prefix across all API calls in this tool loop — critical for cache reuse.
         let adaptive_recent = compute_adaptive_recent(&self.state.messages);
         let stale_cutoff = self.state.messages.len().saturating_sub(adaptive_recent);
+        // Freeze tool pruning decision for cache stability within the loop.
+        let prune_tools = should_prune_tool_descriptions(&self.state.messages);
 
         let mut has_tool_calls = true;
         while has_tool_calls {
-            let assistant = self.stream_response(on_event, stale_cutoff);
+            let assistant = self.stream_response(on_event, stale_cutoff, prune_tools);
             let assistant_msg = AgentMessage::Assistant(assistant.clone());
             new_messages.push(assistant_msg.clone());
             if let Some(ref mut f) = persist_fn {
@@ -214,7 +216,7 @@ impl Agent {
         new_messages
     }
 
-    fn stream_response(&mut self, on_event: &dyn Fn(AgentEvent), stale_cutoff: usize) -> AssistantMessage {
+    fn stream_response(&mut self, on_event: &dyn Fn(AgentEvent), stale_cutoff: usize, prune_tools: bool) -> AssistantMessage {
         let model = match &self.state.model {
             Some(m) => m.clone(),
             None => {
@@ -295,7 +297,11 @@ impl Agent {
             .iter()
             .map(|t| WireTool {
                 name: t.name().to_string(),
-                description: t.description().to_string(),
+                description: if prune_tools {
+                    String::new()
+                } else {
+                    t.description().to_string()
+                },
                 parameters: t.parameters_schema(),
             })
             .collect();
