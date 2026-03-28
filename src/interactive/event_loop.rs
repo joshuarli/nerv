@@ -682,8 +682,16 @@ impl InteractiveMode {
         None
     }
 
-    pub fn handle_abort(&self) {
+    pub fn handle_abort(&mut self) {
         let _ = self.cmd_tx.send(SessionCommand::Abort);
+        // Immediately queue the top pending message behind the Abort so the
+        // session thread starts on it as soon as the current turn is cancelled,
+        // without waiting for AgentEnd to round-trip through the main loop.
+        if !self.pending_messages.is_empty() {
+            let msg = self.pending_messages.remove(0);
+            self.editing_queue_idx = self.editing_queue_idx.and_then(|i| i.checked_sub(1));
+            let _ = self.cmd_tx.send(SessionCommand::Prompt { text: msg });
+        }
     }
 
     fn handle_slash_command(&mut self, text: &str) -> Option<PickerRequest> {

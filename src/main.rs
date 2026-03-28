@@ -1070,6 +1070,9 @@ fn main() {
                 break;
             }
             cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            interactive.handle_abort();
+            layout.statusbar.cancel_streaming();
+            tui.request_render(false); tui.maybe_render(&layout);
         }
 
         if should_quit {
