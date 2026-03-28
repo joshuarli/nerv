@@ -118,13 +118,24 @@ impl AgentTool for GrepTool {
         match cmd.output() {
             Ok(output) => {
                 if output.stdout.is_empty() && !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.trim().is_empty() {
+                        return ToolResult::error(format!("rg: {}", stderr.trim()));
+                    }
                     return ToolResult::ok("No matches found");
                 }
                 let tr = truncate_tail(&output.stdout, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
 
                 // Truncate long lines to keep grep output compact (not needed in files/count modes
                 // since those lines are always short, but harmless to apply uniformly)
-                let content = truncate_long_lines(&tr.content, GREP_MAX_LINE_LENGTH);
+                let mut content = truncate_long_lines(&tr.content, GREP_MAX_LINE_LENGTH);
+                // Surface any warnings/errors rg emitted on stderr
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.trim().is_empty() {
+                    content.push_str("\n[stderr]\n");
+                    content.push_str(stderr.trim());
+                }
+                let content = content;
 
                 let display = if files_with_matches {
                     let file_count = content.lines().filter(|l| !l.is_empty()).count();

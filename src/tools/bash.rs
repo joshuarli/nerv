@@ -44,6 +44,8 @@ impl AgentTool for BashTool {
     fn execute(&self, input: serde_json::Value, update: UpdateCallback, cancel: &CancelFlag) -> ToolResult {
         let command = input["command"].as_str().unwrap_or("");
         let mut child = match Command::new(&self.shell)
+            .arg("-euo")
+            .arg("pipefail")
             .arg("-c")
             .arg(command)
             .current_dir(&self.cwd)

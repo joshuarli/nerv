@@ -48,14 +48,29 @@ impl AgentTool for LsTool {
             .arg("--tree")
             .arg("-L2")
             .arg("--icons=never")
+            .arg("--color=never")
+            .arg("--no-quotes")
+            .arg("--git-ignore")
             .arg(&resolved_path)
             .current_dir(&self.cwd)
             .output()
         {
             Ok(output) => {
                 let tr = truncate_tail(&output.stdout, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
-                let display = format!("{} ({} entries)", path, tr.content.lines().count());
-                ToolResult::ok_with_details(tr.content, serde_json::json!({"display": display}))
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let mut content = tr.content;
+                if !stderr.trim().is_empty() {
+                    if !content.is_empty() {
+                        content.push('\n');
+                    }
+                    content.push_str("[stderr]\n");
+                    content.push_str(stderr.trim());
+                }
+                let entry_count = content.lines()
+                    .filter(|l| !l.starts_with("[stderr]") && !l.is_empty())
+                    .count();
+                let display = format!("{} ({} entries)", path, entry_count);
+                ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
             }
             Err(e) => ToolResult::error(format!("Error running eza: {}", e)),
         }

@@ -52,6 +52,8 @@ impl AgentTool for FindTool {
         let path = input["path"].as_str().unwrap_or(".");
         let resolved_path = self.resolve_path(path);
         match Command::new("fd")
+            .arg("--color=never")
+            .arg("--show-errors")
             .arg("--glob")
             .arg(pattern)
             .arg(&resolved_path)
@@ -60,11 +62,23 @@ impl AgentTool for FindTool {
         {
             Ok(output) => {
                 let tr = truncate_tail(&output.stdout, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
-                if tr.content.is_empty() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let mut content = tr.content;
+                if !stderr.trim().is_empty() {
+                    if !content.is_empty() {
+                        content.push('\n');
+                    }
+                    content.push_str("[stderr]\n");
+                    content.push_str(stderr.trim());
+                }
+                if content.trim().is_empty() {
                     ToolResult::ok("No files found")
                 } else {
-                    let display = format!("{} files", tr.content.lines().count());
-                    ToolResult::ok_with_details(tr.content, serde_json::json!({"display": display}))
+                    let file_count = content.lines()
+                        .filter(|l| !l.starts_with("[stderr]") && !l.is_empty())
+                        .count();
+                    let display = format!("{} files", file_count);
+                    ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
                 }
             }
             Err(e) => ToolResult::error(format!("Error running fd: {}", e)),
