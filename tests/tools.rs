@@ -1178,9 +1178,9 @@ fn edit_single_output_token_efficiency() {
     assert!(!result.is_error, "{}", result.content);
 
     let tokens = approx_tokens(&result);
-    // A single-line edit in a 200-line file should produce <50 tokens of output
+    // A single-line edit in a 200-line file: header + compact diff with 3 lines context
     assert!(
-        tokens < 50,
+        tokens < 80,
         "edit output too bloated for single-line change: {} tokens\n{}",
         tokens, result.content,
     );
@@ -1212,6 +1212,134 @@ fn edit_multi_output_token_efficiency() {
         tokens < 120,
         "multi-edit output too bloated: {} tokens\n{}",
         tokens, result.content,
+    );
+}
+
+// --- compact diff in edit content ---
+
+#[test]
+fn edit_content_includes_diff() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("test.rs"),
+        "fn main() {\n    println!(\"old\");\n}\n",
+    )
+    .unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "test.rs",
+            "old_text": "println!(\"old\")",
+            "new_text": "println!(\"new\")"
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error);
+    // Content sent to LLM should include the diff, not just "Edited test.rs"
+    assert!(
+        result.content.contains('-') && result.content.contains('+'),
+        "edit content should include diff hunks, got: {}",
+        result.content
+    );
+    assert!(result.content.contains("old"), "diff should show removed line");
+    assert!(result.content.contains("new"), "diff should show added line");
+}
+
+#[test]
+fn edit_content_diff_is_compact() {
+    let tmp = TempDir::new().unwrap();
+    let lines: Vec<String> = (1..=100).map(|i| format!("line {}", i)).collect();
+    std::fs::write(tmp.path().join("big.txt"), lines.join("\n")).unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "big.txt",
+            "old_text": "line 50",
+            "new_text": "line FIFTY"
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error);
+    // Should NOT contain the full 100-line file — just a compact diff
+    assert!(
+        !result.content.contains("line 1\n"),
+        "content should not include full file"
+    );
+    assert!(
+        result.content.contains("FIFTY"),
+        "content should include the changed text"
+    );
+    // Should be compact: header + a few context lines + change
+    let line_count = result.content.lines().count();
+    assert!(
+        line_count < 20,
+        "compact diff should be <20 lines, got {}:\n{}",
+        line_count, result.content,
+    );
+}
+
+#[test]
+fn edit_multi_content_includes_diff() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("multi.rs"),
+        "let a = 1;\nlet b = 2;\nlet c = 3;\n",
+    )
+    .unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "multi.rs",
+            "edits": [
+                {"old_text": "let a = 1;", "new_text": "let a = 10;"},
+                {"old_text": "let c = 3;", "new_text": "let c = 30;"}
+            ]
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error);
+    assert!(
+        result.content.contains('-') && result.content.contains('+'),
+        "multi-edit content should include diff hunks, got: {}",
+        result.content
+    );
+}
+
+#[test]
+fn edit_fuzzy_content_includes_diff() {
+    let tmp = TempDir::new().unwrap();
+    // Smart quotes in file trigger fuzzy matching when model sends ASCII quotes
+    std::fs::write(
+        tmp.path().join("fuzzy.rs"),
+        "fn main() {\n    println!(\u{201C}hello\u{201D});\n}\n",
+    )
+    .unwrap();
+
+    let mq = Arc::new(FileMutationQueue::new());
+    let tool = EditTool::new(tmp.path().to_path_buf(), mq);
+    let result = tool.execute(
+        serde_json::json!({
+            "path": "fuzzy.rs",
+            "old_text": "println!(\"hello\")",
+            "new_text": "println!(\"world\")"
+        }),
+        noop_update(),
+    );
+
+    assert!(!result.is_error, "{}", result.content);
+    assert!(
+        result.content.contains('-') && result.content.contains('+'),
+        "fuzzy edit content should include diff hunks, got: {}",
+        result.content
     );
 }
 

@@ -266,7 +266,7 @@ fn apply_single_edit(
                     &format!("b/{}", path_str),
                 );
                 return ToolResult {
-                    content: format!("Edited {} (fuzzy match)", path_str),
+                    content: format!("Edited {} (fuzzy match)\n{}", path_str, diff_str),
                     details: Some(
                         serde_json::json!({"diff": diff_str, "display": diff_str, "path": path_str, "fuzzy": true}),
                     ),
@@ -317,7 +317,7 @@ fn apply_single_edit(
         &format!("b/{}", path_str),
     );
     ToolResult {
-        content: format!("Edited {}", path_str),
+        content: format!("Edited {}\n{}", path_str, diff_str),
         details: Some(serde_json::json!({"diff": diff_str, "display": diff_str, "path": path_str})),
         is_error: false,
     }
@@ -462,7 +462,7 @@ fn apply_multi_edit(
         &format!("b/{}", path_str),
     );
     ToolResult {
-        content: format!("Applied {} edits to {}", edits.len(), path_str),
+        content: format!("Applied {} edits to {}\n{}", edits.len(), path_str, diff_str),
         details: Some(serde_json::json!({"diff": diff_str, "display": diff_str, "path": path_str, "edits": edits.len()})),
         is_error: false,
     }
