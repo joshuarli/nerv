@@ -564,21 +564,27 @@ function toggleTool(header) {
                     if inlined_calls.contains(tool_call_id) {
                         continue;
                     }
-                    // Prefer the rich display (e.g. unified diff) over the terse LLM content.
-                    let display_text: String = if let Some(d) = display {
+                    // For HTML export: prefer full tool content (what the LLM sees) over the terse
+                    // display string, which is intentionally compact for the TUI (e.g. grep shows
+                    // "12 matches" in the statusbar but we want the actual ripgrep output here).
+                    // Exception: if the content is empty or very short, fall back to display.
+                    let content_text: String = content
+                        .iter()
+                        .filter_map(|c| {
+                            if let ContentItem::Text { text } = c {
+                                Some(text.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    let display_text: String = if !content_text.is_empty() {
+                        content_text.clone()
+                    } else if let Some(d) = display {
                         d.clone()
                     } else {
-                        content
-                            .iter()
-                            .filter_map(|c| {
-                                if let ContentItem::Text { text } = c {
-                                    Some(text.as_str())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join("")
+                        content_text.clone()
                     };
                     if !display_text.is_empty() && tool_idx > 0 {
                         let class = if *is_error {
