@@ -291,9 +291,9 @@ impl Component for FooterComponent {
 
         // Line 2: session name/id (left) — model name (right)
         let session_label = if let Some(name) = &self.session_name {
-            format!("{}{}{}", theme::DIM, name, r)
+            format!("{}{}{}", theme::ACCENT, name, r)
         } else if let Some(id) = &self.session_id {
-            format!("{}#{}{}", theme::DIM, &id[..id.len().min(8)], r)
+            format!("{}#{}{}", theme::ACCENT, &id[..id.len().min(8)], r)
         } else {
             String::new()
         };
@@ -308,7 +308,7 @@ impl Component for FooterComponent {
         };
         let line2 = right_align(&session_label, &model, w);
 
-        // Line 4: centered counter + cost + api_info
+        // Line 4 (below hex bar): token counter (left) + cost / api_info (right)
         let compact_tag = format!(
             " {}(compact @ {}%){}",
             dim, self.compact_threshold_pct, r,
@@ -333,43 +333,49 @@ impl Component for FooterComponent {
         };
         let total_cost = self.cost_input + self.cost_output;
         let cost = if total_cost > 0.001 {
-            format!(" {}${:.3}{}", theme::COST, total_cost, r)
+            format!("{}${:.3}{}", theme::COST, total_cost, r)
         } else {
             String::new()
         };
-        // Show cumulative API usage when the agentic loop made multiple calls,
-        // so the user understands why cost is higher than context_used suggests.
-        let api_info = if self.api_calls > 1 {
-            let in_cost = if self.cost_input > 0.001 {
-                format!(" (${}){}", fmt_cost(self.cost_input), dim)
-            } else {
-                String::new()
-            };
-            let out_cost = if self.cost_output > 0.001 {
-                format!(" (${}){}", fmt_cost(self.cost_output), dim)
-            } else {
-                String::new()
-            };
-            format!(
-                " {}({} calls, {} tok in{}, {} tok out{}){}",
-                dim,
-                self.api_calls,
-                fmt_tokens_u64(self.total_input),
-                in_cost,
-                fmt_tokens_u64(self.total_output),
-                out_cost,
-                r,
-            )
+        // Show cumulative API usage breakdown alongside the cost — always visible.
+        let in_cost = if self.cost_input > 0.001 {
+            format!(" (${}){}", fmt_cost(self.cost_input), dim)
         } else {
             String::new()
         };
+        let out_cost = if self.cost_output > 0.001 {
+            format!(" (${}){}", fmt_cost(self.cost_output), dim)
+        } else {
+            String::new()
+        };
+        let api_info = format!(
+            "{}({} calls, {} tok in{}, {} tok out{}){}",
+            dim,
+            self.api_calls,
+            fmt_tokens_u64(self.total_input),
+            in_cost,
+            fmt_tokens_u64(self.total_output),
+            out_cost,
+            r,
+        );
 
-        let info = format!("{}{}{}{}", counter, cache_stats, cost, api_info);
-        let info_width = visible_width(&info) as usize;
-        let pad = w.saturating_sub(info_width) / 2;
-        let line4 = format!("{}{}", " ".repeat(pad), info);
+        // Line 4: centered token counter + cache stats
+        let counter_line = format!("{}{}", counter, cache_stats);
+        let counter_width = visible_width(&counter_line) as usize;
+        let counter_pad = w.saturating_sub(counter_width) / 2;
+        let line4 = format!("{}{}", " ".repeat(counter_pad), counter_line);
 
-        vec![line1, line2, hex_bar, line4]
+        // Line 5: centered cost + api call breakdown (always shown)
+        let cost_line = if cost.is_empty() {
+            api_info.clone()
+        } else {
+            format!("{} {}", cost, api_info)
+        };
+        let cost_width = visible_width(&cost_line) as usize;
+        let cost_pad = w.saturating_sub(cost_width) / 2;
+        let line5 = format!("{}{}", " ".repeat(cost_pad), cost_line);
+
+        vec![line1, line2, hex_bar, line4, line5]
     }
 }
 

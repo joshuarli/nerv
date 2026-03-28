@@ -97,6 +97,14 @@ impl StdinBuffer {
                     events.push(StdinEvent::Sequence(seq));
                     self.buf.drain(..2);
                 }
+            } else if self.buf[0] == 0x0D
+                && self.buf.len() >= 2
+                && self.buf[1] == 0x0A
+            {
+                // CR+LF: some terminals send this for Ctrl+Enter.  Emit as a single
+                // two-byte sequence so parse_key can name it "ctrl+enter".
+                events.push(StdinEvent::Sequence(vec![0x0D, 0x0A]));
+                self.buf.drain(..2);
             } else {
                 // Regular byte(s) — could be UTF-8 multi-byte
                 let ch_len = utf8_char_len(self.buf[0]);

@@ -134,6 +134,7 @@ impl InteractiveMode {
             }
             AgentSessionEvent::SessionNamed { name } => {
                 layout.footer.set_session_name(Some(name));
+                tui.request_render(false);
             }
             AgentSessionEvent::CompactThresholdChanged { pct } => {
                 self.compact_threshold = pct;
