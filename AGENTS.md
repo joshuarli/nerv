@@ -17,12 +17,12 @@ src/
 │   ├── provider.rs            # Provider trait, ProviderRegistry, CancelFlag
 │   ├── anthropic.rs           # Anthropic Messages API + SSE + OAuth headers
 │   ├── openai_compat.rs       # OpenAI-compatible (llama-server, Ollama)
-│   └── agent.rs               # Agentic loop: stream → tool calls → permissions → context gate → loop
+│   └── agent.rs               # Agentic loop: stream → tool calls (parallel readonly) → context gate → loop
 ├── index/
 │   ├── mod.rs                 # tree-sitter symbol index (Rust), incremental by mtime
 │   └── codemap.rs             # codemap core: symbol search → source body assembly
 ├── tools/
-│   ├── read.rs                # Whole-file read with line numbers + mtime cache
+│   ├── read.rs                # File read with line numbers, mtime cache + range dedup
 │   ├── edit.rs                # Single + multi-edit, fuzzy match, BOM/CRLF
 │   ├── write.rs               # File write with mkdir -p
 │   ├── bash.rs                # /bin/bash -c, stderr on background thread
@@ -39,7 +39,7 @@ src/
 │   ├── types.rs               # SessionEntry variants, TokenInfo, SessionTreeNode
 │   └── manager.rs             # SQLite backend, tree-aware branching, get_tree()
 ├── compaction/
-│   ├── mod.rs                 # tiktoken counting, cut point selection
+│   ├── mod.rs                 # chars/4 token estimation, cut point selection
 │   └── summarize.rs           # LLM-based summarization
 ├── core/
 │   ├── agent_session.rs       # AgentSession: prompt orchestration, compaction, login

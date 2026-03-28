@@ -98,11 +98,12 @@ either API errors, cache waste, or incorrect behavior.
    would flip between stale (truncated) and recent (full) representations
    between consecutive API calls, breaking cache prefix stability.
 
-4. **Tool execution is sequential and single-threaded.** Tools run one
-   at a time on the session thread. This is deliberate: tool execution
-   is not the bottleneck (API latency dominates), and sequential execution
-   keeps permission prompts, file mutation ordering, and cancel semantics
-   trivial.
+4. **Readonly tools run in parallel; mutations are sequential.** When all
+   tool calls in a turn are readonly (`read`, `grep`, `find`, `ls`,
+   `symbols`, `codemap`), they execute concurrently via `std::thread::scope`.
+   Otherwise, tools run sequentially on the session thread. This keeps
+   permission prompts, file mutation ordering, and cancel semantics trivial
+   while parallelizing the common case (multiple reads in one turn).
 
 5. **Persistence is per-iteration via callback.** `Agent::prompt` accepts
    an optional `persist_fn: Option<&mut dyn FnMut(&AgentMessage)>` that
@@ -134,7 +135,7 @@ session_task()                          ← OS thread; receives SessionCommand
             context gate check          ← circuit breaker
             provider.stream_completion()← SSE stream → content blocks
           persist_fn(assistant)         ← write to SQLite immediately
-          execute_tools()               ← permission → dispatch → result
+          execute_tools()               ← parallel if all readonly, else sequential
           persist_fn(each tool_result)  ← write to SQLite immediately
         }
     post_turn()

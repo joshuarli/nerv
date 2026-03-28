@@ -11,7 +11,7 @@ core::permissions::check(tool, args, repo_root) → Allow | Ask(reason)
 
 ### Auto-approved
 
-- **File tools** (read, edit, write, grep, find, ls): path resolves within repo
+- **File tools** (read, edit, write, grep, find, ls, symbols, codemap): path resolves within repo
 - **Bash**: no external path references, no dangerous patterns
 - **Memory**: always (writes to ~/.nerv/memory.md)
 - **Relative paths**: resolved against repo root — `src/main.rs` is fine,

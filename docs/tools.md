@@ -1,8 +1,10 @@
 # Built-in Tools
 
-Nerv provides 10 tools to the LLM. All execute synchronously in the session
-thread. File-mutating tools (`edit`, `write`) serialize through a per-file
-mutex to prevent concurrent writes to the same path.
+Nerv provides 10 tools to the LLM. Readonly tools (`read`, `grep`, `find`,
+`ls`, `symbols`, `codemap`) execute in parallel when all calls in a turn are
+readonly; otherwise tools run sequentially. File-mutating tools (`edit`,
+`write`) serialize through a per-file mutex to prevent concurrent writes
+to the same path.
 
 ## Design principle: separate LLM content from display
 
@@ -36,12 +38,19 @@ Read file contents with line numbers.
 | Param | Type | Required | Default |
 |---|---|---|---|
 | `path` | string | yes | — |
-| `offset` | integer | no | 0 (first line) |
-| `limit` | integer | no | 3000 |
+| `offset` | integer | no | 1 (first line) |
+| `limit` | integer | no | all lines |
 
 Output is `cat -n` style: `{line_number}\t{content}`. Line numbers are
 1-based. Files are read as bytes and decoded via lossy UTF-8. Output is
-head-truncated at 3000 lines.
+head-truncated at 3000 lines when no explicit range is given.
+
+**Deduplication**: an in-memory cache tracks `(path, mtime, ranges_served)`.
+Full re-reads of unchanged files return `[unchanged since last read]`.
+Ranged re-reads that are fully contained within a previously-served range
+return `[already read {path} lines N-M]`. This prevents degenerate loops
+where the model reads the same code region repeatedly. The cache invalidates
+automatically when the file is modified (mtime change).
 
 ## write
 
@@ -169,6 +178,25 @@ List directory contents as a tree.
 
 Runs `eza --tree -L2 --icons=never {path}`. Output is tail-truncated.
 
+## symbols
+
+Search the tree-sitter symbol index for definitions.
+
+| Param | Type | Required |
+|---|---|---|
+| `query` | string | yes (empty string matches all) |
+| `kind` | string | no |
+| `file` | string | no |
+| `references` | boolean | no (default false) |
+
+Returns symbol names, kinds, file locations, and signatures. When `query`
+is empty and no `file` filter is given, the output also includes a DOCS
+section listing markdown files in the project (via `rg --files --glob *.md`),
+capped at 20 entries.
+
+When `references` is true, also runs ripgrep (`--word-regexp`) on the query
+to find call sites / usages.
+
 ## codemap
 
 Show symbol implementations from the codebase. Uses the tree-sitter symbol
@@ -189,6 +217,15 @@ when the model needs to understand how something works.
 
 Output is grouped by file with line numbers. If total output exceeds ~4000
 lines, excess symbols are demoted from `full` to `signatures`.
+
+**Redirect on miss**: when a non-empty query returns no results but
+definitions exist in scope, returns a redirect message like "No symbols
+matching 'foo'. 42 definitions exist in this scope — use query: \"\" to see
+them all." This prevents grep spirals that start from a failed codemap lookup.
+
+The search and render phases are split (`codemap::search` + `codemap::render`)
+so that the index lock is released before file I/O, enabling parallel codemap
+calls without serializing on the mutex.
 
 Also available as a CLI subcommand: `nerv codemap <query> [--kind <kind>]
 [--file <path>] [--depth full|signatures]`. CLI defaults to `full` depth.

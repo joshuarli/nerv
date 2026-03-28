@@ -90,20 +90,20 @@ the model doesn't need the full payload to understand what was changed.
 
 These are applied at tool execution time, not in `transform_context`.
 
-### 8. Read tool: whole-file with mtime cache (`src/tools/read.rs`)
+### 8. Read tool: mtime cache + range dedup (`src/tools/read.rs`)
 
-The read tool always returns the entire file (no offset/limit parameters).
-For specific line ranges, the model uses `bash` + `sed -n '100,200p'`.
-This eliminates the chunked-read problem where models read 1000-line files
-in 120-line slices (10+ API calls).
+The read tool supports optional `offset`/`limit` parameters for reading
+specific line ranges. An in-memory cache tracks `path → (mtime, line_count,
+ranges_served)` and provides two levels of dedup:
 
-An in-memory mtime cache tracks `path → (mtime, line_count)`. When the
-model reads a file it already read and the mtime hasn't changed, the tool
-returns `[unchanged since last read: path (N lines)]` instead of the full
-content. Cache invalidates automatically when writes change the file.
+- **Full-file dedup**: when the model re-reads an entire file and the mtime
+  hasn't changed, returns `[unchanged since last read: path (N lines)]`.
+- **Range dedup**: when the model requests a line range fully contained
+  within a previously-served range (same file, unchanged mtime), returns
+  `[already read path lines N-M]`. This prevents degenerate loops where
+  the model reads the same function body 5+ times.
 
-Line number width adapts to file size (3/4/6 digits). Truncation at 3000
-lines for truly massive files.
+Cache invalidates automatically when writes change the file (mtime check).
 
 **Savings**: eliminates redundant re-reads (200-12k+ tokens each).
 
@@ -140,7 +140,7 @@ cut point. A `first_kept_entry_id` tracks where the kept messages begin.
 
 ### Token counting
 
-Uses tiktoken (cl100k_base BPE) for token estimation. Counts are
+Uses a simple `chars / 4` heuristic for token estimation. Counts are
 approximate — the real count comes from the API's usage response.
 
 ## convert_to_llm (`src/agent/convert.rs`)
