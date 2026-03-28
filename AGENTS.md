@@ -1,20 +1,6 @@
 # nerv
 
-Token-efficient coding agent. See [README.md](README.md) for usage.
-
-## Architecture
-
-Sync — no tokio/async. OS threads + crossbeam channels.
-
-```
-┌──────────┐  stdin_tx   ┌──────────┐  cmd_tx   ┌──────────────────┐
-│ stdin    │ ──────────> │ main     │ ────────> │ session thread   │
-│ thread   │             │ loop     │ <──────── │ (Agent+Provider) │
-└──────────┘             │ (select!)│ event_tx  └──────────────────┘
-                         └──────────┘
-```
-
-Three threads: stdin reader (poll-based, pausable for $EDITOR), main event loop, session (agent + provider).
+Token-efficient coding agent.
 
 ### Source layout
 
@@ -85,30 +71,9 @@ src/
     └── components/            # Editor, Markdown, StyledText
 ```
 
-## Key design decisions
-
-- **Content vs display**: tool results have `content` (terse, sent to LLM) and `details.display` (rich, TUI only). Edit returns "Edited foo.rs" to the model, full diff to the user. See [docs/tools.md](docs/tools.md).
-- **Per-model system prompts**: `~/.nerv/prompts/{model_id}.md` → global override → compiled default. Smaller models get numbered rules; larger models get nuanced guidelines.
-- **Multi-edit**: `edits` array in one tool call, matched against original file, uniqueness-enforced, overlap-detected, applied in reverse position order.
-- **Callback streaming**: `on_event: &dyn Fn(AgentEvent)` — events flow to TUI in real time
-- **Poll-based stdin**: reader uses `libc::poll()` with 100ms timeout + atomic pause flag so $EDITOR gets exclusive terminal access
-- **Session tree**: parent_id chain in SQLite, tree-aware branch walking, `/tree` TUI selector
-- **In-process diff**: Myers algorithm, ~170 lines, replaces `similar` crate (51KB binary savings)
-- **Per-turn token deltas**: statusbar shows marginal cost (↑800 ↓110), footer shows cumulative context
-- **SQLite sessions**: WAL mode, entries table with parent_id chain, 12µs listing
-- **Context optimization**: 12 zero-LLM-cost transforms in `transform_context` (strip thinking, denied args, orphans; truncate stale results; superseded result dedup for read/grep/ls/find/edit; bash success compression; stale edit arg stripping; compact diff in edit results; read result folding around referenced lines; adaptive stale cutoff; tool description pruning after 4 turns) plus tool-level optimizations (read mtime cache, auto-size small files, grep context lines) and a circuit breaker for unexpected context growth. See [docs/context.md](docs/context.md).
-- **Codemap**: on-demand tool that assembles source bodies for matching symbols across files (`src/index/codemap.rs`). Two modes: `signatures` (index-only, no disk reads) and `full` (reads source line ranges). Budget caps output at 4000 lines with demotion. Also exposed as CLI subcommand (`nerv codemap <query>`). Core logic is independent of the tool/CLI layer for testability.
-- **Symbol index**: tree-sitter-based symbol index (`src/index/`) gives the model structured access to definitions (functions, methods, structs, enums, traits, types, consts, macros) with signatures and parent scopes. Initial scan runs on a background thread at bootstrap; the mutex serves as the join — if `symbols` is called before the scan finishes, it blocks on `lock()`. After file-writing tools, a `PostToolFn` callback does targeted `index_file` for the affected path (or `mark_dirty` after bash). Full rescans are debounced to 5s. Replaces multi-round-trip grep/read cycles with a single structured lookup.
-- **Per-API-call token tracking**: each `AssistantMessage` carries its own `Usage` from its API call. Footer shows cumulative API usage `(N calls, Mk tok)` when multiple calls occur in one turn.
-- **Context circuit breaker**: `ContextGateFn` callback in `stream_response` — prompts user to confirm when context grows >20k tokens AND >30% between consecutive API calls (skips first 4 rounds for warmup)
-- **Plan mode**: `/plan`, Shift+Tab, or bare "plan" toggles read-only research mode. Removes edit/write from the tool set and injects a planning-focused system prompt section. `ToolRegistry::set_active` handles the filtering.
-- **Git worktrees**: `/wt <branch>` creates an isolated worktree for the session; `/wt merge` merges back and cleans up. Session DB tracks worktree path for `/resume` restoration.
-- **macOS Keychain**: credentials via `security` CLI, not on disk
-- **Execution loop**: `Agent::prompt` (agent.rs) is the clean inner loop (compress → model → execute → persist → update); `AgentSession::prompt` (agent_session.rs) orchestrates via `prepare_callbacks` (permission + context gate), `run_agent_prompt` (per-iteration SQLite persistence via `persist_fn` callback), and `post_turn` (compaction + session naming). See [docs/execution-loop.md](docs/execution-loop.md).
-
 ## Deep dives
 
-- [Design](docs/design.md) — core principles, eval-driven insights, what actually saves tokens
+- [Design](docs/design.md) — core principles and key design decisions
 - [Tools](docs/tools.md) — tool design, content vs display, multi-edit algorithm, allocation tracking
 - [Cancellation](docs/cancellation.md) — ^C flow, reader threads, should_quit flag
 - [Permissions](docs/permissions.md) — classification, path resolution, cross-thread y/n prompt
