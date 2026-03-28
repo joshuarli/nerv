@@ -13,11 +13,18 @@ pub fn parse_key(data: &[u8]) -> Option<KeyId> {
         return None;
     }
 
+    // CR+LF two-byte sequence: some terminals send this for Ctrl+Enter.
+    if data == b"\r\n" {
+        return Some("ctrl+enter");
+    }
+
     // Single ASCII bytes
     if data.len() == 1 {
         return match data[0] {
             0x0D => Some("enter"),
-            0x0A => Some("ctrl+enter"), // ctrl flips bit 5: CR (0x0D) → LF (0x0A)
+            // Raw LF byte: a genuine newline (e.g. piped input). Named separately from
+            // ctrl+enter (ESC[27;5;13~ / ESC[13;5u) which arrives as an escape sequence.
+            0x0A => Some("newline"),
             0x09 => Some("tab"),
             0x7F => Some("backspace"),
             0x1B => Some("escape"),

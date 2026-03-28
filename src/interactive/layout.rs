@@ -7,7 +7,7 @@ use crate::tui::components::spacer::Spacer;
 
 /// Fixed lines at the bottom (editor + statusbar + footer) that are never
 /// flushed to scrollback.  Queue lines are added on top of this.
-pub const BASE_FIXED_BOTTOM: usize = 9;
+pub const BASE_FIXED_BOTTOM: usize = 10;
 
 pub struct AppLayout {
     spacer_top: Spacer,

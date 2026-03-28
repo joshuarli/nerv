@@ -654,18 +654,11 @@ impl Component for Editor {
             if layout_line.has_cursor && self.focused {
                 let before = &display[..layout_line.cursor_pos];
                 let after = &display[layout_line.cursor_pos..];
-
-                if !after.is_empty() {
-                    // Cursor on a character — highlight it
-                    let after_graphemes: Vec<&str> = after.graphemes(true).collect();
-                    let first = after_graphemes[0];
-                    let rest: String = after_graphemes[1..].concat();
-                    display =
-                        format!("{}{}\x1b[7m{}\x1b[0m{}", before, CURSOR_MARKER, first, rest,);
-                } else {
-                    // Cursor at end — highlight a space
-                    display = format!("{}{}\x1b[7m \x1b[0m", before, CURSOR_MARKER,);
-                }
+                // Inject only the cursor marker — the hardware block cursor (set by
+                // the TUI renderer via DECSCUSR + show) handles the visual display.
+                // A second reverse-video highlight would fight the real cursor and
+                // make it invisible in focused terminal panes.
+                display = format!("{}{}{}", before, CURSOR_MARKER, after);
             }
 
             let padding = " ".repeat(content_width.saturating_sub(line_width) as usize);

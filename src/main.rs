@@ -895,7 +895,7 @@ fn main() {
                                 stdin_paused.store(false, std::sync::atomic::Ordering::SeqCst);
                                 tui.request_render(true); tui.maybe_render(&layout); continue;
                             }
-                            if keys::matches_key(seq, "shift+enter") || keys::matches_key(seq, "ctrl+enter") {
+                            if keys::matches_key(seq, "shift+enter") || keys::matches_key(seq, "ctrl+enter") || keys::matches_key(seq, "newline") {
                                 layout.editor.handle_input(b"\n");
                                 tui.request_render(false); continue;
                             }
