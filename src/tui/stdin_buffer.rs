@@ -4,6 +4,10 @@ pub struct StdinBuffer {
     buf: Vec<u8>,
     in_paste: bool,
     paste_buf: Vec<u8>,
+    /// Set when a lone `\r` arrived at the end of a read and we're waiting to
+    /// see if the next read starts with `\n` (tmux sends Ctrl+Enter as two
+    /// separate reads: `\r` then `\n`).
+    pending_cr: bool,
 }
 
 pub enum StdinEvent {
@@ -28,13 +32,29 @@ impl StdinBuffer {
             buf: Vec::with_capacity(256),
             in_paste: false,
             paste_buf: Vec::new(),
+            pending_cr: false,
         }
     }
 
     /// Process incoming bytes and return parsed events.
     pub fn process(&mut self, data: &[u8]) -> Vec<StdinEvent> {
-        self.buf.extend_from_slice(data);
         let mut events = Vec::new();
+
+        // A previous read ended with a lone `\r`.  If this read starts with
+        // `\n` it's Ctrl+Enter (tmux sends them in separate reads); otherwise
+        // it was a plain Enter followed by whatever came next.
+        if self.pending_cr {
+            self.pending_cr = false;
+            if data.first() == Some(&0x0A) {
+                events.push(StdinEvent::Sequence(vec![0x0D, 0x0A]));
+                self.buf.extend_from_slice(&data[1..]);
+            } else {
+                events.push(StdinEvent::Sequence(vec![0x0D]));
+                self.buf.extend_from_slice(data);
+            }
+        } else {
+            self.buf.extend_from_slice(data);
+        }
 
         while !self.buf.is_empty() {
             if self.in_paste {
@@ -101,10 +121,15 @@ impl StdinBuffer {
                 && self.buf.len() >= 2
                 && self.buf[1] == 0x0A
             {
-                // CR+LF: some terminals send this for Ctrl+Enter.  Emit as a single
-                // two-byte sequence so parse_key can name it "ctrl+enter".
+                // CR+LF in the same read: Ctrl+Enter.
                 events.push(StdinEvent::Sequence(vec![0x0D, 0x0A]));
                 self.buf.drain(..2);
+            } else if self.buf[0] == 0x0D && self.buf.len() == 1 {
+                // Lone CR at end of this read — hold it; the next read may
+                // start with LF (tmux Ctrl+Enter arrives as two separate reads).
+                self.pending_cr = true;
+                self.buf.drain(..1);
+                break;
             } else {
                 // Regular byte(s) — could be UTF-8 multi-byte
                 let ch_len = utf8_char_len(self.buf[0]);

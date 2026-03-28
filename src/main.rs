@@ -1093,6 +1093,7 @@ fn main() {
                                         push_status(&mut layout, &msg, interactive.status_is_error);
                                     }
                                     layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
+                                    layout.statusbar.render_queue(tui.width());
                                     tui.fixed_bottom = nerv::interactive::layout::BASE_FIXED_BOTTOM + layout.statusbar.queue_line_count();
                                 }
                                 tui.request_render(false); continue;
@@ -1110,11 +1111,11 @@ fn main() {
                             // Up-arrow when not streaming but there are queued messages: dequeue last into editor
                             if keys::matches_key(seq, "up") && !interactive.is_streaming
                                 && !interactive.pending_messages.is_empty()
-                                && layout.editor.is_empty()
                             {
                                 let msg = interactive.pending_messages.pop().unwrap();
                                 layout.editor.set_text(&msg);
                                 layout.statusbar.set_queue(&interactive.pending_messages, None);
+                                layout.statusbar.render_queue(tui.width());
                                 tui.fixed_bottom = nerv::interactive::layout::BASE_FIXED_BOTTOM + layout.statusbar.queue_line_count();
                                 tui.request_render(false); tui.maybe_render(&layout); continue;
                             }
@@ -1133,6 +1134,7 @@ fn main() {
                                 interactive.remove_editing_queue_item();
                                 layout.editor.clear();
                                 layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
+                                layout.statusbar.render_queue(tui.width());
                                 tui.fixed_bottom = nerv::interactive::layout::BASE_FIXED_BOTTOM + layout.statusbar.queue_line_count();
                                 tui.request_render(false); tui.maybe_render(&layout); continue;
                             }

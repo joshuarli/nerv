@@ -37,6 +37,8 @@ pub struct StatusBar {
     completed: Option<CompletedInfo>,
     queued: Vec<String>,
     editing_idx: Option<usize>,
+    /// Cached line count from the last `render_queue` call (includes separator + wrapped lines).
+    cached_queue_lines: std::cell::Cell<usize>,
 }
 
 struct CompletedInfo {
@@ -63,6 +65,7 @@ impl StatusBar {
             completed: None,
             queued: Vec::new(),
             editing_idx: None,
+            cached_queue_lines: std::cell::Cell::new(0),
         }
     }
 
@@ -132,6 +135,7 @@ impl StatusBar {
     pub fn set_queue(&mut self, messages: &[String], editing_idx: Option<usize>) {
         self.queued = messages.to_vec();
         self.editing_idx = editing_idx;
+        // cached_queue_lines will be updated on next render_queue call.
     }
 }
 
@@ -190,18 +194,40 @@ impl Component for StatusBar {
 
 impl StatusBar {
     /// Number of lines that `render_queue` will emit for the current queue.
-    /// Used by the caller to keep `tui.fixed_bottom` accurate.
+    /// Updated after each `render_queue` call; used by the caller to keep
+    /// `tui.fixed_bottom` accurate.
     pub fn queue_line_count(&self) -> usize {
-        self.queued.len()
+        self.cached_queue_lines.get()
     }
 
     /// Renders only the queued messages section (shown above the input box).
     /// Each pending message is shown in light orange; the one currently being
     /// edited (if any) is highlighted with the accent colour instead.
+    /// Messages are word-wrapped to fit the terminal width.
     pub fn render_queue(&self, width: u16) -> Vec<String> {
         use crate::interactive::theme;
         let r = theme::RESET;
         let mut lines = Vec::new();
+
+        if self.queued.is_empty() {
+            self.cached_queue_lines.set(0);
+            return lines;
+        }
+
+        // Separator between chat area and queue
+        let sep_width = width as usize;
+        lines.push(format!(
+            "{}{}{}" ,
+            theme::DIM,
+            "─".repeat(sep_width),
+            r
+        ));
+
+        // " ▸ " prefix = 3 chars (bullet + spaces)
+        let prefix_len = 3usize;
+        // continuation indent aligns text under first char after prefix
+        let indent_len = prefix_len + 1; // +1 for the extra space after bullet
+        let max_text = (width as usize).saturating_sub(prefix_len + 1);
 
         for (i, msg) in self.queued.iter().enumerate() {
             let (bullet_color, text_color) = if self.editing_idx == Some(i) {
@@ -209,16 +235,28 @@ impl StatusBar {
             } else {
                 (theme::QUEUED, theme::QUEUED)
             };
-            // Leave room for " ▸ " prefix (3 visible chars + 1 space on each side)
-            let max_text = (width as usize).saturating_sub(4);
-            let preview = if msg.len() > max_text {
-                &msg[..msg.floor_char_boundary(max_text)]
-            } else {
-                msg.as_str()
-            };
-            lines.push(format!(" {}▸{} {}{}{}", bullet_color, r, text_color, preview, r));
+
+            // Word-wrap the message text
+            let wrapped = word_wrap(msg, max_text);
+            for (line_idx, segment) in wrapped.iter().enumerate() {
+                if line_idx == 0 {
+                    lines.push(format!(
+                        " {}▸{} {}{}{}",
+                        bullet_color, r, text_color, segment, r
+                    ));
+                } else {
+                    lines.push(format!(
+                        "{}{}{}{}",
+                        " ".repeat(indent_len),
+                        text_color,
+                        segment,
+                        r
+                    ));
+                }
+            }
         }
 
+        self.cached_queue_lines.set(lines.len());
         lines
     }
 
@@ -314,4 +352,70 @@ fn fmt_tok(n: u32) -> String {
     } else {
         format!("{}k", n / 1_000)
     }
+}
+
+/// Word-wrap `text` into lines of at most `max_chars` display characters.
+/// Splits on spaces; if a single word is wider than `max_chars` it is hard-split
+/// at the boundary.
+fn word_wrap(text: &str, max_chars: usize) -> Vec<String> {
+    if max_chars == 0 {
+        return vec![text.to_string()];
+    }
+    let mut lines: Vec<String> = Vec::new();
+    // Process each paragraph (newline-separated) independently.
+    for paragraph in text.split('\n') {
+        let mut current = String::new();
+        let mut current_len = 0usize;
+        for word in paragraph.split(' ') {
+            let word_len = word.chars().count();
+            if current.is_empty() {
+                // First word on this line — hard-split if it's too long.
+                if word_len > max_chars {
+                    let mut remaining = word;
+                    while !remaining.is_empty() {
+                        let take = remaining
+                            .char_indices()
+                            .nth(max_chars)
+                            .map(|(i, _)| i)
+                            .unwrap_or(remaining.len());
+                        lines.push(remaining[..take].to_string());
+                        remaining = &remaining[take..];
+                    }
+                } else {
+                    current.push_str(word);
+                    current_len = word_len;
+                }
+            } else if current_len + 1 + word_len <= max_chars {
+                current.push(' ');
+                current.push_str(word);
+                current_len += 1 + word_len;
+            } else {
+                lines.push(std::mem::take(&mut current));
+                current_len = 0;
+                // Recursively handle this word as the first on the new line.
+                if word_len > max_chars {
+                    let mut remaining = word;
+                    while !remaining.is_empty() {
+                        let take = remaining
+                            .char_indices()
+                            .nth(max_chars)
+                            .map(|(i, _)| i)
+                            .unwrap_or(remaining.len());
+                        lines.push(remaining[..take].to_string());
+                        remaining = &remaining[take..];
+                    }
+                } else {
+                    current.push_str(word);
+                    current_len = word_len;
+                }
+            }
+        }
+        if !current.is_empty() || paragraph.is_empty() {
+            lines.push(current);
+        }
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
