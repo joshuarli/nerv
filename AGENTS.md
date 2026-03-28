@@ -71,6 +71,18 @@ src/
     └── components/            # Editor, Markdown, StyledText
 ```
 
+## Coding rules
+
+**No byte-index string slices.** `&s[..n]` panics if `n` splits a multi-byte char.
+When you want to limit by character count, say so:
+```rust
+s.char_indices().nth(120).map_or(s, |(i, _)| &s[..i])
+```
+When you genuinely have a byte offset that needs snapping to a char boundary (e.g. from a parser), use `floor_char_boundary`:
+```rust
+&s[..s.floor_char_boundary(n)]
+```
+
 ## Deep dives
 
 - [Design](docs/design.md) — core principles and key design decisions
