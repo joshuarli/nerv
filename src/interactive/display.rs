@@ -122,12 +122,5 @@ pub fn shorten_path(path: &str, home: &str, repo_root: Option<&str>) -> String {
 
 /// Truncate a string at a char boundary.
 pub fn truncate_str(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        return s;
-    }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
+    &s[..s.floor_char_boundary(max)]
 }

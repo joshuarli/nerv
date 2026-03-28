@@ -379,7 +379,8 @@ fn summarize_tool_content(content: &[ContentItem]) -> String {
     // Take first few lines as preview
     let preview: String = full_text.lines().take(3).collect::<Vec<_>>().join("\n");
     let preview = if preview.len() > TRUNCATED_MAX_CHARS {
-        format!("{}...", &preview[..TRUNCATED_MAX_CHARS])
+        let cut = preview.floor_char_boundary(TRUNCATED_MAX_CHARS);
+        format!("{}...", &preview[..cut])
     } else {
         preview
     };
