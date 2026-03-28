@@ -716,6 +716,27 @@ impl SessionManager {
     }
 
     /// Return the `repo_id` (initial-commit SHA) for the current active session, if any.
+    /// Return true if any session in the DB was started in a repository
+    /// identified by `repo_id` (the initial-commit SHA fingerprint).
+    pub fn has_sessions_for_repo(&self, repo_id: &str) -> bool {
+        let mut stmt = match self
+            .db
+            .prepare("SELECT COUNT(*) FROM sessions WHERE repo_id = ? LIMIT 1")
+        {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        if stmt.bind((1, repo_id)).is_err() {
+            return false;
+        }
+        if stmt.next().unwrap_or(sqlite::State::Done) == sqlite::State::Row {
+            let count: i64 = stmt.read(0).unwrap_or(0);
+            count > 0
+        } else {
+            false
+        }
+    }
+
     pub fn repo_id(&self) -> Option<String> {
         let sid = self.session_id.as_deref()?;
         let mut stmt = self

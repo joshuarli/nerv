@@ -160,6 +160,8 @@ pub struct AgentSession {
     worktree: Option<PathBuf>,
     /// Plan mode: restrict tools to read-only, steer model toward planning.
     plan_mode: bool,
+    /// Talk mode: no tools, no project context, pure conversational assistant.
+    pub talk_mode: bool,
     /// True once the session has been given an auto-generated name, to avoid re-naming.
     session_named: bool,
 }
@@ -187,6 +189,7 @@ impl AgentSession {
             permission_cache: Arc::new(std::sync::Mutex::new(HashSet::new())),
             worktree: None,
             plan_mode: false,
+            talk_mode: false,
             session_named: false,
         }
     }
@@ -447,6 +450,15 @@ impl AgentSession {
     }
 
     fn prepare_system_prompt(&mut self) {
+        // In talk mode: use a minimal conversational prompt with no tools,
+        // no project context, and no memory.
+        if self.talk_mode {
+            self.agent.state.tools = Vec::new();
+            self.agent.state.system_prompt =
+                "You are a helpful assistant. Answer clearly and concisely.".to_string();
+            return;
+        }
+
         // Reload memory in case it was updated by a tool call
         self.resources.memory =
             std::fs::read_to_string(crate::nerv_dir().join("memory.md")).ok();

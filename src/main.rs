@@ -47,6 +47,11 @@ enum Cmd {
     },
     /// Open session picker (no id) or load a specific session, then drop into TUI
     Resume { id: Option<String> },
+    /// Pure-chat mode: no tools, no project context, plain conversational assistant
+    Talk {
+        model: Option<String>,
+        log_level: Option<String>,
+    },
     // --- one-shot subcommands ---
     Models,
     Export { id: String },
@@ -77,6 +82,7 @@ fn print_top_help() {
     println!("  --version          Show version");
     println!();
     println!("Commands:");
+    println!("  talk [--model M]               Pure-chat mode: no tools, no project context");
     println!("  resume [id]                    Open session picker, or resume a specific session");
     println!("  print [--model M] [--max-turns N] [--verbose]");
     println!("                                 Headless mode: read prompt from stdin, output JSON");
@@ -139,6 +145,50 @@ fn parse_args() -> Cmd {
             }).string().unwrap());
         }
         // ── subcommands ──────────────────────────────────────────────────────
+        Value(v) if v == "talk" => {
+            // talk [-h] [--model M] [--log-level L]
+            let mut talk_model: Option<String> = None;
+            let mut talk_log: Option<String> = None;
+            loop {
+                match parser.next() {
+                    Ok(None) => break,
+                    Ok(Some(Short('h') | Long("help"))) => {
+                        println!("Usage: nerv talk [options]");
+                        println!();
+                        println!("Pure-chat mode: no tools, no project context, no memory.");
+                        println!("Opens the TUI as a plain conversational assistant.");
+                        println!();
+                        println!("Options:");
+                        println!("  --model <name>      Model to use");
+                        println!("  --log-level <lvl>   Log level (debug, info, warn, error)");
+                        println!("  -h, --help          Show this help");
+                        std::process::exit(0);
+                    }
+                    Ok(Some(Long("model"))) => {
+                        talk_model = Some(parser.value().unwrap_or_else(|_| {
+                            eprintln!("--model requires a value");
+                            std::process::exit(1);
+                        }).string().unwrap());
+                    }
+                    Ok(Some(Long("log-level"))) => {
+                        talk_log = Some(parser.value().unwrap_or_else(|_| {
+                            eprintln!("--log-level requires a value");
+                            std::process::exit(1);
+                        }).string().unwrap());
+                    }
+                    Ok(Some(arg)) => {
+                        eprintln!("nerv talk: unexpected argument. Try: nerv talk --help");
+                        eprintln!("  {}", arg.unexpected());
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("nerv talk: {e}. Try: nerv talk --help");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            return Cmd::Talk { model: talk_model, log_level: talk_log };
+        }
         Value(v) if v == "resume" => {
             // resume [-h] [id]
             match parser.next() {
@@ -417,6 +467,103 @@ fn remaining_strings(mut parser: lexopt::Parser) -> Vec<String> {
     out
 }
 
+/// Outcome of the pre-TUI repository gate check.
+enum RepoGateResult {
+    /// Proceed into normal TUI mode.
+    Continue,
+    /// Switch to talk mode (no tools / context).
+    Talk,
+    /// Exit cleanly.
+    Exit,
+}
+
+/// Check whether the current directory is a known git repository.
+///
+/// - Not a git repo  →  print prompt, read single keypress: [e]xit / [t]alk
+/// - Git repo, never seen before  →  print prompt, read single keypress: [c]ontinue / [t]alk
+/// - Git repo, already in the DB  →  return Continue immediately
+///
+/// Uses raw terminal I/O directly so we don't need to spin up the full TUI.
+fn repo_gate(cwd: &std::path::Path, nerv_dir: &std::path::Path) -> RepoGateResult {
+    use std::io::Write;
+
+    let repo_root = nerv::find_repo_root(cwd);
+
+    // Determine which case we're in: 0 = no repo, 1 = unknown repo.
+    let is_no_repo: bool;
+
+    match &repo_root {
+        None => {
+            is_no_repo = true;
+        }
+        Some(root) => {
+            match nerv::repo_fingerprint(root) {
+                // git found .git but couldn't fingerprint — treat as no-repo
+                None => {
+                    is_no_repo = true;
+                }
+                Some(ref fpr) => {
+                    let sm = nerv::session::SessionManager::new(nerv_dir);
+                    if sm.has_sessions_for_repo(fpr) {
+                        // Known repo — proceed silently.
+                        return RepoGateResult::Continue;
+                    }
+                    is_no_repo = false;
+                }
+            }
+        }
+    }
+
+    // We need to prompt the user.  Put stdin into raw mode, print the message,
+    // read one byte, restore terminal, then act on the key.
+    let dir = cwd.display();
+    let prompt = if is_no_repo {
+        format!("repository not found: {dir}\r\n  \x1b[2m[e]\x1b[0mexit  \x1b[2m[t]\x1b[0mtalk\r\n")
+    } else {
+        format!("previously unknown repository: {dir}\r\n  \x1b[2m[c]\x1b[0mcontinue  \x1b[2m[t]\x1b[0mtalk\r\n")
+    };
+
+    // Enter raw mode, write prompt, read one byte, restore.
+    let key = unsafe {
+        use std::mem::MaybeUninit;
+
+        let stdin_fd = libc::STDIN_FILENO;
+        let mut orig = MaybeUninit::<libc::termios>::uninit();
+        let has_tty = libc::tcgetattr(stdin_fd, orig.as_mut_ptr()) == 0;
+
+        if has_tty {
+            let orig = orig.assume_init();
+            let mut raw = orig;
+            libc::cfmakeraw(&mut raw);
+            libc::tcsetattr(stdin_fd, libc::TCSANOW, &raw);
+
+            // Write directly to stdout.
+            let _ = std::io::stdout().write_all(prompt.as_bytes());
+            let _ = std::io::stdout().flush();
+
+            let mut buf = [0u8; 1];
+            let n = libc::read(stdin_fd, buf.as_mut_ptr() as *mut libc::c_void, 1);
+
+            libc::tcsetattr(stdin_fd, libc::TCSAFLUSH, &orig);
+
+            // Print newline after key so subsequent output starts fresh.
+            let _ = std::io::stdout().write_all(b"\r\n");
+            let _ = std::io::stdout().flush();
+
+            if n == 1 { buf[0] } else { b'e' }
+        } else {
+            // Non-interactive stdin: auto-continue for unknown repos, exit for no-repo.
+            if is_no_repo { b'e' } else { b'c' }
+        }
+    };
+
+    match key {
+        b't' | b'T' => RepoGateResult::Talk,
+        b'c' | b'C' | b'\r' | b'\n' if !is_no_repo => RepoGateResult::Continue,
+        _ => RepoGateResult::Exit,
+    }
+}
+
 fn main() {
     let cmd = parse_args();
 
@@ -471,24 +618,25 @@ fn main() {
             handle_subcommand("symbols", &rest, nerv_dir);
             return;
         }
-        Cmd::Resume { .. } | Cmd::Interactive { .. } | Cmd::Wt { .. } => {
+        Cmd::Resume { .. } | Cmd::Interactive { .. } | Cmd::Wt { .. } | Cmd::Talk { .. } => {
             // Fall through to TUI startup below.
         }
     }
 
     // ── TUI startup ─────────────────────────────────────────────────────────
 
-    // Re-destructure for the three TUI-launching variants.
-    let (opt_model, resume_opt, log_level_opt, wt_opt) = match cmd {
-        Cmd::Interactive { model, resume, log_level } => (model, resume, log_level, None),
-        Cmd::Wt { branch, model, log_level } => (model, ResumeOpt::None, log_level, Some(branch)),
+    // Re-destructure for the TUI-launching variants.
+    let (opt_model, resume_opt, log_level_opt, wt_opt, mut talk_mode) = match cmd {
+        Cmd::Interactive { model, resume, log_level } => (model, resume, log_level, None, false),
+        Cmd::Wt { branch, model, log_level } => (model, ResumeOpt::None, log_level, Some(branch), false),
         Cmd::Resume { id } => {
             let resume = match id {
                 Some(id) => ResumeOpt::Session(id),
                 None    => ResumeOpt::Picker,
             };
-            (None, resume, None, None)
+            (None, resume, None, None, false)
         }
+        Cmd::Talk { model, log_level } => (model, ResumeOpt::None, log_level, None, true),
         _ => unreachable!(),
     };
 
@@ -526,12 +674,34 @@ fn main() {
         }
     }
 
+    // ── Repository gate ──────────────────────────────────────────────────────
+    // In normal (non-talk) mode, check whether we know this repository before
+    // spending time on indexing and bootstrap.  Two cases:
+    //
+    //   1. Not a git repo at all  →  [e]xit  or  [t]alk
+    //   2. Git repo but never seen before  →  [c]ontinue  or  [t]alk
+    //
+    // Known repos, explicit talk mode, and explicit resume commands skip the gate.
+    let is_resume = matches!(resume_opt, ResumeOpt::Session(_) | ResumeOpt::Picker);
+    if !talk_mode && !is_resume {
+        match repo_gate(&cwd, nerv_dir) {
+            RepoGateResult::Continue => {}
+            RepoGateResult::Talk => {
+                talk_mode = true;
+            }
+            RepoGateResult::Exit => {
+                std::process::exit(0);
+            }
+        }
+    }
+
     let b = nerv::bootstrap::bootstrap(
         &cwd,
         &nerv_dir,
         nerv::bootstrap::BootstrapOptions {
             memory: true,
             permissions: true,
+            talk_mode,
         },
     );
     let config = b.config;
@@ -613,27 +783,33 @@ fn main() {
     tui.fixed_bottom = nerv::interactive::layout::BASE_FIXED_BOTTOM; // editor + statusbar + footer — never flushed to scrollback
 
     let dim = nerv::interactive::theme::DIM;
-    let load = |chat: &mut nerv::interactive::chat_writer::ChatWriter, name: &str, tok: usize| {
-        chat.push_styled(dim, &format!("› Loading: {} ({} tok)", name, tok));
-    };
-    load(&mut layout.chat, "base prompt", base_prompt_tokens);
-    load(&mut layout.chat, "tools", tools_tokens);
-    for (path, tokens) in &loaded_files {
-        load(&mut layout.chat, path, *tokens);
-    }
-    if let Some(tok) = system_prompt_tokens {
-        load(&mut layout.chat, "system-prompt.md", tok);
-    }
-    if let Some(tok) = memory_tokens {
-        load(&mut layout.chat, "memory.md", tok);
-    }
-    for (i, tok) in append_prompt_tokens.iter().enumerate() {
-        load(&mut layout.chat, &format!("append prompt {}", i + 1), *tok);
+    if !talk_mode {
+        let load = |chat: &mut nerv::interactive::chat_writer::ChatWriter, name: &str, tok: usize| {
+            chat.push_styled(dim, &format!("› Loading: {} ({} tok)", name, tok));
+        };
+        load(&mut layout.chat, "base prompt", base_prompt_tokens);
+        load(&mut layout.chat, "tools", tools_tokens);
+        for (path, tokens) in &loaded_files {
+            load(&mut layout.chat, path, *tokens);
+        }
+        if let Some(tok) = system_prompt_tokens {
+            load(&mut layout.chat, "system-prompt.md", tok);
+        }
+        if let Some(tok) = memory_tokens {
+            load(&mut layout.chat, "memory.md", tok);
+        }
+        for (i, tok) in append_prompt_tokens.iter().enumerate() {
+            load(&mut layout.chat, &format!("append prompt {}", i + 1), *tok);
+        }
     }
 
     layout.chat.push_styled(
         nerv::interactive::theme::WARN,
-        "NERV console ready. Awaiting your command.",
+        if talk_mode {
+            "Talk mode. No tools or project context."
+        } else {
+            "NERV console ready. Awaiting your command."
+        },
     );
 
     // Emit config warnings (unknown model ids, etc.)
@@ -1576,6 +1752,7 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
         nerv::bootstrap::BootstrapOptions {
             memory: false,
             permissions: false,
+            talk_mode: false,
         },
     );
     for warning in &b.config_warnings {

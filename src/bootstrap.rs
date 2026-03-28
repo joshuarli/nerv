@@ -29,6 +29,9 @@ pub struct BootstrapOptions {
     pub memory: bool,
     /// Enable permission prompts.
     pub permissions: bool,
+    /// Talk mode: disable all project context, tools, memory, and symbol index.
+    /// Provides a plain conversational assistant experience.
+    pub talk_mode: bool,
 }
 
 impl Default for BootstrapOptions {
@@ -36,6 +39,7 @@ impl Default for BootstrapOptions {
         Self {
             memory: true,
             permissions: true,
+            talk_mode: false,
         }
     }
 }
@@ -43,61 +47,71 @@ impl Default for BootstrapOptions {
 /// Construct agent + tools + session from disk config.
 /// Both interactive and headless modes call this.
 pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstrap {
-    // Symbol index scan is the most expensive startup cost — kick it off
-    // immediately so it runs in parallel with config/auth/resource loading.
-    // The mutex serves as the join: if `symbols` is called before this
-    // finishes, it blocks on lock() until the scan completes.
-    let symbols_tool = Arc::new(SymbolsTool::new_with_cache(cwd.to_path_buf(), nerv_dir));
-    let symbol_index = symbols_tool.index();
-    {
-        let idx = symbol_index.clone();
-        let root = cwd.to_path_buf();
-        std::thread::spawn(move || {
-            if let Ok(mut index) = idx.lock() {
-                index.force_index_dir(&root);
-            }
-        });
-    }
-
     let config = NervConfig::load(nerv_dir);
     let mut auth = crate::core::auth::AuthStorage::load(nerv_dir);
     let model_registry = Arc::new(ModelRegistry::new(&config, &mut auth));
-    let resources = crate::core::resource_loader::load_resources(cwd, nerv_dir);
+
+    // In talk mode we skip all project context, memory, and the symbol index
+    // scan — the session is a plain conversational assistant with no tools.
+    let resources = if opts.talk_mode {
+        LoadedResources {
+            context_files: Vec::new(),
+            system_prompt: None,
+            append_prompts: Vec::new(),
+            memory: None,
+            skills: Vec::new(),
+        }
+    } else {
+        crate::core::resource_loader::load_resources(cwd, nerv_dir)
+    };
 
     let mutation_queue = Arc::new(FileMutationQueue::new());
     let mut tool_registry = ToolRegistry::new();
-
-    let tools: Vec<Arc<dyn crate::agent::agent::AgentTool>> = {
-        let mut t: Vec<Arc<dyn crate::agent::agent::AgentTool>> = vec![
-            Arc::new(ReadTool::new(cwd.to_path_buf())),
-            Arc::new(BashTool::new(cwd.to_path_buf())),
-            Arc::new(EditTool::new(cwd.to_path_buf(), mutation_queue.clone())),
-            Arc::new(WriteTool::new(cwd.to_path_buf())),
-            Arc::new(GrepTool::new(cwd.to_path_buf())),
-            Arc::new(FindTool::new(cwd.to_path_buf())),
-            Arc::new(LsTool::new(cwd.to_path_buf())),
-            symbols_tool,
-            Arc::new(CodemapTool::new(cwd.to_path_buf(), symbol_index.clone())),
-        ];
-        if opts.memory {
-            t.push(Arc::new(MemoryTool::new(nerv_dir.to_path_buf())));
-        }
-        t
-    };
-
-    for tool in tools {
-        tool_registry.register(ToolDefinition { tool });
-    }
-
-    let provider_registry = Arc::new(std::sync::RwLock::new(
+    let mut agent = Agent::new(Arc::new(std::sync::RwLock::new(
         model_registry.provider_registry.clone(),
-    ));
-    let mut agent = Agent::new(provider_registry);
+    )));
 
-    // After file-writing tools, update the symbol index for the affected file.
-    // For bash, mark the index dirty so the next symbols call does a full rescan.
-    {
-        let idx = symbol_index.clone();
+    if !opts.talk_mode {
+        // Symbol index scan is the most expensive startup cost — kick it off
+        // immediately so it runs in parallel with config/auth/resource loading.
+        // The mutex serves as the join: if `symbols` is called before this
+        // finishes, it blocks on lock() until the scan completes.
+        let symbols_tool = Arc::new(SymbolsTool::new_with_cache(cwd.to_path_buf(), nerv_dir));
+        let symbol_index = symbols_tool.index();
+        {
+            let idx = symbol_index.clone();
+            let root = cwd.to_path_buf();
+            std::thread::spawn(move || {
+                if let Ok(mut index) = idx.lock() {
+                    index.force_index_dir(&root);
+                }
+            });
+        }
+
+        let tools: Vec<Arc<dyn crate::agent::agent::AgentTool>> = {
+            let mut t: Vec<Arc<dyn crate::agent::agent::AgentTool>> = vec![
+                Arc::new(ReadTool::new(cwd.to_path_buf())),
+                Arc::new(BashTool::new(cwd.to_path_buf())),
+                Arc::new(EditTool::new(cwd.to_path_buf(), mutation_queue.clone())),
+                Arc::new(WriteTool::new(cwd.to_path_buf())),
+                Arc::new(GrepTool::new(cwd.to_path_buf())),
+                Arc::new(FindTool::new(cwd.to_path_buf())),
+                Arc::new(LsTool::new(cwd.to_path_buf())),
+                symbols_tool,
+                Arc::new(CodemapTool::new(cwd.to_path_buf(), symbol_index.clone())),
+            ];
+            if opts.memory {
+                t.push(Arc::new(MemoryTool::new(nerv_dir.to_path_buf())));
+            }
+            t
+        };
+
+        for tool in tools {
+            tool_registry.register(ToolDefinition { tool });
+        }
+
+        // After file-writing tools, update the symbol index for the affected file.
+        // For bash, mark the index dirty so the next symbols call does a full rescan.
         let project_root = cwd.to_path_buf();
         agent.state.post_tool_fn = Some(Arc::new(move |tool_name, args| {
             match tool_name {
@@ -109,14 +123,14 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
                             project_root.join(path_str)
                         };
                         if path.extension().is_some_and(|e| e == "rs") {
-                            if let Ok(mut index) = idx.lock() {
+                            if let Ok(mut index) = symbol_index.lock() {
                                 index.index_file(&path);
                             }
                         }
                     }
                 }
                 "bash" => {
-                    if let Ok(mut index) = idx.lock() {
+                    if let Ok(mut index) = symbol_index.lock() {
                         index.mark_dirty();
                     }
                 }
@@ -124,6 +138,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
             }
         }));
     }
+
     let cancel_flag = agent.cancel.clone();
 
     let session_manager = SessionManager::new(nerv_dir);
@@ -137,6 +152,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
         cwd.to_path_buf(),
     );
     session.permissions_enabled = opts.permissions;
+    session.talk_mode = opts.talk_mode;
 
     // Apply default thinking level from config (true = on, false = off).
     if let Some(enabled) = config.default_thinking_level {
