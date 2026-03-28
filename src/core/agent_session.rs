@@ -892,6 +892,11 @@ impl AgentSession {
             }
         }
     }
+
+    /// Disable automatic session naming (used in tests to prevent mock provider consumption).
+    pub fn disable_session_naming(&mut self) {
+        self.session_named = true;
+    }
 }
 
 fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<AgentSessionEvent>) {

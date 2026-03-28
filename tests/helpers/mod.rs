@@ -213,7 +213,7 @@ pub fn mock_session(
     let session_manager = SessionManager::new(&nerv_dir);
     let resources = empty_resources();
 
-    let session = AgentSession::new(
+    let mut session = AgentSession::new(
         agent,
         session_manager,
         tool_registry,
@@ -221,6 +221,8 @@ pub fn mock_session(
         resources,
         tmp.path().to_path_buf(),
     );
+    // Prevent mock provider from being consumed by background session-naming calls.
+    session.disable_session_naming();
 
     let (tx, _rx) = crossbeam_channel::unbounded();
     (tmp, session, tx)

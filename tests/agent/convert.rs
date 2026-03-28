@@ -76,7 +76,7 @@ fn transform_context_truncates_old_large_tool_results() {
         });
     }
 
-    let transformed = transform_context(msgs, 100_000);
+    let transformed = transform_context(msgs, 100_000, None);
     assert_eq!(transformed.len(), 30);
 
     // Old tool result (index 1) should be truncated
@@ -135,7 +135,7 @@ fn transform_context_preserves_small_old_results() {
         },
     );
 
-    let transformed = transform_context(msgs, 100_000);
+    let transformed = transform_context(msgs, 100_000, None);
     if let AgentMessage::ToolResult { content, .. } = &transformed[1] {
         let text: String = content
             .iter()
@@ -216,7 +216,7 @@ fn orphaned_tool_calls_stripped() {
         },
     ];
 
-    let transformed = transform_context(msgs, 100_000);
+    let transformed = transform_context(msgs, 100_000, None);
     // Orphaned tool call stripped → empty assistant removed → 2 messages
     assert_eq!(transformed.len(), 2);
     assert!(matches!(transformed[0], AgentMessage::User { .. }));
@@ -253,7 +253,7 @@ fn answered_tool_calls_preserved() {
         },
     ];
 
-    let transformed = transform_context(msgs, 100_000);
+    let transformed = transform_context(msgs, 100_000, None);
     assert_eq!(transformed.len(), 3);
     // Tool call preserved because it has a matching result
     if let AgentMessage::Assistant(a) = &transformed[1] {
@@ -284,7 +284,7 @@ fn transform_context_passthrough_when_few_messages() {
             timestamp: 1,
         },
     ];
-    let transformed = transform_context(msgs, 100_000);
+    let transformed = transform_context(msgs, 100_000, None);
     if let AgentMessage::ToolResult { content, .. } = &transformed[1] {
         let text: String = content
             .iter()
