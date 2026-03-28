@@ -16,6 +16,8 @@ pub const MATCH_HL: &str = "\x1b[1;33m";
 // Semantic colors
 pub const ERROR: &str = "\x1b[38;5;203m";
 pub const WARN: &str = "\x1b[38;5;214m";
+/// Light orange used for queued (pending) messages.
+pub const QUEUED: &str = "\x1b[38;5;215m";
 pub const CAUTION: &str = "\x1b[38;5;178m";
 pub const SUCCESS: &str = "\x1b[38;5;114m";
 

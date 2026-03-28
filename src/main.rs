@@ -610,7 +610,7 @@ fn main() {
     footer.set_effort(initial_effort_level);
 
     let mut layout = AppLayout::new(Editor::new(), StatusBar::new(), footer);
-    tui.fixed_bottom = 9; // editor + statusbar + footer — never flushed to scrollback
+    tui.fixed_bottom = nerv::interactive::layout::BASE_FIXED_BOTTOM; // editor + statusbar + footer — never flushed to scrollback
 
     let dim = nerv::interactive::theme::DIM;
     let load = |chat: &mut nerv::interactive::chat_writer::ChatWriter, name: &str, tok: usize| {
@@ -913,10 +913,11 @@ fn main() {
                                         push_status(&mut layout, &msg, interactive.status_is_error);
                                     }
                                     layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
+                                    tui.fixed_bottom = nerv::interactive::layout::BASE_FIXED_BOTTOM + layout.statusbar.queue_line_count();
                                 }
                                 tui.request_render(false); continue;
                             }
-                            // Queue navigation
+                            // Queue navigation (while streaming)
                             if keys::matches_key(seq, "up") && interactive.is_streaming && !interactive.pending_messages.is_empty() {
                                 if let Some(idx) = interactive.editing_queue_idx {
                                     let current = layout.editor.text().to_string();
@@ -925,6 +926,17 @@ fn main() {
                                 if let Some(text) = interactive.edit_queue_up() {
                                     layout.editor.set_text(&text); tui.request_render(false); tui.maybe_render(&layout); continue;
                                 }
+                            }
+                            // Up-arrow when not streaming but there are queued messages: dequeue last into editor
+                            if keys::matches_key(seq, "up") && !interactive.is_streaming
+                                && !interactive.pending_messages.is_empty()
+                                && layout.editor.is_empty()
+                            {
+                                let msg = interactive.pending_messages.pop().unwrap();
+                                layout.editor.set_text(&msg);
+                                layout.statusbar.set_queue(&interactive.pending_messages, None);
+                                tui.fixed_bottom = nerv::interactive::layout::BASE_FIXED_BOTTOM + layout.statusbar.queue_line_count();
+                                tui.request_render(false); tui.maybe_render(&layout); continue;
                             }
                             if keys::matches_key(seq, "down") && interactive.editing_queue_idx.is_some() {
                                 if let Some(idx) = interactive.editing_queue_idx {
@@ -941,6 +953,7 @@ fn main() {
                                 interactive.remove_editing_queue_item();
                                 layout.editor.clear();
                                 layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
+                                tui.fixed_bottom = nerv::interactive::layout::BASE_FIXED_BOTTOM + layout.statusbar.queue_line_count();
                                 tui.request_render(false); tui.maybe_render(&layout); continue;
                             }
                             // History navigation: up/down when not streaming and editor is empty

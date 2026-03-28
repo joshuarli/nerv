@@ -184,27 +184,44 @@ impl Component for StatusBar {
             }
         }
 
-        if !self.queued.is_empty() {
-            for (i, msg) in self.queued.iter().enumerate() {
-                let marker = if self.editing_idx == Some(i) {
-                    theme::ACCENT
-                } else {
-                    theme::DIM
-                };
-                let preview = if msg.len() > 60 {
-                    &msg[..msg.floor_char_boundary(60)]
-                } else {
-                    msg.as_str()
-                };
-                lines.push(format!(" {}▸ {}{}", marker, preview, r));
-            }
-        }
-
         lines
     }
 }
 
 impl StatusBar {
+    /// Number of lines that `render_queue` will emit for the current queue.
+    /// Used by the caller to keep `tui.fixed_bottom` accurate.
+    pub fn queue_line_count(&self) -> usize {
+        self.queued.len()
+    }
+
+    /// Renders only the queued messages section (shown above the input box).
+    /// Each pending message is shown in light orange; the one currently being
+    /// edited (if any) is highlighted with the accent colour instead.
+    pub fn render_queue(&self, width: u16) -> Vec<String> {
+        use crate::interactive::theme;
+        let r = theme::RESET;
+        let mut lines = Vec::new();
+
+        for (i, msg) in self.queued.iter().enumerate() {
+            let (bullet_color, text_color) = if self.editing_idx == Some(i) {
+                (theme::ACCENT, theme::ACCENT)
+            } else {
+                (theme::QUEUED, theme::QUEUED)
+            };
+            // Leave room for " ▸ " prefix (3 visible chars + 1 space on each side)
+            let max_text = (width as usize).saturating_sub(4);
+            let preview = if msg.len() > max_text {
+                &msg[..msg.floor_char_boundary(max_text)]
+            } else {
+                msg.as_str()
+            };
+            lines.push(format!(" {}▸{} {}{}{}", bullet_color, r, text_color, preview, r));
+        }
+
+        lines
+    }
+
     fn render_spinner(&self, lines: &mut Vec<String>) {
         use crate::interactive::theme;
         let r = theme::RESET;

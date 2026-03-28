@@ -5,6 +5,10 @@ use crate::tui::Component;
 use crate::tui::components::editor::Editor;
 use crate::tui::components::spacer::Spacer;
 
+/// Fixed lines at the bottom (editor + statusbar + footer) that are never
+/// flushed to scrollback.  Queue lines are added on top of this.
+pub const BASE_FIXED_BOTTOM: usize = 9;
+
 pub struct AppLayout {
     spacer_top: Spacer,
     pub chat: ChatWriter,
@@ -36,6 +40,7 @@ impl Component for AppLayout {
         {
             last.push_str(crate::interactive::theme::RESET);
         }
+        lines.extend(self.statusbar.render_queue(width));
         lines.extend(self.editor.render(width));
         lines.extend(self.statusbar.render(width));
         lines.extend(self.footer.render(width));
