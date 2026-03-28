@@ -141,6 +141,17 @@ impl AgentTool for SymbolsTool {
             }
         }
 
+        // List doc files on broad queries (empty query, no file filter)
+        if query.is_empty() && file_filter.is_none() {
+            let docs = find_doc_files(&self.cwd);
+            if !docs.is_empty() {
+                out.push_str("\nDOCS:\n");
+                for doc in &docs {
+                    out.push_str(&format!("  {}\n", doc));
+                }
+            }
+        }
+
         // Reference search via ripgrep
         if want_refs {
             drop(idx); // release lock before shelling out
@@ -186,6 +197,24 @@ fn parse_kind_filter(s: &str) -> Option<SymbolKind> {
     }
 }
 
+/// Find markdown doc files in the project, respecting .gitignore via ripgrep.
+fn find_doc_files(cwd: &std::path::Path) -> Vec<String> {
+    let output = match std::process::Command::new("rg")
+        .args(["--files", "--glob", "*.md", "--sort=path"])
+        .current_dir(cwd)
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return vec![],
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .take(20)
+        .map(|l| l.to_string())
+        .collect()
+}
+
 fn find_references(symbol: &str, cwd: &std::path::Path) -> Vec<String> {
     let output = match std::process::Command::new("rg")
         .args([
@@ -207,4 +236,50 @@ fn find_references(symbol: &str, cwd: &std::path::Path) -> Vec<String> {
         .lines()
         .map(|l| l.to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::agent::AgentTool;
+    use std::sync::Arc;
+
+    #[test]
+    fn docs_section_on_empty_query() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("lib.rs"), "fn hello() {}\n").unwrap();
+        std::fs::write(tmp.path().join("README.md"), "# Hello\n").unwrap();
+        std::fs::write(tmp.path().join("docs.md"), "# Docs\n").unwrap();
+
+        let tool = SymbolsTool::new(tmp.path().to_path_buf());
+        let result = tool.execute(serde_json::json!({"query": ""}), Arc::new(|_| {}));
+        assert!(result.content.contains("DOCS:"), "should have DOCS section: {}", result.content);
+        assert!(result.content.contains("README.md"), "should list README.md: {}", result.content);
+        assert!(result.content.contains("docs.md"), "should list docs.md: {}", result.content);
+    }
+
+    #[test]
+    fn no_docs_section_on_specific_query() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("lib.rs"), "fn hello() {}\n").unwrap();
+        std::fs::write(tmp.path().join("README.md"), "# Hello\n").unwrap();
+
+        let tool = SymbolsTool::new(tmp.path().to_path_buf());
+        let result = tool.execute(serde_json::json!({"query": "hello"}), Arc::new(|_| {}));
+        assert!(!result.content.contains("DOCS:"), "specific query should NOT have DOCS: {}", result.content);
+    }
+
+    #[test]
+    fn no_docs_section_with_file_filter() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("lib.rs"), "fn hello() {}\n").unwrap();
+        std::fs::write(tmp.path().join("README.md"), "# Hello\n").unwrap();
+
+        let tool = SymbolsTool::new(tmp.path().to_path_buf());
+        let result = tool.execute(
+            serde_json::json!({"query": "", "file": "lib.rs"}),
+            Arc::new(|_| {}),
+        );
+        assert!(!result.content.contains("DOCS:"), "file-filtered query should NOT have DOCS: {}", result.content);
+    }
 }
