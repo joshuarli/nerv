@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::{SymbolDef, SymbolIndex, SymbolKind};
 
@@ -48,7 +49,17 @@ pub fn search(index: &SymbolIndex, params: &CodemapParams) -> SearchResult {
 }
 
 /// Render phase: reads source files and formats output. No index lock needed.
-pub fn render(results: &[SymbolDef], project_root: &Path, depth: &Depth) -> String {
+///
+/// `cached_sources` — map of path → source pre-fetched from `SymbolIndex::sources_for`
+/// while the read lock was held.  On a warm index this covers every file and
+/// no I/O happens here.  For any path that is absent (cold start, file just
+/// written), sources are read in parallel via scoped threads.
+pub fn render(
+    results: &[SymbolDef],
+    project_root: &Path,
+    depth: &Depth,
+    cached_sources: &HashMap<PathBuf, Arc<String>>,
+) -> String {
     let mut by_file: BTreeMap<&Path, Vec<&SymbolDef>> = BTreeMap::new();
     for sym in results {
         by_file.entry(sym.file.as_path()).or_default().push(sym);
@@ -56,14 +67,49 @@ pub fn render(results: &[SymbolDef], project_root: &Path, depth: &Depth) -> Stri
 
     let full_mode = matches!(depth, Depth::Full);
 
-    // For full mode: read each file once as a String (keyed by path). We slice
-    // directly by byte offset stored in SymbolDef — no line-Vec allocation needed.
-    let file_sources: BTreeMap<&Path, String> = if full_mode {
+    // For full mode: build a path → source map.
+    // 1. Use pre-fetched Arc<String> from the index cache (zero I/O on warm calls).
+    // 2. Read any missing files in parallel via scoped threads.
+    let file_sources: BTreeMap<&Path, Arc<String>> = if full_mode {
+        // Collect which paths need a fresh read.
+        let missing: Vec<&Path> = by_file
+            .keys()
+            .copied()
+            .filter(|p| !cached_sources.contains_key(*p))
+            .collect();
+
+        // Parallel reads for cache misses.
+        let fresh: HashMap<&Path, Arc<String>> = if missing.is_empty() {
+            HashMap::new()
+        } else {
+            let mut results_vec: Vec<Option<(&Path, Arc<String>)>> = vec![None; missing.len()];
+            std::thread::scope(|s| {
+                let handles: Vec<_> = missing
+                    .iter()
+                    .zip(results_vec.iter_mut())
+                    .map(|(path, slot)| {
+                        s.spawn(move || {
+                            if let Ok(src) = std::fs::read_to_string(path) {
+                                *slot = Some((*path, Arc::new(src)));
+                            }
+                        })
+                    })
+                    .collect();
+                for h in handles {
+                    h.join().ok();
+                }
+            });
+            results_vec.into_iter().flatten().collect()
+        };
+
         by_file
             .keys()
             .filter_map(|path| {
-                let source = std::fs::read_to_string(path).ok()?;
-                Some((*path, source))
+                let src = cached_sources
+                    .get(*path)
+                    .map(Arc::clone)
+                    .or_else(|| fresh.get(path).map(Arc::clone))?;
+                Some((*path, src))
             })
             .collect()
     } else {
@@ -112,7 +158,11 @@ pub fn render(results: &[SymbolDef], project_root: &Path, depth: &Depth) -> Stri
 /// Used by CLI; the tool wrapper uses search/render separately to release the lock early.
 pub fn codemap(index: &SymbolIndex, project_root: &Path, params: &CodemapParams) -> String {
     match search(index, params) {
-        SearchResult::Found(results) => render(&results, project_root, &params.depth),
+        SearchResult::Found(results) => {
+            let paths: Vec<&Path> = results.iter().map(|s| s.file.as_path()).collect();
+            let sources = index.sources_for(&paths);
+            render(&results, project_root, &params.depth, &sources)
+        }
         SearchResult::Redirect(msg) => msg,
         SearchResult::Empty => "No symbols found".to_string(),
     }
@@ -158,7 +208,7 @@ fn format_signature_inline(out: &mut String, sym: &SymbolDef) {
 
 /// Find how many symbols (in search order) we can show in full mode
 /// before exceeding the line budget. Returns the count.
-fn find_demote_cutoff(results: &[&SymbolDef], file_sources: &BTreeMap<&Path, String>) -> usize {
+fn find_demote_cutoff(results: &[&SymbolDef], file_sources: &BTreeMap<&Path, Arc<String>>) -> usize {
     let mut total_lines = 0;
     for (i, sym) in results.iter().enumerate() {
         let body_lines = if file_sources.contains_key(sym.file.as_path()) {

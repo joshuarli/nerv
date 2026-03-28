@@ -1,5 +1,5 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use nerv::index::SymbolIndex;
@@ -122,32 +122,64 @@ fn bench_codemap_render(c: &mut Criterion) {
             SearchResult::Found(r) => r,
             _ => panic!("expected results"),
         };
+        let paths: Vec<&Path> = results.iter().map(|s| s.file.as_path()).collect();
+        let sources = idx.sources_for(&paths);
         b.iter(|| {
-            black_box(render(black_box(&results), src, &Depth::Signatures))
+            black_box(render(black_box(&results), src, &Depth::Signatures, &sources))
         });
     });
 
-    // Full mode: reads files from disk and slices bodies
-    group.bench_function("full_all_symbols", |b| {
+    // Full mode, warm cache: sources pre-fetched from index — no disk I/O in render()
+    group.bench_function("full_all_symbols_warm", |b| {
         let params = CodemapParams { query: "", kind: None, file: None, depth: Depth::Full };
         let results = match search(&idx, &params) {
             SearchResult::Found(r) => r,
             _ => panic!("expected results"),
         };
+        let paths: Vec<&Path> = results.iter().map(|s| s.file.as_path()).collect();
+        let sources = idx.sources_for(&paths);
         b.iter(|| {
-            black_box(render(black_box(&results), src, &Depth::Full))
+            black_box(render(black_box(&results), src, &Depth::Full, &sources))
         });
     });
 
-    // Full mode, targeted query (realistic single-symbol lookup)
-    group.bench_function("full_transform_context", |b| {
+    // Full mode, cold cache: no pre-fetched sources, render reads files via parallel threads
+    group.bench_function("full_all_symbols_cold", |b| {
+        let params = CodemapParams { query: "", kind: None, file: None, depth: Depth::Full };
+        let results = match search(&idx, &params) {
+            SearchResult::Found(r) => r,
+            _ => panic!("expected results"),
+        };
+        let empty: std::collections::HashMap<PathBuf, std::sync::Arc<String>> = std::collections::HashMap::new();
+        b.iter(|| {
+            black_box(render(black_box(&results), src, &Depth::Full, &empty))
+        });
+    });
+
+    // Full mode, warm cache, targeted query (realistic single-symbol lookup)
+    group.bench_function("full_transform_context_warm", |b| {
         let params = CodemapParams { query: "transform_context", kind: None, file: None, depth: Depth::Full };
         let results = match search(&idx, &params) {
             SearchResult::Found(r) => r,
             _ => panic!("no transform_context found"),
         };
+        let paths: Vec<&Path> = results.iter().map(|s| s.file.as_path()).collect();
+        let sources = idx.sources_for(&paths);
         b.iter(|| {
-            black_box(render(black_box(&results), src, &Depth::Full))
+            black_box(render(black_box(&results), src, &Depth::Full, &sources))
+        });
+    });
+
+    // Full mode, cold cache, targeted query
+    group.bench_function("full_transform_context_cold", |b| {
+        let params = CodemapParams { query: "transform_context", kind: None, file: None, depth: Depth::Full };
+        let results = match search(&idx, &params) {
+            SearchResult::Found(r) => r,
+            _ => panic!("no transform_context found"),
+        };
+        let empty: std::collections::HashMap<PathBuf, std::sync::Arc<String>> = std::collections::HashMap::new();
+        b.iter(|| {
+            black_box(render(black_box(&results), src, &Depth::Full, &empty))
         });
     });
 

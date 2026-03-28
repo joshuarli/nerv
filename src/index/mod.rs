@@ -2,6 +2,7 @@ pub mod codemap;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tree_sitter::{Parser, Query, QueryCursor, StreamingIterator};
@@ -72,6 +73,11 @@ pub struct SymbolDef {
 struct FileEntry {
     mtime: SystemTime,
     symbols: Vec<SymbolDef>,
+    /// Cached file source, held as an `Arc` so callers can clone the pointer
+    /// (not the bytes) while the index lock is held and then read the source
+    /// after releasing the lock.  `None` only while the entry is being built
+    /// from the SQLite symbol cache (symbols were cached but source was not).
+    source: Option<Arc<String>>,
 }
 
 /// Persistent on-disk cache of parsed symbol data, keyed by (path, mtime).
@@ -306,6 +312,21 @@ impl SymbolIndex {
                 .all(|(path, mtime)| self.files.get(path).is_some_and(|e| &e.mtime == mtime))
     }
 
+    /// Returns cached sources for the given paths, as `Arc<String>` clones.
+    /// Cheap to call under a read lock — only bumps reference counts.
+    /// Paths with no cached source (e.g. symbols-only SQLite hits that
+    /// somehow lost their source) are absent from the returned map; callers
+    /// should fall back to `fs::read_to_string` for those.
+    pub fn sources_for(&self, paths: &[&Path]) -> HashMap<PathBuf, Arc<String>> {
+        paths
+            .iter()
+            .filter_map(|p| {
+                let src = self.files.get(*p)?.source.as_ref()?;
+                Some((p.to_path_buf(), Arc::clone(src)))
+            })
+            .collect()
+    }
+
     /// Index all `.rs` files under `root`, skipping files whose mtime hasn't changed.
     /// Debounced: no-ops if called within `SCAN_DEBOUNCE` of the last scan.
     ///
@@ -349,7 +370,10 @@ impl SymbolIndex {
             // Try the on-disk cache before running tree-sitter.
             if let Some(ref cache) = self.cache {
                 if let Some(symbols) = cache.get(&path, mtime_ms) {
-                    self.files.insert(path, FileEntry { mtime, symbols });
+                    // SQLite hit: symbols restored, but source not cached on disk.
+                    // Read the source now so render() has it without a second I/O.
+                    let source = std::fs::read_to_string(&path).ok().map(Arc::new);
+                    self.files.insert(path, FileEntry { mtime, symbols, source });
                     continue;
                 }
             }
@@ -358,7 +382,8 @@ impl SymbolIndex {
                 if let Some(ref cache) = self.cache {
                     cache.put(&path, mtime_ms, &symbols);
                 }
-                self.files.insert(path, FileEntry { mtime, symbols });
+                let source = Some(Arc::new(source));
+                self.files.insert(path, FileEntry { mtime, symbols, source });
             }
         }
         self.last_scan = Some(Instant::now());
@@ -398,7 +423,8 @@ impl SymbolIndex {
         // Try cache first.
         if let Some(ref cache) = self.cache {
             if let Some(symbols) = cache.get(&canonical, mtime_ms) {
-                self.files.insert(canonical, FileEntry { mtime, symbols });
+                let source = std::fs::read_to_string(&canonical).ok().map(Arc::new);
+                self.files.insert(canonical, FileEntry { mtime, symbols, source });
                 return;
             }
         }
@@ -407,7 +433,8 @@ impl SymbolIndex {
             if let Some(ref cache) = self.cache {
                 cache.put(&canonical, mtime_ms, &symbols);
             }
-            self.files.insert(canonical, FileEntry { mtime, symbols });
+            let source = Some(Arc::new(source));
+            self.files.insert(canonical, FileEntry { mtime, symbols, source });
         }
     }
 
@@ -734,6 +761,7 @@ mod tests {
             FileEntry {
                 mtime: SystemTime::UNIX_EPOCH,
                 symbols: syms,
+                source: None,
             },
         );
 
@@ -838,7 +866,7 @@ mod tests {
         let syms = index.parse_symbols(Path::new("test.rs"), source);
         index.files.insert(
             PathBuf::from("test.rs"),
-            FileEntry { mtime: SystemTime::UNIX_EPOCH, symbols: syms },
+            FileEntry { mtime: SystemTime::UNIX_EPOCH, symbols: syms, source: None },
         );
 
         let results = index.search("foo", None, None);
@@ -882,7 +910,7 @@ mod tests {
         let syms = index.parse_symbols(Path::new("test.rs"), source);
         index.files.insert(
             PathBuf::from("test.rs"),
-            FileEntry { mtime: SystemTime::UNIX_EPOCH, symbols: syms },
+            FileEntry { mtime: SystemTime::UNIX_EPOCH, symbols: syms, source: None },
         );
 
         // Multi-word query matches any word
@@ -937,7 +965,7 @@ mod tests {
         let syms = index.parse_symbols(Path::new("test.rs"), source);
         index.files.insert(
             PathBuf::from("test.rs"),
-            FileEntry { mtime: SystemTime::UNIX_EPOCH, symbols: syms },
+            FileEntry { mtime: SystemTime::UNIX_EPOCH, symbols: syms, source: None },
         );
 
         let enums = index.search("", Some(SymbolKind::Enum), None);

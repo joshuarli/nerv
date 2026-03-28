@@ -102,13 +102,25 @@ impl AgentTool for CodemapTool {
         if !self.index.read().unwrap().is_fresh(&self.cwd) {
             self.index.write().unwrap().index_dir(&self.cwd);
         }
-        let search_result = {
+        let (search_result, cached_sources) = {
             let idx = self.index.read().unwrap();
-            codemap::search(&idx, &params)
+            let result = codemap::search(&idx, &params);
+            // Clone Arc<String> pointers while holding the read lock — zero-copy,
+            // just bumps reference counts.  render() uses these to skip I/O entirely
+            // on warm calls.
+            let sources = if let codemap::SearchResult::Found(ref syms) = result {
+                let paths: Vec<&std::path::Path> = syms.iter().map(|s| s.file.as_path()).collect();
+                idx.sources_for(&paths)
+            } else {
+                std::collections::HashMap::new()
+            };
+            (result, sources)
         };
 
         let content = match search_result {
-            codemap::SearchResult::Found(results) => codemap::render(&results, &self.cwd, &params.depth),
+            codemap::SearchResult::Found(results) => {
+                codemap::render(&results, &self.cwd, &params.depth, &cached_sources)
+            }
             codemap::SearchResult::Redirect(msg) => msg,
             codemap::SearchResult::Empty => "No symbols found".to_string(),
         };
