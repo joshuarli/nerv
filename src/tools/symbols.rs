@@ -75,7 +75,7 @@ impl AgentTool for SymbolsTool {
 
     fn prompt_guidelines(&self) -> Vec<String> {
         vec![
-            "Before reading a file to understand its structure, use the `symbols` tool to find definitions and call sites. Only `read` specific line ranges after.".into(),
+            "`symbols` finds where things are defined (name, kind, file, line, signature). Use it to locate code before reading it. Use `references: true` to also find call sites via ripgrep.".into(),
         ]
     }
 
