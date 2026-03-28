@@ -16,7 +16,7 @@ pub enum Permission {
 /// Check whether a tool call should be auto-approved or needs user confirmation.
 pub fn check(tool: &str, args: &serde_json::Value, repo_root: Option<&Path>) -> Permission {
     match tool {
-        "read" | "grep" | "find" | "ls" => check_read_tool(args, repo_root),
+        "read" | "grep" | "find" | "ls" | "symbols" | "codemap" => check_read_tool(args, repo_root),
         "edit" | "write" => check_write_tool(tool, args, repo_root),
         "bash" => check_bash(args, repo_root),
         "memory" => Permission::Allow,
