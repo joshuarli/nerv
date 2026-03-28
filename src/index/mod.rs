@@ -149,6 +149,10 @@ impl SymbolIndex {
         let source_bytes = source.as_bytes();
         let mut cursor = QueryCursor::new();
         let mut symbols = Vec::new();
+        // A function_item inside a declaration_list matches both the method and
+        // free-function patterns. Track seen byte ranges to keep only the first
+        // (more specific) match.
+        let mut seen_ranges = std::collections::HashSet::new();
 
         let mut matches = cursor.matches(&self.query, tree.root_node(), source_bytes);
         while let Some(m) = { matches.advance(); matches.get() } {
@@ -159,6 +163,12 @@ impl SymbolIndex {
                 (Some(n), Some(d)) => (n, d),
                 _ => continue,
             };
+
+            let node = def_capture.node;
+            let byte_range = (node.start_byte(), node.end_byte());
+            if !seen_ranges.insert(byte_range) {
+                continue;
+            }
 
             let name = match name_capture.node.utf8_text(source_bytes) {
                 Ok(s) => s.to_string(),
@@ -171,7 +181,6 @@ impl SymbolIndex {
                 None => continue,
             };
 
-            let node = def_capture.node;
             let line = node.start_position().row as u32 + 1;
             let end_line = node.end_position().row as u32 + 1;
 
@@ -210,11 +219,13 @@ impl SymbolIndex {
         file_filter: Option<&Path>,
     ) -> Vec<&SymbolDef> {
         let query_lower = query.to_lowercase();
+        let canonical_filter = file_filter.and_then(|f| f.canonicalize().ok());
+        let filter_ref = canonical_filter.as_deref().or(file_filter);
         let mut results: Vec<&SymbolDef> = self
             .files
             .iter()
             .filter(|(path, _)| {
-                file_filter
+                filter_ref
                     .map(|f| path.starts_with(f))
                     .unwrap_or(true)
             })
@@ -357,6 +368,8 @@ mod tests {
         let syms = parse_source(
             "struct Agent;\nimpl Agent {\n    fn run(&self) {}\n    fn stop(&self) {}\n}\n",
         );
+        // 1 struct + 2 methods, no duplicates from the general function_item pattern
+        assert_eq!(syms.len(), 3, "got: {:#?}", syms);
         let methods: Vec<_> = syms.iter().filter(|s| s.kind == SymbolKind::Method).collect();
         assert_eq!(methods.len(), 2);
         assert_eq!(methods[0].name, "run");
@@ -431,5 +444,140 @@ mod tests {
     fn line_numbers_are_one_based() {
         let syms = parse_source("\n\nfn third_line() {}\n");
         assert_eq!(syms[0].line, 3);
+    }
+
+    #[test]
+    fn trait_methods_with_bodies_extracted() {
+        // Trait method *declarations* (no body) are function_signature_item, not
+        // function_item, so they won't appear. Only default methods (with bodies) do.
+        let syms = parse_source(
+            "pub trait AgentTool {\n    fn name(&self) -> &str;\n    fn default_impl(&self) { }\n}\n",
+        );
+        let methods: Vec<_> = syms.iter().filter(|s| s.kind == SymbolKind::Method).collect();
+        assert_eq!(methods.len(), 1);
+        assert_eq!(methods[0].name, "default_impl");
+    }
+
+    #[test]
+    fn incremental_skips_unchanged_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let f = tmp.path().join("lib.rs");
+        std::fs::write(&f, "fn original() {}\n").unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.index_dir(tmp.path());
+        assert_eq!(index.search("original", None, None).len(), 1);
+
+        // Re-index without modifying the file — should be a no-op
+        // (verifiable because parse count stays the same; we just check
+        // the result is still valid)
+        index.index_dir(tmp.path());
+        assert_eq!(index.search("original", None, None).len(), 1);
+    }
+
+    #[test]
+    fn incremental_picks_up_changed_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let f = tmp.path().join("lib.rs");
+        std::fs::write(&f, "fn first() {}\n").unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.index_dir(tmp.path());
+        assert_eq!(index.search("first", None, None).len(), 1);
+
+        // Slight delay to ensure mtime changes
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&f, "fn second() {}\n").unwrap();
+
+        index.index_dir(tmp.path());
+        assert_eq!(index.search("first", None, None).len(), 0);
+        assert_eq!(index.search("second", None, None).len(), 1);
+    }
+
+    #[test]
+    fn deleted_files_removed_from_index() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let f = tmp.path().join("lib.rs");
+        std::fs::write(&f, "fn gone() {}\n").unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.index_dir(tmp.path());
+        assert_eq!(index.search("gone", None, None).len(), 1);
+
+        std::fs::remove_file(&f).unwrap();
+        index.index_dir(tmp.path());
+        assert_eq!(index.search("gone", None, None).len(), 0);
+    }
+
+    #[test]
+    fn index_file_single() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let f = tmp.path().join("one.rs");
+        std::fs::write(&f, "fn alpha() {}\n").unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.index_file(&f);
+        assert_eq!(index.search("alpha", None, None).len(), 1);
+
+        std::fs::write(&f, "fn beta() {}\n").unwrap();
+        index.index_file(&f);
+        assert_eq!(index.search("alpha", None, None).len(), 0);
+        assert_eq!(index.search("beta", None, None).len(), 1);
+    }
+
+    #[test]
+    fn search_exact_match_sorts_first() {
+        let mut index = SymbolIndex::new();
+        let source = "fn foobar() {}\nfn foo() {}\nfn foo_baz() {}\n";
+        let syms = index.parse_symbols(Path::new("test.rs"), source);
+        index.files.insert(
+            PathBuf::from("test.rs"),
+            FileEntry { mtime: SystemTime::UNIX_EPOCH, symbols: syms },
+        );
+
+        let results = index.search("foo", None, None);
+        assert_eq!(results[0].name, "foo", "exact match should sort first");
+    }
+
+    #[test]
+    fn multi_file_search() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn shared() {}\n").unwrap();
+        std::fs::write(tmp.path().join("b.rs"), "fn shared() {}\n").unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.index_dir(tmp.path());
+        let results = index.search("shared", None, None);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn file_filter_restricts_results() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(tmp.path().join("top.rs"), "fn target() {}\n").unwrap();
+        std::fs::write(sub.join("nested.rs"), "fn target() {}\n").unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.index_dir(tmp.path());
+
+        let all = index.search("target", None, None);
+        assert_eq!(all.len(), 2);
+
+        let sub_only = index.search("target", None, Some(&sub));
+        assert_eq!(sub_only.len(), 1);
+    }
+
+    #[test]
+    fn syntax_errors_produce_partial_results() {
+        // Missing closing brace — tree-sitter still produces a partial tree
+        let syms = parse_source("fn good() {}\nfn broken( {}\n");
+        // Should at least find the valid function
+        assert!(
+            syms.iter().any(|s| s.name == "good"),
+            "should recover valid symbols despite syntax errors: {:#?}",
+            syms
+        );
     }
 }
