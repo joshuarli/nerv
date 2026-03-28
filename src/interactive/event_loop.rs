@@ -668,6 +668,15 @@ impl InteractiveMode {
             return None;
         }
 
+        // Fire onUserInput hooks (e.g. reset tmux window colour set by onResponseComplete).
+        {
+            let cfg = crate::core::config::NervConfig::load(crate::nerv_dir());
+            crate::core::notifications::fire(
+                crate::core::notifications::NotificationMatcher::OnUserInput,
+                &cfg.notifications,
+            );
+        }
+
         if self.is_streaming {
             if let Some(idx) = self.editing_queue_idx {
                 self.pending_messages[idx] = text;

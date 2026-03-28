@@ -4,15 +4,11 @@
 /// ```json
 /// "notifications": [
 ///   {
-///     "matcher": "onPermissionDenied",
-///     "hooks": [{ "type": "command", "command": "terminal-notifier -title 'nerv' -message 'denied'" }]
+///     "matchers": ["onResponseComplete", "onPermissionDenied"],
+///     "hooks": [{ "type": "command", "command": "terminal-notifier -title 'nerv' -message 'done'" }]
 ///   },
 ///   {
-///     "matcher": "onCompactionDone",
-///     "hooks": [{ "type": "command", "command": "..." }]
-///   },
-///   {
-///     "matcher": "onResponseComplete",
+///     "matchers": ["onUserInput"],
 ///     "hooks": [{ "type": "command", "command": "..." }]
 ///   }
 /// ]
@@ -22,6 +18,7 @@
 ///   - `onPermissionDenied`  — a tool call was denied (user said no, or permission check blocked it)
 ///   - `onCompactionDone`    — a compaction cycle completed (auto or manual)
 ///   - `onResponseComplete`  — the model finished a turn and is waiting for user input
+///   - `onUserInput`         — the user submitted a prompt (useful for clearing "done" indicators)
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -30,6 +27,7 @@ pub enum NotificationMatcher {
     OnPermissionDenied,
     OnCompactionDone,
     OnResponseComplete,
+    OnUserInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,15 +41,15 @@ pub struct NotificationHook {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationRule {
-    pub matcher: NotificationMatcher,
+    pub matchers: Vec<NotificationMatcher>,
     pub hooks: Vec<NotificationHook>,
 }
 
-/// Fire all hooks whose matcher matches `event`.
+/// Fire all hooks whose matchers include `event`.
 /// Commands are spawned detached (fire-and-forget); we do not wait for them.
 pub fn fire(event: NotificationMatcher, rules: &[NotificationRule]) {
     for rule in rules {
-        if rule.matcher != event {
+        if !rule.matchers.contains(&event) {
             continue;
         }
         for hook in &rule.hooks {
