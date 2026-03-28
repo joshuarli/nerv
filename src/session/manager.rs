@@ -58,6 +58,8 @@ impl SessionManager {
         db.execute("ALTER TABLE sessions ADD COLUMN name TEXT").ok();
         // Migration: per-session auto-compact threshold (fraction 0.0–1.0)
         db.execute("ALTER TABLE sessions ADD COLUMN compact_threshold REAL").ok();
+        // Migration: stable repo fingerprint (SHA of initial commit) for rename-safe filtering
+        db.execute("ALTER TABLE sessions ADD COLUMN repo_id TEXT").ok();
 
         db.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
@@ -87,8 +89,13 @@ impl SessionManager {
         let now = now_iso();
         let cwd_str = cwd.to_string_lossy().to_string();
 
+        // Compute stable repo fingerprint from the initial git commit SHA.
+        // NULL for non-git directories — cwd-prefix fallback still works for them.
+        let repo_id = crate::find_repo_root(cwd)
+            .and_then(|root| crate::repo_fingerprint(&root));
+
         let mut stmt = self.db.prepare(
-            "INSERT INTO sessions (id, cwd, created_at, updated_at, worktree) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (id, cwd, created_at, updated_at, worktree, repo_id) VALUES (?, ?, ?, ?, ?, ?)",
         )?;
         stmt.bind((1, id.as_str()))?;
         stmt.bind((2, cwd_str.as_str()))?;
@@ -97,6 +104,10 @@ impl SessionManager {
         match worktree {
             Some(wt) => stmt.bind((5, wt.to_string_lossy().as_ref()))?,
             None => stmt.bind((5, sqlite::Value::Null))?,
+        };
+        match repo_id.as_deref() {
+            Some(rid) => stmt.bind((6, rid))?,
+            None => stmt.bind((6, sqlite::Value::Null))?,
         };
         stmt.next()?;
 
@@ -709,9 +720,24 @@ impl SessionManager {
         tree
     }
 
+    /// Return the `repo_id` (initial-commit SHA) for the current active session, if any.
+    pub fn repo_id(&self) -> Option<String> {
+        let sid = self.session_id.as_deref()?;
+        let mut stmt = self
+            .db
+            .prepare("SELECT repo_id FROM sessions WHERE id = ?")
+            .ok()?;
+        stmt.bind((1, sid)).ok()?;
+        if stmt.next().ok()? == sqlite::State::Row {
+            stmt.read::<Option<String>, _>("repo_id").ok().flatten()
+        } else {
+            None
+        }
+    }
+
     pub fn list_sessions(&self) -> Vec<SessionSummary> {
         let mut stmt = match self.db.prepare(
-            "SELECT id, cwd, created_at, updated_at, preview, name FROM sessions ORDER BY updated_at DESC LIMIT 100",
+            "SELECT id, cwd, created_at, updated_at, preview, name, repo_id FROM sessions ORDER BY updated_at DESC LIMIT 100",
         ) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -725,6 +751,7 @@ impl SessionManager {
             let updated_at: String = stmt.read("updated_at").unwrap_or_default();
             let preview: String = stmt.read("preview").unwrap_or_default();
             let name: Option<String> = stmt.read("name").unwrap_or(None);
+            let repo_id: Option<String> = stmt.read("repo_id").unwrap_or(None);
 
             // Count entries for this session
             let message_count = self.count_entries(&id);
@@ -744,6 +771,7 @@ impl SessionManager {
                 cwd,
                 preview,
                 name,
+                repo_id,
                 message_count,
                 modified,
             });
@@ -1017,6 +1045,8 @@ pub struct SessionSummary {
     pub preview: String,
     /// Auto-generated session title (set after the first completed turn).
     pub name: Option<String>,
+    /// Stable repo fingerprint (SHA of initial commit). None for legacy rows.
+    pub repo_id: Option<String>,
     pub message_count: u32,
     pub modified: std::time::SystemTime,
 }

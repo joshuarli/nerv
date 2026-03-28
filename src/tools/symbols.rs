@@ -20,10 +20,17 @@ impl SymbolsTool {
     }
 
     /// Construct with a persistent on-disk symbol cache stored in `nerv_dir`.
+    /// If `cwd` is inside a git repo, paths are stored relative to the repo root
+    /// so the cache survives directory renames.
     pub fn new_with_cache(cwd: PathBuf, nerv_dir: &std::path::Path) -> Self {
+        let index = if let Some(repo_root) = crate::find_repo_root(&cwd) {
+            crate::index::SymbolIndex::new_with_cache_and_root(nerv_dir, &repo_root)
+        } else {
+            crate::index::SymbolIndex::new_with_cache(nerv_dir)
+        };
         Self {
             cwd,
-            index: Arc::new(Mutex::new(SymbolIndex::new_with_cache(nerv_dir))),
+            index: Arc::new(Mutex::new(index)),
         }
     }
 

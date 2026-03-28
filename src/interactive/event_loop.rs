@@ -36,6 +36,8 @@ pub struct InteractiveMode {
     model_registry: Arc<ModelRegistry>,
     skills: Vec<crate::core::skills::Skill>,
     repo_root: Option<String>,
+    /// Stable repo fingerprint (SHA of initial commit) — rename-safe session filter.
+    repo_id: Option<String>,
     pub session_id: Option<String>,
     pub status_message: Option<String>,
     pub status_is_error: bool,
@@ -71,6 +73,7 @@ impl InteractiveMode {
         initial_effort: Option<EffortLevel>,
         skills: Vec<crate::core::skills::Skill>,
         repo_root: Option<String>,
+        repo_id: Option<String>,
     ) -> Self {
         Self {
             cmd_tx,
@@ -82,6 +85,7 @@ impl InteractiveMode {
             model_registry,
             skills,
             repo_root,
+            repo_id,
             session_id: None,
             status_message: None,
             status_is_error: false,
@@ -801,6 +805,7 @@ impl InteractiveMode {
                 // Open full-screen session picker.
                 let _ = self.cmd_tx.send(SessionCommand::ListSessions {
                     repo_root: self.repo_root.clone(),
+                    repo_id: self.repo_id.clone(),
                 });
             }
             "/export" | "/share" => {
@@ -812,6 +817,7 @@ impl InteractiveMode {
                     // Open full-screen session picker.
                     let _ = self.cmd_tx.send(SessionCommand::ListSessions {
                         repo_root: self.repo_root.clone(),
+                        repo_id: self.repo_id.clone(),
                     });
                 } else {
                     let _ = self.cmd_tx.send(SessionCommand::LoadSession {
@@ -966,6 +972,10 @@ impl InteractiveMode {
 
     pub fn repo_root(&self) -> Option<String> {
         self.repo_root.clone()
+    }
+
+    pub fn repo_id(&self) -> Option<String> {
+        self.repo_id.clone()
     }
 
     pub fn slash_completions(&self) -> Vec<String> {

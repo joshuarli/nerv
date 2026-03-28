@@ -76,6 +76,9 @@ struct FileEntry {
 /// have been modified since the last scan.
 struct SymbolCache {
     db: sqlite::Connection,
+    /// Repo root this cache is associated with. Paths stored as relative to this root.
+    /// `None` means absolute paths are used (legacy / non-git).
+    repo_root: Option<PathBuf>,
 }
 
 impl SymbolCache {
@@ -113,17 +116,36 @@ impl SymbolCache {
             stmt.bind((1, cutoff_ms)).ok();
             stmt.next().ok();
         }
-        Some(Self { db })
+        Some(Self { db, repo_root: None })
+    }
+
+    /// Attach a repo root so the cache stores relative paths instead of absolute ones.
+    /// Relative-path keys survive directory renames transparently.
+    fn with_repo_root(mut self, root: PathBuf) -> Self {
+        self.repo_root = Some(root);
+        self
+    }
+
+    /// Normalise an absolute path to the key stored in the DB.
+    /// With a `repo_root`, this is relative to the root; otherwise it's the absolute path.
+    fn cache_key<'a>(&self, path: &'a Path) -> std::borrow::Cow<'a, Path> {
+        if let Some(ref root) = self.repo_root {
+            if let Ok(rel) = path.strip_prefix(root) {
+                return std::borrow::Cow::Owned(rel.to_path_buf());
+            }
+        }
+        std::borrow::Cow::Borrowed(path)
     }
 
     /// Return cached symbols for `path` if the stored mtime matches `mtime`.
     fn get(&self, path: &Path, mtime: u128) -> Option<Vec<SymbolDef>> {
-        let path_str = path.to_string_lossy();
+        let key = self.cache_key(path);
+        let key_str = key.to_string_lossy();
         let mut stmt = self
             .db
             .prepare("SELECT data FROM symbol_cache WHERE path = ? AND mtime = ?")
             .ok()?;
-        stmt.bind((1, path_str.as_ref())).ok()?;
+        stmt.bind((1, key_str.as_ref())).ok()?;
         stmt.bind((2, mtime as i64)).ok()?;
         if stmt.next().ok()? == sqlite::State::Row {
             let json: String = stmt.read("data").ok()?;
@@ -135,37 +157,39 @@ impl SymbolCache {
 
     /// Store symbols for `path` at `mtime`, evicting any older entries.
     fn put(&self, path: &Path, mtime: u128, symbols: &[SymbolDef]) {
-        let path_str = path.to_string_lossy();
+        let key = self.cache_key(path);
+        let key_str = key.to_string_lossy();
         let json = match serde_json::to_string(symbols) {
             Ok(j) => j,
             Err(e) => {
-                crate::log::warn(&format!("symbol cache: serialize failed for {}: {}", path_str, e));
+                crate::log::warn(&format!("symbol cache: serialize failed for {}: {}", key_str, e));
                 return;
             }
         };
         // Delete all rows for this path, then insert the fresh one.
         if let Ok(mut stmt) = self.db.prepare("DELETE FROM symbol_cache WHERE path = ?") {
-            stmt.bind((1, path_str.as_ref())).ok();
+            stmt.bind((1, key_str.as_ref())).ok();
             stmt.next().ok();
         }
         if let Ok(mut stmt) = self
             .db
             .prepare("INSERT INTO symbol_cache (path, mtime, data) VALUES (?, ?, ?)")
         {
-            stmt.bind((1, path_str.as_ref())).ok();
+            stmt.bind((1, key_str.as_ref())).ok();
             stmt.bind((2, mtime as i64)).ok();
             stmt.bind((3, json.as_str())).ok();
             if let Err(e) = stmt.next() {
-                crate::log::warn(&format!("symbol cache: insert failed for {}: {}", path_str, e));
+                crate::log::warn(&format!("symbol cache: insert failed for {}: {}", key_str, e));
             }
         }
     }
 
     /// Remove the cache entry for a deleted file.
     fn remove(&self, path: &Path) {
-        let path_str = path.to_string_lossy();
+        let key = self.cache_key(path);
+        let key_str = key.to_string_lossy();
         if let Ok(mut stmt) = self.db.prepare("DELETE FROM symbol_cache WHERE path = ?") {
-            stmt.bind((1, path_str.as_ref())).ok();
+            stmt.bind((1, key_str.as_ref())).ok();
             stmt.next().ok();
         }
     }
@@ -215,6 +239,14 @@ impl SymbolIndex {
     /// Construct with a persistent on-disk cache at `nerv_dir/symbol_cache.db`.
     pub fn new_with_cache(nerv_dir: &Path) -> Self {
         Self::new_inner(SymbolCache::open(nerv_dir))
+    }
+
+    /// Create with a cache, and attach a repo root so paths are stored relative to it.
+    /// This makes the cache survive directory renames.
+    pub fn new_with_cache_and_root(nerv_dir: &Path, repo_root: &Path) -> Self {
+        let cache = SymbolCache::open(nerv_dir)
+            .map(|c| c.with_repo_root(repo_root.to_path_buf()));
+        Self::new_inner(cache)
     }
 
     fn new_inner(cache: Option<SymbolCache>) -> Self {

@@ -128,7 +128,7 @@ pub enum SessionCommand {
     SetCompactThreshold { pct: u8 },
     Export,
     Login { provider: String },
-    ListSessions { repo_root: Option<String> },
+    ListSessions { repo_root: Option<String>, repo_id: Option<String> },
     GetTree,
     SwitchBranch {
         entry_id: String,
@@ -1132,10 +1132,21 @@ pub fn session_task(
             SessionCommand::Login { provider } => {
                 handle_login(&provider, &mut session, &event_tx);
             }
-            SessionCommand::ListSessions { repo_root } => {
+            SessionCommand::ListSessions { repo_root, repo_id } => {
                 let mut sessions = session.session_manager.list_sessions();
-                // Filter by repo root if provided
-                if let Some(ref root) = repo_root {
+                // Filter by stable repo fingerprint when available; fall back to cwd-prefix
+                // for old sessions that pre-date the repo_id column.
+                if let Some(ref rid) = repo_id {
+                    sessions.retain(|s| {
+                        // If the stored session has a repo_id, match on it exactly.
+                        // If it doesn't (legacy row), fall back to the cwd-prefix check.
+                        match &s.repo_id {
+                            Some(stored_rid) => stored_rid == rid,
+                            None => repo_root.as_ref().map_or(true, |root| s.cwd.starts_with(root.as_str())),
+                        }
+                    });
+                } else if let Some(ref root) = repo_root {
+                    // No fingerprint (non-git dir) — fall back to cwd-prefix as before.
                     sessions.retain(|s| s.cwd.starts_with(root.as_str()));
                 }
                 let _ = event_tx.send(AgentSessionEvent::SessionList { sessions });

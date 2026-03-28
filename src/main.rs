@@ -645,7 +645,9 @@ fn main() {
     tui.request_render(true); // initial render
     tui.maybe_render(&layout);
 
-    let repo_root = nerv::find_repo_root(&cwd).map(|p| p.to_string_lossy().to_string());
+    let repo_root_path = nerv::find_repo_root(&cwd);
+    let repo_id = repo_root_path.as_deref().and_then(nerv::repo_fingerprint);
+    let repo_root = repo_root_path.map(|p| p.to_string_lossy().to_string());
     let mut interactive = InteractiveMode::new(
         cmd_tx,
         model_registry.clone(),
@@ -654,6 +656,7 @@ fn main() {
         initial_effort_level,
         skills,
         repo_root,
+        repo_id,
     );
 
     layout
@@ -696,6 +699,7 @@ fn main() {
         ResumeOpt::Picker => {
             let _ = interactive.cmd_tx().send(SessionCommand::ListSessions {
                 repo_root: interactive.repo_root(),
+                repo_id: interactive.repo_id(),
             });
         }
         ResumeOpt::None => {}
