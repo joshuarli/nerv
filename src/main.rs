@@ -1358,7 +1358,7 @@ fn list_all_models() {
     let nerv_dir = nerv_dir();
     let config = nerv::core::NervConfig::load(nerv_dir);
     let mut auth = nerv::core::auth::AuthStorage::load(nerv_dir);
-    let registry = nerv::core::model_registry::ModelRegistry::new(&config, &mut auth);
+    let registry = nerv::core::model_registry::ModelRegistry::new(&config, &mut auth, nerv_dir);
 
     let all = registry.all_models();
 

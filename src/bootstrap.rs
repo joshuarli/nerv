@@ -49,7 +49,7 @@ impl Default for BootstrapOptions {
 pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstrap {
     let config = NervConfig::load(nerv_dir);
     let mut auth = crate::core::auth::AuthStorage::load(nerv_dir);
-    let model_registry = Arc::new(ModelRegistry::new(&config, &mut auth));
+    let model_registry = Arc::new(ModelRegistry::new(&config, &mut auth, nerv_dir));
 
     // In talk mode we skip all project context, memory, and the symbol index
     // scan — the session is a plain conversational assistant with no tools.

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use super::auth::AuthStorage;
 use super::config::{CustomProviderConfig, NervConfig};
+use super::local_models::load_models;
 use crate::agent::provider::ProviderRegistry;
 use crate::agent::types::{Model, ModelPricing};
 use crate::agent::{AnthropicProvider, OpenAICompatProvider};
@@ -21,7 +22,7 @@ impl ModelRegistry {
         }
     }
 
-    pub fn new(config: &NervConfig, auth: &mut AuthStorage) -> Self {
+    pub fn new(config: &NervConfig, auth: &mut AuthStorage, nerv_dir: &std::path::Path) -> Self {
         let mut registry = ProviderRegistry::new();
 
         // Always include built-in models; available_models() filters by registered providers
@@ -75,6 +76,27 @@ impl ModelRegistry {
                     },
                 });
             }
+        }
+
+        // Register local GGUF models from ~/.nerv/models.json.
+        // Each model gets its own synthetic OpenAI-compat provider pointing at its port.
+        for local in load_models(nerv_dir) {
+            let provider_name = format!("local/{}", local.alias);
+            let base_url = format!("http://127.0.0.1:{}/v1", local.port);
+            let provider =
+                OpenAICompatProvider::new(provider_name.clone(), base_url, None);
+            registry.register(&provider_name, Arc::new(provider));
+            custom.push(Model {
+                id: local.alias.clone(),
+                name: local.alias.clone(),
+                provider_name,
+                context_window: local.context_length,
+                max_output_tokens: 32_000,
+                reasoning: false,
+                supports_adaptive_thinking: false,
+                supports_xhigh: false,
+                pricing: ModelPricing::default_custom(),
+            });
         }
 
         Self {
