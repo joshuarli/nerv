@@ -60,6 +60,10 @@ pub type PermissionFn = Arc<dyn Fn(&str, &serde_json::Value) -> bool + Send + Sy
 /// when context grows unexpectedly.
 pub type ContextGateFn = Arc<dyn Fn(ContextGateInfo) -> bool + Send + Sync>;
 
+/// Called after a tool executes successfully with (tool_name, arguments).
+/// Used to trigger side effects like updating the symbol index after file writes.
+pub type PostToolFn = Arc<dyn Fn(&str, &serde_json::Value) + Send + Sync>;
+
 #[derive(Debug, Clone)]
 pub struct ContextGateInfo {
     pub estimated_tokens: usize,
@@ -79,6 +83,7 @@ pub struct AgentState {
     pub is_streaming: bool,
     pub permission_fn: Option<PermissionFn>,
     pub context_gate_fn: Option<ContextGateFn>,
+    pub post_tool_fn: Option<PostToolFn>,
 }
 
 pub struct Agent {
@@ -103,6 +108,7 @@ impl Agent {
                 is_streaming: false,
                 permission_fn: None,
                 context_gate_fn: None,
+                post_tool_fn: None,
             },
             cancel: new_cancel_flag(),
             provider_registry,
@@ -533,6 +539,12 @@ impl Agent {
                         is_error: true,
                     }
                 };
+
+                if !result.is_error {
+                    if let Some(hook) = &self.state.post_tool_fn {
+                        hook(name, args);
+                    }
+                }
 
                 let display = result.details.as_ref().and_then(|d| {
                     d.get("display").and_then(|v| v.as_str()).map(|s| s.to_string())

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use tree_sitter::{Parser, Query, QueryCursor, StreamingIterator};
 
@@ -71,7 +71,11 @@ pub struct SymbolIndex {
     files: HashMap<PathBuf, FileEntry>,
     parser: Parser,
     query: Query,
+    last_scan: Option<Instant>,
 }
+
+/// Minimum interval between full directory scans.
+const SCAN_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// tree-sitter query for Rust symbol definitions.
 ///
@@ -107,13 +111,24 @@ impl SymbolIndex {
             files: HashMap::new(),
             parser,
             query,
+            last_scan: None,
         }
     }
 
     /// Index all `.rs` files under `root`, skipping files whose mtime hasn't changed.
+    /// Debounced: no-ops if called within `SCAN_DEBOUNCE` of the last scan.
     pub fn index_dir(&mut self, root: &Path) {
+        if let Some(last) = self.last_scan {
+            if last.elapsed() < SCAN_DEBOUNCE {
+                return;
+            }
+        }
+        self.force_index_dir(root);
+    }
+
+    /// Full scan ignoring debounce. Used in tests and after known-dirty events.
+    pub fn force_index_dir(&mut self, root: &Path) {
         let rs_files = collect_rs_files(root);
-        // Remove files that no longer exist
         self.files.retain(|path, _| rs_files.contains_key(path));
         for (path, mtime) in rs_files {
             if let Some(entry) = self.files.get(&path) {
@@ -126,6 +141,12 @@ impl SymbolIndex {
                 self.files.insert(path, FileEntry { mtime, symbols });
             }
         }
+        self.last_scan = Some(Instant::now());
+    }
+
+    /// Force the next `index_dir` call to do a full scan.
+    pub fn mark_dirty(&mut self) {
+        self.last_scan = None;
     }
 
     /// Re-index a single file (called after edit/write).
@@ -470,13 +491,13 @@ mod tests {
         std::fs::write(&f, "fn original() {}\n").unwrap();
 
         let mut index = SymbolIndex::new();
-        index.index_dir(tmp.path());
+        index.force_index_dir(tmp.path());
         assert_eq!(index.search("original", None, None).len(), 1);
 
         // Re-index without modifying the file — should be a no-op
         // (verifiable because parse count stays the same; we just check
         // the result is still valid)
-        index.index_dir(tmp.path());
+        index.force_index_dir(tmp.path());
         assert_eq!(index.search("original", None, None).len(), 1);
     }
 
@@ -487,14 +508,14 @@ mod tests {
         std::fs::write(&f, "fn first() {}\n").unwrap();
 
         let mut index = SymbolIndex::new();
-        index.index_dir(tmp.path());
+        index.force_index_dir(tmp.path());
         assert_eq!(index.search("first", None, None).len(), 1);
 
         // Slight delay to ensure mtime changes
         std::thread::sleep(std::time::Duration::from_millis(50));
         std::fs::write(&f, "fn second() {}\n").unwrap();
 
-        index.index_dir(tmp.path());
+        index.force_index_dir(tmp.path());
         assert_eq!(index.search("first", None, None).len(), 0);
         assert_eq!(index.search("second", None, None).len(), 1);
     }
@@ -506,11 +527,11 @@ mod tests {
         std::fs::write(&f, "fn gone() {}\n").unwrap();
 
         let mut index = SymbolIndex::new();
-        index.index_dir(tmp.path());
+        index.force_index_dir(tmp.path());
         assert_eq!(index.search("gone", None, None).len(), 1);
 
         std::fs::remove_file(&f).unwrap();
-        index.index_dir(tmp.path());
+        index.force_index_dir(tmp.path());
         assert_eq!(index.search("gone", None, None).len(), 0);
     }
 
@@ -551,7 +572,7 @@ mod tests {
         std::fs::write(tmp.path().join("b.rs"), "fn shared() {}\n").unwrap();
 
         let mut index = SymbolIndex::new();
-        index.index_dir(tmp.path());
+        index.force_index_dir(tmp.path());
         let results = index.search("shared", None, None);
         assert_eq!(results.len(), 2);
     }
@@ -565,7 +586,7 @@ mod tests {
         std::fs::write(sub.join("nested.rs"), "fn target() {}\n").unwrap();
 
         let mut index = SymbolIndex::new();
-        index.index_dir(tmp.path());
+        index.force_index_dir(tmp.path());
 
         let all = index.search("target", None, None);
         assert_eq!(all.len(), 2);
@@ -635,5 +656,29 @@ mod tests {
             "should recover valid symbols despite syntax errors: {:#?}",
             syms
         );
+    }
+
+    #[test]
+    fn debounce_skips_redundant_scans() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn first() {}\n").unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.index_dir(tmp.path());
+        assert_eq!(index.search("first", None, None).len(), 1);
+
+        // Write a new file, but index_dir should be debounced
+        std::fs::write(tmp.path().join("b.rs"), "fn second() {}\n").unwrap();
+        index.index_dir(tmp.path());
+        assert_eq!(
+            index.search("second", None, None).len(),
+            0,
+            "debounce should skip the scan"
+        );
+
+        // mark_dirty clears the debounce
+        index.mark_dirty();
+        index.index_dir(tmp.path());
+        assert_eq!(index.search("second", None, None).len(), 1);
     }
 }

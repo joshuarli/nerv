@@ -51,6 +51,9 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     let mutation_queue = Arc::new(FileMutationQueue::new());
     let mut tool_registry = ToolRegistry::new();
 
+    let symbols_tool = Arc::new(SymbolsTool::new(cwd.to_path_buf()));
+    let symbol_index = symbols_tool.index();
+
     let tools: Vec<Arc<dyn crate::agent::agent::AgentTool>> = {
         let mut t: Vec<Arc<dyn crate::agent::agent::AgentTool>> = vec![
             Arc::new(ReadTool::new(cwd.to_path_buf())),
@@ -60,7 +63,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
             Arc::new(GrepTool::new(cwd.to_path_buf())),
             Arc::new(FindTool::new(cwd.to_path_buf())),
             Arc::new(LsTool::new(cwd.to_path_buf())),
-            Arc::new(SymbolsTool::new(cwd.to_path_buf())),
+            symbols_tool,
         ];
         if opts.memory {
             t.push(Arc::new(MemoryTool::new(nerv_dir.to_path_buf())));
@@ -75,7 +78,38 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     let provider_registry = Arc::new(std::sync::RwLock::new(
         model_registry.provider_registry.clone(),
     ));
-    let agent = Agent::new(provider_registry);
+    let mut agent = Agent::new(provider_registry);
+
+    // After file-writing tools, update the symbol index for the affected file.
+    // For bash, mark the index dirty so the next symbols call does a full rescan.
+    {
+        let idx = symbol_index.clone();
+        let project_root = cwd.to_path_buf();
+        agent.state.post_tool_fn = Some(Arc::new(move |tool_name, args| {
+            match tool_name {
+                "edit" | "write" => {
+                    if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
+                        let path = if path_str.starts_with('/') {
+                            std::path::PathBuf::from(path_str)
+                        } else {
+                            project_root.join(path_str)
+                        };
+                        if path.extension().is_some_and(|e| e == "rs") {
+                            if let Ok(mut index) = idx.lock() {
+                                index.index_file(&path);
+                            }
+                        }
+                    }
+                }
+                "bash" => {
+                    if let Ok(mut index) = idx.lock() {
+                        index.mark_dirty();
+                    }
+                }
+                _ => {}
+            }
+        }));
+    }
     let cancel_flag = agent.cancel.clone();
 
     let session_manager = SessionManager::new(nerv_dir);
