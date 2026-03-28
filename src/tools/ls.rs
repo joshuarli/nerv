@@ -33,7 +33,7 @@ impl AgentTool for LsTool {
         "ls"
     }
     fn description(&self) -> &str {
-        "List directory contents using eza."
+        "List directory contents as a tree."
     }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({"type":"object","properties":{"path":{"type":"string"}},"required":[]})
@@ -44,7 +44,9 @@ impl AgentTool for LsTool {
     fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
         let path = input["path"].as_str().unwrap_or(".");
         let resolved_path = self.resolve_path(path);
-        match Command::new("eza")
+
+        // Prefer eza: tree output, respects .gitignore.
+        let output = Command::new("eza")
             .arg("--tree")
             .arg("-L2")
             .arg("--icons=never")
@@ -53,26 +55,41 @@ impl AgentTool for LsTool {
             .arg("--git-ignore")
             .arg(&resolved_path)
             .current_dir(&self.cwd)
-            .output()
-        {
-            Ok(output) => {
-                let tr = truncate_tail(&output.stdout, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let mut content = tr.content;
-                if !stderr.trim().is_empty() {
-                    if !content.is_empty() {
-                        content.push('\n');
-                    }
-                    content.push_str("[stderr]\n");
-                    content.push_str(stderr.trim());
+            .output();
+
+        let (stdout_bytes, stderr_str) = match output {
+            Ok(o) => (o.stdout, String::from_utf8_lossy(&o.stderr).into_owned()),
+            Err(_) => {
+                // eza not available — fall back to `find -maxdepth 2`
+                match Command::new("find")
+                    .arg(&resolved_path)
+                    .arg("-maxdepth")
+                    .arg("2")
+                    .arg("-not")
+                    .arg("-path")
+                    .arg("*/.*")
+                    .current_dir(&self.cwd)
+                    .output()
+                {
+                    Ok(o) => (o.stdout, String::from_utf8_lossy(&o.stderr).into_owned()),
+                    Err(e) => return ToolResult::error(format!("ls fallback failed: {}", e)),
                 }
-                let entry_count = content.lines()
-                    .filter(|l| !l.starts_with("[stderr]") && !l.is_empty())
-                    .count();
-                let display = format!("{} ({} entries)", path, entry_count);
-                ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
             }
-            Err(e) => ToolResult::error(format!("Error running eza: {}", e)),
+        };
+
+        let tr = truncate_tail(&stdout_bytes, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
+        let mut content = tr.content;
+        if !stderr_str.trim().is_empty() {
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str("[stderr]\n");
+            content.push_str(stderr_str.trim());
         }
+        let entry_count = content.lines()
+            .filter(|l| !l.starts_with("[stderr]") && !l.is_empty())
+            .count();
+        let display = format!("{} ({} entries)", path, entry_count);
+        ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
     }
 }
