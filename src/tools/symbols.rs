@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use crate::agent::provider::CancelFlag;
@@ -8,14 +8,14 @@ use crate::index::{SymbolIndex, SymbolKind};
 
 pub struct SymbolsTool {
     cwd: PathBuf,
-    index: Arc<Mutex<SymbolIndex>>,
+    index: Arc<RwLock<SymbolIndex>>,
 }
 
 impl SymbolsTool {
     pub fn new(cwd: PathBuf) -> Self {
         Self {
             cwd,
-            index: Arc::new(Mutex::new(SymbolIndex::new())),
+            index: Arc::new(RwLock::new(SymbolIndex::new())),
         }
     }
 
@@ -32,11 +32,11 @@ impl SymbolsTool {
         let _ = nerv_dir; // kept in signature for API stability; path now derived from cwd
         Self {
             cwd,
-            index: Arc::new(Mutex::new(index)),
+            index: Arc::new(RwLock::new(index)),
         }
     }
 
-    pub fn index(&self) -> Arc<Mutex<SymbolIndex>> {
+    pub fn index(&self) -> Arc<RwLock<SymbolIndex>> {
         self.index.clone()
     }
 
@@ -120,9 +120,12 @@ impl AgentTool for SymbolsTool {
 
         let file_path = file_filter.map(|f| self.resolve_path(f));
 
-        let mut idx = self.index.lock().unwrap();
-        idx.index_dir(&self.cwd);
-
+        // Fast path: read lock only — check if index is already current.
+        // Only escalate to a write lock when files have actually changed.
+        if !self.index.read().unwrap().is_fresh(&self.cwd) {
+            self.index.write().unwrap().index_dir(&self.cwd);
+        }
+        let idx = self.index.read().unwrap();
         let results = idx.search(query, kind_filter, file_path.as_deref());
         let total = results.len();
         let capped = total > MAX_RESULTS;

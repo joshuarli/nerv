@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use crate::agent::provider::CancelFlag;
@@ -9,11 +9,11 @@ use crate::index::SymbolIndex;
 
 pub struct CodemapTool {
     cwd: PathBuf,
-    index: Arc<Mutex<SymbolIndex>>,
+    index: Arc<RwLock<SymbolIndex>>,
 }
 
 impl CodemapTool {
-    pub fn new(cwd: PathBuf, index: Arc<Mutex<SymbolIndex>>) -> Self {
+    pub fn new(cwd: PathBuf, index: Arc<RwLock<SymbolIndex>>) -> Self {
         Self { cwd, index }
     }
 }
@@ -97,10 +97,13 @@ impl AgentTool for CodemapTool {
             depth,
         };
 
-        // Search while holding the lock, then release before file I/O.
+        // Fast path: check freshness under a read lock.
+        // Only take a write lock if something on disk has actually changed.
+        if !self.index.read().unwrap().is_fresh(&self.cwd) {
+            self.index.write().unwrap().index_dir(&self.cwd);
+        }
         let search_result = {
-            let mut idx = self.index.lock().unwrap();
-            idx.index_dir(&self.cwd);
+            let idx = self.index.read().unwrap();
             codemap::search(&idx, &params)
         };
 

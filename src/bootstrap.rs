@@ -82,7 +82,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
             let idx = symbol_index.clone();
             let root = cwd.to_path_buf();
             std::thread::spawn(move || {
-                if let Ok(mut index) = idx.lock() {
+                if let Ok(mut index) = idx.write() {
                     index.force_index_dir(&root);
                 }
             });
@@ -123,14 +123,14 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
                             project_root.join(path_str)
                         };
                         if path.extension().is_some_and(|e| e == "rs") {
-                            if let Ok(mut index) = symbol_index.lock() {
+                            if let Ok(mut index) = symbol_index.write() {
                                 index.index_file(&path);
                             }
                         }
                     }
                 }
                 "bash" => {
-                    if let Ok(mut index) = symbol_index.lock() {
+                    if let Ok(mut index) = symbol_index.write() {
                         index.mark_dirty();
                     }
                 }

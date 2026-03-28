@@ -86,6 +86,11 @@ struct SymbolCache {
     repo_root: Option<PathBuf>,
 }
 
+// sqlite::Connection wraps a *mut sqlite3 which is not Sync by default, but
+// SymbolCache is only ever accessed while the outer RwLock write guard is held,
+// so there is no actual concurrent access. The unsafety is sound.
+unsafe impl Sync for SymbolCache {}
+
 impl SymbolCache {
     fn open(repo_dir: &Path) -> Option<Self> {
         let _ = std::fs::create_dir_all(repo_dir);
@@ -269,8 +274,44 @@ impl SymbolIndex {
         }
     }
 
+    /// Check whether the index is already up-to-date for all `.rs` files under `root`.
+    ///
+    /// This is a **read-only** operation: it stats files on disk and compares
+    /// their mtimes against what is already indexed, but never mutates `self`.
+    /// Callers that hold a read lock can use this to bail out early without
+    /// ever acquiring a write lock:
+    ///
+    /// ```ignore
+    /// // Fast path: read lock only
+    /// if lock.read().unwrap().is_fresh(&cwd) { return; }
+    /// // Slow path: take write lock, re-check (double-checked locking), update
+    /// lock.write().unwrap().index_dir(&cwd);
+    /// ```
+    ///
+    /// Returns `true` if the debounce period has not elapsed *or* every file on
+    /// disk has a matching entry in the in-memory index (no parse needed).
+    pub fn is_fresh(&self, root: &Path) -> bool {
+        // Respect the same debounce window as index_dir so we don't stat the
+        // whole tree on every tool invocation.
+        if let Some(last) = self.last_scan {
+            if last.elapsed() < SCAN_DEBOUNCE {
+                return true;
+            }
+        }
+        let on_disk = collect_rs_files(root);
+        // Fresh if every file that exists on disk is already indexed at the
+        // same mtime, and no indexed file has disappeared (count matches).
+        on_disk.len() == self.files.len()
+            && on_disk
+                .iter()
+                .all(|(path, mtime)| self.files.get(path).is_some_and(|e| &e.mtime == mtime))
+    }
+
     /// Index all `.rs` files under `root`, skipping files whose mtime hasn't changed.
     /// Debounced: no-ops if called within `SCAN_DEBOUNCE` of the last scan.
+    ///
+    /// Prefer the two-phase pattern (see [`is_fresh`]) when holding an
+    /// `RwLock<SymbolIndex>` to avoid taking a write lock on warm invocations.
     pub fn index_dir(&mut self, root: &Path) {
         if let Some(last) = self.last_scan {
             if last.elapsed() < SCAN_DEBOUNCE {
