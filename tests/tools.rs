@@ -1396,3 +1396,79 @@ fn symbols_tool_no_results() {
     assert!(result.content.contains("No definitions found"), "{}", result.content);
 }
 
+// --- Codemap tool integration tests ---
+
+fn codemap_tool(tmp: &TempDir) -> CodemapTool {
+    use std::sync::Mutex;
+    let index = Arc::new(Mutex::new(nerv::index::SymbolIndex::new()));
+    CodemapTool::new(tmp.path().to_path_buf(), index)
+}
+
+#[test]
+fn codemap_tool_full_depth() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("lib.rs"),
+        "fn hello() {\n    println!(\"world\");\n}\n",
+    ).unwrap();
+
+    let tool = codemap_tool(&tmp);
+    let result = tool.execute(
+        serde_json::json!({"query": "hello", "depth": "full"}),
+        noop_update(),
+    );
+    assert!(!result.is_error);
+    assert!(result.content.contains("fn hello()"), "{}", result.content);
+    assert!(result.content.contains("println!"), "should contain body: {}", result.content);
+}
+
+#[test]
+fn codemap_tool_signatures_depth() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("lib.rs"),
+        "fn hello() {\n    println!(\"world\");\n}\n",
+    ).unwrap();
+
+    let tool = codemap_tool(&tmp);
+    let result = tool.execute(
+        serde_json::json!({"query": "hello", "depth": "signatures"}),
+        noop_update(),
+    );
+    assert!(!result.is_error);
+    assert!(result.content.contains("fn hello()"), "{}", result.content);
+    assert!(!result.content.contains("println!"), "should NOT contain body: {}", result.content);
+}
+
+#[test]
+fn codemap_tool_no_results() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("lib.rs"), "fn hello() {}\n").unwrap();
+
+    let tool = codemap_tool(&tmp);
+    let result = tool.execute(
+        serde_json::json!({"query": "nonexistent"}),
+        noop_update(),
+    );
+    assert!(!result.is_error);
+    assert!(result.content.contains("No symbols found"), "{}", result.content);
+}
+
+#[test]
+fn codemap_tool_kind_filter() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("lib.rs"),
+        "struct Foo;\nfn bar() {}\n",
+    ).unwrap();
+
+    let tool = codemap_tool(&tmp);
+    let result = tool.execute(
+        serde_json::json!({"query": "", "kind": "struct", "depth": "full"}),
+        noop_update(),
+    );
+    assert!(!result.is_error);
+    assert!(result.content.contains("Foo"), "{}", result.content);
+    assert!(!result.content.contains("bar"), "should not contain fn: {}", result.content);
+}
+

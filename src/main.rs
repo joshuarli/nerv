@@ -47,6 +47,7 @@ fn main() {
                 println!("  load [alias]         Run llama-server for a model");
                 println!("  models               List configured local models");
                 println!("  unload               Kill running llama-server");
+                println!("  codemap <query> [path]  Show symbol implementations matching query");
                 return;
             }
             "--version" => {
@@ -61,7 +62,7 @@ fn main() {
                 list_all_models();
                 return;
             }
-            "add" | "load" | "models" | "unload" | "export" => {
+            "add" | "load" | "models" | "unload" | "export" | "codemap" => {
                 let nerv_dir = nerv_dir();
                 std::fs::create_dir_all(nerv_dir).ok();
                 handle_subcommand(cmd, &args[2..], nerv_dir);
@@ -992,6 +993,51 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
                 Ok(path) => println!("Exported to {}", path),
                 Err(e) => { eprintln!("JSONL export failed: {}", e); std::process::exit(1); }
             }
+        }
+        "codemap" => {
+            if args.is_empty() {
+                eprintln!("Usage: nerv codemap <query> [path] [--kind <kind>] [--depth full|signatures]");
+                std::process::exit(1);
+            }
+            let query = &args[0];
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+            // Parse optional flags and positional path arg
+            let mut kind_str = None;
+            let mut file_str = None;
+            let mut depth_str = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--kind" => { kind_str = args.get(i + 1).map(|s| s.as_str()); i += 2; }
+                    "--file" => { file_str = args.get(i + 1).map(|s| s.as_str()); i += 2; }
+                    "--depth" => { depth_str = args.get(i + 1).map(|s| s.as_str()); i += 2; }
+                    s if !s.starts_with('-') && file_str.is_none() => {
+                        file_str = Some(s);
+                        i += 1;
+                    }
+                    _ => { i += 1; }
+                }
+            }
+
+            let kind = kind_str.and_then(nerv::index::codemap::parse_kind);
+            let depth = depth_str
+                .map(nerv::index::codemap::parse_depth)
+                .unwrap_or(nerv::index::codemap::Depth::Full);
+            let file_path = file_str.map(|f| {
+                if f.starts_with('/') { PathBuf::from(f) } else { cwd.join(f) }
+            });
+
+            let mut index = nerv::index::SymbolIndex::new();
+            index.force_index_dir(&cwd);
+
+            let params = nerv::index::codemap::CodemapParams {
+                query,
+                kind,
+                file: file_path.as_deref(),
+                depth,
+            };
+            println!("{}", nerv::index::codemap::codemap(&index, &cwd, &params));
         }
         _ => {
             eprintln!("Unknown command: {}. Try nerv --help", cmd);

@@ -33,7 +33,8 @@ src/
 │   ├── openai_compat.rs       # OpenAI-compatible (llama-server, Ollama)
 │   └── agent.rs               # Agentic loop: stream → tool calls → permissions → context gate → loop
 ├── index/
-│   └── mod.rs                 # tree-sitter symbol index (Rust), incremental by mtime
+│   ├── mod.rs                 # tree-sitter symbol index (Rust), incremental by mtime
+│   └── codemap.rs             # codemap core: symbol search → source body assembly
 ├── tools/
 │   ├── read.rs                # Whole-file read with line numbers + mtime cache
 │   ├── edit.rs                # Single + multi-edit, fuzzy match, BOM/CRLF
@@ -43,6 +44,7 @@ src/
 │   ├── find.rs                # fd wrapper
 │   ├── ls.rs                  # eza tree wrapper
 │   ├── symbols.rs             # tree-sitter symbol lookup tool (definitions + references)
+│   ├── codemap.rs             # codemap agent tool (thin wrapper over index/codemap)
 │   ├── memory.rs              # Persistent memory read/add/remove
 │   ├── diff.rs                # In-process Myers diff (replaced `similar` crate)
 │   ├── file_mutation_queue.rs # Per-file mutex for concurrent writes
@@ -95,6 +97,7 @@ src/
 - **Per-turn token deltas**: statusbar shows marginal cost (↑800 ↓110), footer shows cumulative context
 - **SQLite sessions**: WAL mode, entries table with parent_id chain, 12µs listing
 - **Context optimization**: 12 zero-LLM-cost transforms in `transform_context` (strip thinking, denied args, orphans; truncate stale results; superseded result dedup for read/grep/ls/find/edit; bash success compression; stale edit arg stripping; compact diff in edit results; read result folding around referenced lines; adaptive stale cutoff; tool description pruning after 4 turns) plus tool-level optimizations (read mtime cache, auto-size small files, grep context lines) and a circuit breaker for unexpected context growth. See [docs/context.md](docs/context.md).
+- **Codemap**: on-demand tool that assembles source bodies for matching symbols across files (`src/index/codemap.rs`). Two modes: `signatures` (index-only, no disk reads) and `full` (reads source line ranges). Budget caps output at 4000 lines with demotion. Also exposed as CLI subcommand (`nerv codemap <query>`). Core logic is independent of the tool/CLI layer for testability.
 - **Symbol index**: tree-sitter-based symbol index (`src/index/`) gives the model structured access to definitions (functions, methods, structs, enums, traits, types, consts, macros) with signatures and parent scopes. Initial scan runs on a background thread at bootstrap; the mutex serves as the join — if `symbols` is called before the scan finishes, it blocks on `lock()`. After file-writing tools, a `PostToolFn` callback does targeted `index_file` for the affected path (or `mark_dirty` after bash). Full rescans are debounced to 5s. Replaces multi-round-trip grep/read cycles with a single structured lookup.
 - **Per-API-call token tracking**: each `AssistantMessage` carries its own `Usage` from its API call. Footer shows cumulative API usage `(N calls, Mk tok)` when multiple calls occur in one turn.
 - **Context circuit breaker**: `ContextGateFn` callback in `stream_response` — prompts user to confirm when context grows >20k tokens AND >30% between consecutive API calls (skips first 4 rounds for warmup)

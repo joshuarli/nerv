@@ -1,4 +1,5 @@
 pub mod bash;
+pub mod codemap;
 pub mod diff;
 pub mod edit;
 pub mod file_mutation_queue;
@@ -12,6 +13,7 @@ pub mod truncate;
 pub mod write;
 
 pub use bash::BashTool;
+pub use codemap::CodemapTool;
 pub use edit::EditTool;
 pub use file_mutation_queue::FileMutationQueue;
 pub use find::FindTool;

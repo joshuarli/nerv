@@ -1,6 +1,6 @@
 # Built-in Tools
 
-Nerv provides 9 tools to the LLM. All execute synchronously in the session
+Nerv provides 10 tools to the LLM. All execute synchronously in the session
 thread. File-mutating tools (`edit`, `write`) serialize through a per-file
 mutex to prevent concurrent writes to the same path.
 
@@ -168,6 +168,30 @@ List directory contents as a tree.
 | `path` | string | no (default `.`) |
 
 Runs `eza --tree -L2 --icons=never {path}`. Output is tail-truncated.
+
+## codemap
+
+Show symbol implementations from the codebase. Uses the tree-sitter symbol
+index to find matching definitions, reads their source bodies from disk, and
+returns a structured assembly grouped by file. Replaces multiple `read` calls
+when the model needs to understand how something works.
+
+| Param | Type | Required | Default |
+|---|---|---|---|
+| `query` | string | yes | — |
+| `kind` | string | no | all kinds |
+| `file` | string | no | whole project |
+| `depth` | string (`signatures`/`full`) | no | `signatures` |
+
+**Depth modes**:
+- `signatures`: one-line signature per symbol, no disk reads beyond the index
+- `full`: complete source bodies for matched symbols, read from disk
+
+Output is grouped by file with line numbers. If total output exceeds ~4000
+lines, excess symbols are demoted from `full` to `signatures`.
+
+Also available as a CLI subcommand: `nerv codemap <query> [--kind <kind>]
+[--file <path>] [--depth full|signatures]`. CLI defaults to `full` depth.
 
 ## memory
 
