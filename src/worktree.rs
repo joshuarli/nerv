@@ -38,6 +38,8 @@ pub fn create_worktree(
 
     let output = std::process::Command::new("git")
         .args([
+            "-c",
+            "core.lockTimeout=30000", // wait up to 30s for .git/index.lock
             "worktree",
             "add",
             &wt_path.to_string_lossy(),
