@@ -227,6 +227,103 @@ fn highlight_for_html(text: &str) -> String {
     out
 }
 
+/// Build a concise args preview string for the tool-call header.
+/// For edit/read we prefer a path-based summary over the full JSON dump.
+fn args_preview_for(name: &str, arguments: &serde_json::Value, args_str: &str) -> String {
+    match name {
+        "read" => {
+            let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let mut s = path.to_string();
+            if let Some(offset) = arguments.get("offset").and_then(|v| v.as_u64()) {
+                s.push_str(&format!("  offset={offset}"));
+            }
+            if let Some(limit) = arguments.get("limit").and_then(|v| v.as_u64()) {
+                s.push_str(&format!("  limit={limit}"));
+            }
+            s
+        }
+        "edit" => {
+            // Show the path(s) being edited
+            if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+                path.to_string()
+            } else if let Some(edits) = arguments.get("edits").and_then(|v| v.as_array()) {
+                // multi-edit: collect unique paths if present, otherwise fall back
+                let path = arguments.get("path").and_then(|v| v.as_str());
+                if let Some(p) = path {
+                    p.to_string()
+                } else {
+                    // path is a sibling of edits at the top level for multi-edit
+                    args_str[..args_str.floor_char_boundary(120.min(args_str.len()))].to_string()
+                        + if args_str.len() > 120 { "..." } else { "" }
+                }
+            } else {
+                let n = args_str.len().min(120);
+                args_str[..args_str.floor_char_boundary(n)].to_string()
+                    + if args_str.len() > 120 { "..." } else { "" }
+            }
+        }
+        _ => {
+            if args_str.len() > 120 {
+                format!("{}...", &args_str[..args_str.floor_char_boundary(120)])
+            } else {
+                args_str.to_string()
+            }
+        }
+    }
+}
+
+/// Render numbered file content as syntax-highlighted HTML.
+/// Detects language from the path argument to give better highlighting.
+fn render_file_content_html(content: &str, arguments: &serde_json::Value) -> String {
+    use crate::tui::highlight::{highlight_line_html, rules_for_lang, HlState};
+
+    let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let lang = if path.ends_with(".rs") {
+        "rust"
+    } else if path.ends_with(".py") {
+        "python"
+    } else if path.ends_with(".js") || path.ends_with(".ts") || path.ends_with(".jsx") || path.ends_with(".tsx") {
+        "javascript"
+    } else if path.ends_with(".sh") || path.ends_with(".bash") {
+        "bash"
+    } else if path.ends_with(".toml") || path.ends_with(".json") || path.ends_with(".yaml") || path.ends_with(".yml") {
+        "toml"
+    } else {
+        // Guess from content (same heuristics as highlight_for_html)
+        let first = content.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        if first.contains("fn ") && content.contains("->") { "rust" }
+        else if content.contains("\ndef ") { "python" }
+        else if content.contains("function ") || content.contains("const ") { "javascript" }
+        else { "bash" }
+    };
+
+    let Some(rules) = rules_for_lang(lang) else {
+        return html_escape(content);
+    };
+
+    let mut out = String::with_capacity(content.len() * 2);
+    let mut state = HlState::Normal;
+    for line in content.lines() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        // Each line is "NNN\tcontent" — highlight everything after the tab as code,
+        // keep the line number prefix as plain (grey) text.
+        if let Some(tab_pos) = line.find('\t') {
+            let (num, rest) = line.split_at(tab_pos);
+            let rest = &rest[1..]; // skip the tab
+            out.push_str(&format!(
+                "<span style='color:#4a5568;user-select:none'>{}\t</span>",
+                html_escape_no_br(num)
+            ));
+            out.push_str(&highlight_line_html(rest, &mut state, rules));
+        } else {
+            out.push_str(&highlight_line_html(line, &mut state, rules));
+        }
+    }
+    out
+}
+
 fn render_html_to_file(
     entries: &[SessionEntry],
     path: &std::path::Path,
@@ -308,6 +405,56 @@ function toggleTool(header) {
 "#,
     );
 
+    // Prepass: build lookup maps for tool results so we can inline them into ToolCall divs.
+    // call_id → tool_name (from Assistant messages)
+    let mut call_name: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    // call_id → (display_text, content_text, is_error)
+    let mut call_result: std::collections::HashMap<String, (Option<String>, String, bool)> =
+        std::collections::HashMap::new();
+    for entry in entries.iter() {
+        if let SessionEntry::Message(me) = entry {
+            match &me.message {
+                AgentMessage::Assistant(a) => {
+                    for block in &a.content {
+                        if let ContentBlock::ToolCall { id, name, .. } = block {
+                            call_name.insert(id.clone(), name.clone());
+                        }
+                    }
+                }
+                AgentMessage::ToolResult {
+                    tool_call_id, content, is_error, display, ..
+                } => {
+                    let content_text = content
+                        .iter()
+                        .filter_map(|c| {
+                            if let ContentItem::Text { text } = c {
+                                Some(text.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    call_result.insert(
+                        tool_call_id.clone(),
+                        (display.clone(), content_text, *is_error),
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // For edit and read tool calls, we inline the result into the tool-call div and skip the
+    // separate "output" div. Track which call_ids are handled this way.
+    let inlined_calls: std::collections::HashSet<String> = call_name
+        .iter()
+        .filter(|(id, name)| {
+            matches!(name.as_str(), "edit" | "read") && call_result.contains_key(id.as_str())
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+
     let mut tool_idx = 0;
     for entry in entries {
         if let SessionEntry::SystemPrompt(sp) = entry {
@@ -336,16 +483,14 @@ function toggleTool(header) {
                             ContentBlock::Text { text } if !text.is_empty() => {
                                 html.push_str(&markdown_to_html(text));
                             }
-                            ContentBlock::ToolCall {
-                                name, arguments, ..
-                            } => {
+                            ContentBlock::ToolCall { id, name, arguments } => {
                                 let args_str = serde_json::to_string_pretty(arguments)
                                     .unwrap_or_else(|_| arguments.to_string());
-                                let args_preview = if args_str.len() > 120 {
-                                    format!("{}...", &args_str[..args_str.floor_char_boundary(120)])
-                                } else {
-                                    args_str.clone()
-                                };
+
+                                // For edit and read, show a condensed args summary in the header
+                                // and render the actual result (diff / file content) in the body.
+                                let args_preview = args_preview_for(name, arguments, &args_str);
+
                                 html.push_str(&format!(
                                     "<div class='tool-wrapper'>\
                                     <div class='tool-header collapsed' onclick='toggleTool(this)'>\
@@ -357,7 +502,40 @@ function toggleTool(header) {
                                     html_escape(&args_preview),
                                     tool_idx,
                                 ));
-                                html.push_str(&highlight_for_html(&args_str));
+
+                                if inlined_calls.contains(id) {
+                                    // Inline the tool result (diff for edit, file content for read)
+                                    if let Some((display, content_text, _is_err)) =
+                                        call_result.get(id)
+                                    {
+                                        let body = match name.as_str() {
+                                            "edit" => {
+                                                // display = unified diff
+                                                if let Some(d) = display {
+                                                    highlight_diff_html(d)
+                                                } else {
+                                                    highlight_for_html(content_text)
+                                                }
+                                            }
+                                            "read" => {
+                                                // content_text = file with line numbers;
+                                                // display is just a terse summary, skip it.
+                                                if !content_text.is_empty() {
+                                                    render_file_content_html(content_text, arguments)
+                                                } else if let Some(d) = display {
+                                                    highlight_for_html(d)
+                                                } else {
+                                                    String::new()
+                                                }
+                                            }
+                                            _ => highlight_for_html(content_text),
+                                        };
+                                        html.push_str(&body);
+                                    }
+                                } else {
+                                    html.push_str(&highlight_for_html(&args_str));
+                                }
+
                                 html.push_str("</div></div>\n");
                                 tool_idx += 1;
                             }
@@ -378,8 +556,12 @@ function toggleTool(header) {
                     html.push_str("</div>\n");
                 }
                 AgentMessage::ToolResult {
-                    content, is_error, display, ..
+                    tool_call_id, content, is_error, display, ..
                 } => {
+                    // Skip tool results that were already inlined into the tool-call div above.
+                    if inlined_calls.contains(tool_call_id) {
+                        continue;
+                    }
                     // Prefer the rich display (e.g. unified diff) over the terse LLM content.
                     let display_text: String = if let Some(d) = display {
                         d.clone()
