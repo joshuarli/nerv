@@ -243,7 +243,7 @@ impl InteractiveMode {
                     layout.footer.set_session_name(None);
                 }
             }
-            AgentSessionEvent::SessionLoaded { messages } => {
+            AgentSessionEvent::SessionLoaded { messages, cost_usd } => {
                 // Dump full history to terminal scrollback
                 let mut scrollback = String::new();
                 for msg in &messages {
@@ -360,6 +360,8 @@ impl InteractiveMode {
                     .sum();
                 layout.footer.reset_context();
                 layout.footer.set_context_used(context_tokens as u32);
+                // Restore accumulated cost from the session DB (after reset_context clears it).
+                layout.footer.restore_cost(cost_usd);
 
                 self.status_message = if messages.is_empty() {
                     Some("New session started.".into())

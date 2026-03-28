@@ -109,6 +109,13 @@ pub struct TokenInfo {
     pub cache_write: u32,
     pub context_used: u32,
     pub context_window: u32,
+    /// Computed cost in USD for this API call. Zero for legacy entries.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub cost_usd: f64,
+}
+
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

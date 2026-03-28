@@ -5,9 +5,14 @@ use super::types::*;
 use crate::agent::types::{AgentMessage, ContentBlock, ContentItem, ThinkingLevel};
 
 pub struct SessionContext {
+    /// Messages for the agent's context window (post-compaction only).
     pub messages: Vec<AgentMessage>,
+    /// Full branch history for UI display (includes pre-compaction messages).
+    pub full_history: Vec<AgentMessage>,
     pub model: Option<(String, String)>,
     pub thinking_level: ThinkingLevel,
+    /// Accumulated cost in USD across all API calls in this session branch.
+    pub cost_usd: f64,
 }
 
 pub struct SessionManager {
@@ -442,6 +447,15 @@ impl SessionManager {
         let mut model: Option<(String, String)> = None;
         let mut thinking_level = ThinkingLevel::Off;
 
+        // Accumulate cost from all MessageEntry records in the branch.
+        let cost_usd: f64 = branch.iter().fold(0.0, |acc, e| {
+            if let SessionEntry::Message(me) = e {
+                acc + me.tokens.as_ref().map(|t| t.cost_usd).unwrap_or(0.0)
+            } else {
+                acc
+            }
+        });
+
         let last_compact = branch.iter().enumerate().rev().find_map(|(i, e)| match e {
             SessionEntry::Compaction(c) => Some((i, c)),
             _ => None,
@@ -460,6 +474,17 @@ impl SessionManager {
         } else {
             0
         };
+
+        // Full history for UI display — all messages from the branch, ordered.
+        // Includes pre-compaction messages so the scrollback shows everything.
+        let mut full_history: Vec<AgentMessage> = Vec::new();
+        for entry in branch.iter() {
+            match entry {
+                SessionEntry::Message(e) => full_history.push(e.message.clone()),
+                SessionEntry::CustomMessage(e) => full_history.push(e.message.clone()),
+                _ => {}
+            }
+        }
 
         for entry in branch.iter().skip(walk_start) {
             match entry {
@@ -482,8 +507,10 @@ impl SessionManager {
 
         SessionContext {
             messages,
+            full_history,
             model,
             thinking_level,
+            cost_usd,
         }
     }
 
