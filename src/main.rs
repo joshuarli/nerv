@@ -32,12 +32,18 @@ enum Cmd {
         model: Option<String>,
         resume: ResumeOpt,
         log_level: Option<String>,
+        prompt: Option<String>,
+        thinking: bool,
+        effort: Option<EffortLevel>,
     },
     /// Interactive TUI session inside a fresh git worktree
     Wt {
         branch: String,
         model: Option<String>,
         log_level: Option<String>,
+        prompt: Option<String>,
+        thinking: bool,
+        effort: Option<EffortLevel>,
     },
     /// Headless: read prompt from stdin, stream JSON to stdout
     Print {
@@ -51,6 +57,9 @@ enum Cmd {
     Talk {
         model: Option<String>,
         log_level: Option<String>,
+        prompt: Option<String>,
+        thinking: bool,
+        effort: Option<EffortLevel>,
     },
     // --- one-shot subcommands ---
     Models,
@@ -117,7 +126,7 @@ fn parse_args() -> Cmd {
         Ok(Some(arg)) => arg,
         Ok(None) => {
             // No args — plain interactive mode.
-            return Cmd::Interactive { model: None, resume: ResumeOpt::None, log_level: None };
+            return Cmd::Interactive { model: None, resume: ResumeOpt::None, log_level: None, prompt: None, thinking: false, effort: None };
         }
         Err(e) => {
             eprintln!("error: {e}. Try: nerv --help");
@@ -146,9 +155,12 @@ fn parse_args() -> Cmd {
         }
         // ── subcommands ──────────────────────────────────────────────────────
         Value(v) if v == "talk" => {
-            // talk [-h] [--model M] [--log-level L]
+            // talk [-h] [--model M] [--log-level L] [--prompt P] [--thinking] [--effort E]
             let mut talk_model: Option<String> = None;
             let mut talk_log: Option<String> = None;
+            let mut talk_prompt: Option<String> = None;
+            let mut talk_thinking = false;
+            let mut talk_effort: Option<EffortLevel> = None;
             loop {
                 match parser.next() {
                     Ok(None) => break,
@@ -161,6 +173,9 @@ fn parse_args() -> Cmd {
                         println!("Options:");
                         println!("  --model <name>      Model to use");
                         println!("  --log-level <lvl>   Log level (debug, info, warn, error)");
+                        println!("  --prompt <text>     Send an initial prompt automatically");
+                        println!("  --thinking          Enable extended thinking");
+                        println!("  --effort <level>    Thinking effort: off|low|medium|high|max");
                         println!("  -h, --help          Show this help");
                         std::process::exit(0);
                     }
@@ -176,6 +191,19 @@ fn parse_args() -> Cmd {
                             std::process::exit(1);
                         }).string().unwrap());
                     }
+                    Ok(Some(Long("prompt"))) => {
+                        talk_prompt = Some(parser.value().unwrap_or_else(|_| {
+                            eprintln!("--prompt requires a value");
+                            std::process::exit(1);
+                        }).string().unwrap());
+                    }
+                    Ok(Some(Long("thinking"))) => talk_thinking = true,
+                    Ok(Some(Long("effort"))) => {
+                        talk_effort = Some(parse_effort_level(&parser.value().unwrap_or_else(|_| {
+                            eprintln!("--effort requires a value");
+                            std::process::exit(1);
+                        }).string().unwrap()));
+                    }
                     Ok(Some(arg)) => {
                         eprintln!("nerv talk: unexpected argument. Try: nerv talk --help");
                         eprintln!("  {}", arg.unexpected());
@@ -187,7 +215,7 @@ fn parse_args() -> Cmd {
                     }
                 }
             }
-            return Cmd::Talk { model: talk_model, log_level: talk_log };
+            return Cmd::Talk { model: talk_model, log_level: talk_log, prompt: talk_prompt, thinking: talk_thinking, effort: talk_effort };
         }
         Value(v) if v == "resume" => {
             // resume [-h] [id]
@@ -264,9 +292,12 @@ fn parse_args() -> Cmd {
             return Cmd::Print { model: p_model, max_turns, verbose };
         }
         Value(v) if v == "wt" => {
-            // wt [-h] <branch> [--model M] [--log-level L]
+            // wt [-h] <branch> [--model M] [--log-level L] [--prompt P] [--thinking] [--effort E]
             let mut wt_model: Option<String> = None;
             let mut wt_log: Option<String> = None;
+            let mut wt_prompt: Option<String> = None;
+            let mut wt_thinking = false;
+            let mut wt_effort: Option<EffortLevel> = None;
             let mut branch: Option<String> = None;
             loop {
                 match parser.next() {
@@ -284,6 +315,9 @@ fn parse_args() -> Cmd {
                         println!("Options:");
                         println!("  --model <name>      Model to use");
                         println!("  --log-level <lvl>   Log level (debug, info, warn, error)");
+                        println!("  --prompt <text>     Send an initial prompt automatically");
+                        println!("  --thinking          Enable extended thinking");
+                        println!("  --effort <level>    Thinking effort: off|low|medium|high|max");
                         println!("  -h, --help          Show this help");
                         std::process::exit(0);
                     }
@@ -298,6 +332,19 @@ fn parse_args() -> Cmd {
                             eprintln!("--log-level requires a value");
                             std::process::exit(1);
                         }).string().unwrap());
+                    }
+                    Ok(Some(Long("prompt"))) => {
+                        wt_prompt = Some(parser.value().unwrap_or_else(|_| {
+                            eprintln!("--prompt requires a value");
+                            std::process::exit(1);
+                        }).string().unwrap());
+                    }
+                    Ok(Some(Long("thinking"))) => wt_thinking = true,
+                    Ok(Some(Long("effort"))) => {
+                        wt_effort = Some(parse_effort_level(&parser.value().unwrap_or_else(|_| {
+                            eprintln!("--effort requires a value");
+                            std::process::exit(1);
+                        }).string().unwrap()));
                     }
                     Ok(Some(Value(v))) if branch.is_none() => {
                         branch = Some(v.string().unwrap());
@@ -317,7 +364,7 @@ fn parse_args() -> Cmd {
                 eprintln!("nerv wt: branch name required. Try: nerv wt --help");
                 std::process::exit(1);
             });
-            return Cmd::Wt { branch, model: wt_model, log_level: wt_log };
+            return Cmd::Wt { branch, model: wt_model, log_level: wt_log, prompt: wt_prompt, thinking: wt_thinking, effort: wt_effort };
         }
         Value(v) if v == "models" => {
             if matches!(parser.next(), Ok(Some(Short('h') | Long("help")))) {
@@ -413,7 +460,10 @@ fn parse_args() -> Cmd {
         }
     }
 
-    // Remaining args for interactive mode (--model / --log-level / --wt may follow).
+    // Remaining args for interactive mode (--model / --log-level / --prompt / --thinking / --effort may follow).
+    let mut prompt: Option<String> = None;
+    let mut thinking = false;
+    let mut effort: Option<EffortLevel> = None;
     loop {
         match parser.next() {
             Ok(None) => break,
@@ -428,6 +478,19 @@ fn parse_args() -> Cmd {
                     eprintln!("--log-level requires a value");
                     std::process::exit(1);
                 }).string().unwrap());
+            }
+            Ok(Some(Long("prompt"))) => {
+                prompt = Some(parser.value().unwrap_or_else(|_| {
+                    eprintln!("--prompt requires a value");
+                    std::process::exit(1);
+                }).string().unwrap());
+            }
+            Ok(Some(Long("thinking"))) => thinking = true,
+            Ok(Some(Long("effort"))) => {
+                effort = Some(parse_effort_level(&parser.value().unwrap_or_else(|_| {
+                    eprintln!("--effort requires a value");
+                    std::process::exit(1);
+                }).string().unwrap()));
             }
             Ok(Some(Short('h') | Long("help"))) => {
                 print_top_help();
@@ -449,7 +512,21 @@ fn parse_args() -> Cmd {
         }
     }
 
-    Cmd::Interactive { model, resume, log_level }
+    Cmd::Interactive { model, resume, log_level, prompt, thinking, effort }
+}
+
+/// Parse an --effort flag value; exits on unrecognised input.
+fn parse_effort_level(s: &str) -> EffortLevel {
+    match s {
+        "low"    => EffortLevel::Low,
+        "medium" => EffortLevel::Medium,
+        "high"   => EffortLevel::High,
+        "max"    => EffortLevel::Max,
+        other => {
+            eprintln!("--effort: unknown level '{other}'. Choose: low, medium, high, max");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Drain remaining positional values from a lexopt parser into a Vec<String>.
@@ -629,17 +706,20 @@ fn main() {
     // ── TUI startup ─────────────────────────────────────────────────────────
 
     // Re-destructure for the TUI-launching variants.
-    let (opt_model, resume_opt, log_level_opt, wt_opt, mut talk_mode) = match cmd {
-        Cmd::Interactive { model, resume, log_level } => (model, resume, log_level, None, false),
-        Cmd::Wt { branch, model, log_level } => (model, ResumeOpt::None, log_level, Some(branch), false),
+    let (opt_model, resume_opt, log_level_opt, wt_opt, mut talk_mode, opt_prompt, opt_thinking, opt_effort) = match cmd {
+        Cmd::Interactive { model, resume, log_level, prompt, thinking, effort } =>
+            (model, resume, log_level, None, false, prompt, thinking, effort),
+        Cmd::Wt { branch, model, log_level, prompt, thinking, effort } =>
+            (model, ResumeOpt::None, log_level, Some(branch), false, prompt, thinking, effort),
         Cmd::Resume { id } => {
             let resume = match id {
                 Some(id) => ResumeOpt::Session(id),
                 None    => ResumeOpt::Picker,
             };
-            (None, resume, None, None, false)
+            (None, resume, None, None, false, None, false, None)
         }
-        Cmd::Talk { model, log_level } => (model, ResumeOpt::None, log_level, None, true),
+        Cmd::Talk { model, log_level, prompt, thinking, effort } =>
+            (model, ResumeOpt::None, log_level, None, true, prompt, thinking, effort),
         _ => unreachable!(),
     };
 
@@ -892,6 +972,23 @@ fn main() {
             });
         }
         ResumeOpt::None => {}
+    }
+
+    // Apply --thinking / --effort flags
+    if opt_thinking {
+        let _ = interactive.cmd_tx().try_send(SessionCommand::SetThinkingLevel {
+            level: nerv::agent::ThinkingLevel::On,
+        });
+    }
+    if let Some(effort) = opt_effort {
+        let _ = interactive.cmd_tx().try_send(SessionCommand::SetEffortLevel {
+            level: Some(effort),
+        });
+    }
+
+    // Apply --prompt: send as the initial user message once the TUI is up
+    if let Some(text) = opt_prompt {
+        let _ = interactive.cmd_tx().send(SessionCommand::Prompt { text });
     }
 
     // Health check custom providers (non-blocking, retries until online)

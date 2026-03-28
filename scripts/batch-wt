@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""
+batch-wt — launch one tmux window per task in a jobs file
+
+Usage:
+    batch-wt jobs.txt [options]
+
+Options:
+    --model <name>      Model to use (default: claude-sonnet-4-6)
+    --thinking          Enable extended thinking
+    --effort <level>    Thinking effort: off|low|medium|high|max
+    -h, --help          Show this help
+
+Jobs file format:
+    Description of task 1
+
+    ---
+
+    Description of task 2
+
+Each task gets:
+  - a branch slug derived from its first line (stopwords stripped, max 5 words,
+    capped at 50 chars)
+  - a tmux window name (max 10 chars, never mid-word)
+  - a new tmux window running: nerv wt <slug> --model <m> [--thinking] [--effort <e>]
+    with the full task text passed via --prompt
+"""
+
+import os
+import re
+import sys
+import shlex
+import subprocess
+
+# ── slug generation ───────────────────────────────────────────────────────────
+
+STOPWORDS = {
+    "a", "an", "the", "and", "or", "but", "if", "in", "on", "at", "to",
+    "for", "of", "with", "by", "from", "that", "this", "is", "are", "was",
+    "be", "have", "has", "do", "does", "its", "it", "all", "as", "so",
+}
+
+def slugify(text: str, max_words: int = 5, max_chars: int = 50) -> str:
+    # Use the first non-empty line, truncated at sentence-ending punctuation
+    first_line = ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            first_line = re.split(r"[.!?]", line)[0]
+            break
+
+    # Lowercase, collapse non-alphanumeric runs to spaces
+    clean = re.sub(r"[^a-z0-9]+", " ", first_line.lower()).strip()
+
+    words = [w for w in clean.split() if w not in STOPWORDS][:max_words]
+    slug = "-".join(words) or "task"
+
+    # Hard cap at max_chars, never cut mid-word
+    if len(slug) > max_chars:
+        slug = slug[:max_chars].rsplit("-", 1)[0] or slug[:max_chars]
+
+    return slug
+
+
+def window_name(slug: str, max_len: int = 10) -> str:
+    """Trim slug to max_len chars without cutting mid-word."""
+    if len(slug) <= max_len:
+        return slug
+    trunc = slug[:max_len]
+    # Only walk back to a word boundary if position max_len landed inside a word
+    if slug[max_len] != "-" and "-" in trunc:
+        return trunc.rsplit("-", 1)[0]
+    return trunc
+
+
+def unique_slug(base: str, seen: dict) -> str:
+    if base not in seen:
+        seen[base] = 1
+        return base
+    seen[base] += 1
+    return f"{base}-{seen[base]}"
+
+
+# ── task parsing ──────────────────────────────────────────────────────────────
+
+SEPARATOR = re.compile(r"^\s*---\s*$")
+
+def parse_tasks(text: str) -> list[str]:
+    tasks = []
+    current: list[str] = []
+    for line in text.splitlines():
+        if SEPARATOR.match(line):
+            block = "\n".join(current).strip()
+            if block:
+                tasks.append(block)
+            current = []
+        else:
+            current.append(line)
+    block = "\n".join(current).strip()
+    if block:
+        tasks.append(block)
+    return tasks
+
+
+# ── arg parsing ───────────────────────────────────────────────────────────────
+
+def parse_args(argv: list[str]) -> tuple[str, str, bool, str | None]:
+    """Returns (jobs_file, model, thinking, effort_or_None)."""
+    jobs_file = None
+    model = "claude-sonnet-4-6"
+    thinking = False
+    effort = None
+
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-h", "--help"):
+            print(__doc__)
+            sys.exit(0)
+        elif arg == "--model":
+            i += 1
+            if i >= len(argv):
+                sys.exit("batch-wt: --model requires a value")
+            model = argv[i]
+        elif arg == "--thinking":
+            thinking = True
+        elif arg == "--effort":
+            i += 1
+            if i >= len(argv):
+                sys.exit("batch-wt: --effort requires a value")
+            effort = argv[i]
+            if effort not in ("off", "low", "medium", "high", "max"):
+                sys.exit(f"batch-wt: unknown effort level '{effort}'. Choose: off|low|medium|high|max")
+        elif arg.startswith("-"):
+            sys.exit(f"batch-wt: unknown option '{arg}'. Try: batch-wt --help")
+        elif jobs_file is None:
+            jobs_file = arg
+        else:
+            sys.exit(f"batch-wt: unexpected argument '{arg}'")
+        i += 1
+
+    if jobs_file is None:
+        print(__doc__)
+        sys.exit(0)
+
+    return jobs_file, model, thinking, effort
+
+
+# ── main ──────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    jobs_file, model, thinking, effort = parse_args(sys.argv[1:])
+
+    if not os.path.isfile(jobs_file):
+        sys.exit(f"batch-wt: file not found: {jobs_file}")
+
+    if not os.environ.get("TMUX"):
+        sys.exit("batch-wt: must be run inside a tmux session")
+
+    tasks = parse_tasks(open(jobs_file).read())
+
+    if not tasks:
+        sys.exit(f"batch-wt: no tasks found in {jobs_file}")
+
+    print(f"batch-wt: {len(tasks)} task(s) in {jobs_file}")
+
+    seen_slugs: dict[str, int] = {}
+
+    for task in tasks:
+        base = slugify(task)
+        slug = unique_slug(base, seen_slugs)
+        win = window_name(slug)
+        print(f"  → {slug}  (window: {win!r})")
+
+        nerv_cmd = ["nerv", "wt", slug, "--model", model, "--prompt", task]
+        if thinking:
+            nerv_cmd.append("--thinking")
+        if effort and effort != "off":
+            nerv_cmd += ["--effort", effort]
+
+        # Keep the window alive with a shell after nerv exits
+        shell_cmd = f"{shlex.join(nerv_cmd)}; exec /bin/sh"
+
+        subprocess.run(
+            ["tmux", "new-window", "-n", win, shell_cmd],
+            check=True,
+        )
+
+    print("batch-wt: all windows launched.")
+
+
+if __name__ == "__main__":
+    main()
