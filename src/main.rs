@@ -520,6 +520,15 @@ fn main() {
                                 interactive.refresh_footer(&mut layout.footer);
                                 tui.request_render(false); tui.maybe_render(&layout); continue;
                             }
+                            if keys::matches_key(seq, "ctrl+s") {
+                                if interactive.session_id.is_some() {
+                                    let _ = interactive.cmd_tx().try_send(SessionCommand::GetTree);
+                                } else {
+                                    push_status(&mut layout, "No active session.", false);
+                                    tui.request_render(false); tui.maybe_render(&layout);
+                                }
+                                continue;
+                            }
                             if keys::matches_key(seq, "ctrl+t") {
                                 let next = interactive.cycle_thinking();
                                 let _ = interactive.cmd_tx().try_send(SessionCommand::SetThinkingLevel { level: next });

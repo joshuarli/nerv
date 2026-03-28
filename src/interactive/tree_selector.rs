@@ -44,9 +44,10 @@ struct FlatNode {
     /// True if this is a user message entry.
     is_user: bool,
     has_tool_calls: bool,
-    /// Indentation level (0 = root, 1 = child, 2 = grandchild …)
+    /// Indentation level (0 = root, 1 = child at branching point, …) — kept for debugging.
+    #[allow(dead_code)]
     indent: usize,
-    /// True if the connector line should show ├─/└─ (vs continuing vertically).
+    /// True if this node has siblings (draws ├─ or └─ connector).
     show_connector: bool,
     /// True if this is the last sibling at its level (uses └─ instead of ├─).
     is_last: bool,
@@ -54,12 +55,15 @@ struct FlatNode {
     is_meta: bool,
     /// True if this node has children that are currently hidden (folded).
     is_folded: bool,
-    /// True if this node is a branch-segment start (has siblings = branching point or root with multi-children).
+    /// True if this node is a branching point (has multiple visible children).
     is_branch_start: bool,
     /// Parent entry id, if any.
     parent_id: Option<String>,
     /// True if this node has any visible children (used for fold indicator).
     has_children: bool,
+    /// For each ancestor level, whether that level still has more siblings below.
+    /// Used to draw │ continuation lines through the prefix.
+    ancestors_with_more: Vec<bool>,
 }
 
 // ─────────────────────────── selector ────────────────────────────────────────
@@ -95,7 +99,7 @@ impl TreeSelector {
     pub fn new(tree: Vec<SessionTreeNode>, current_leaf_id: Option<String>) -> Self {
         let active_path = build_active_path(&tree, current_leaf_id.as_deref());
         let folded = HashSet::new();
-        let nodes = flatten(&tree, &active_path, &folded, FilterMode::Default);
+        let nodes = flatten(&tree, &folded, FilterMode::Default);
 
         // Start selection on the current leaf.
         let selected = current_leaf_id
@@ -131,7 +135,7 @@ impl TreeSelector {
 
     fn rebuild(&mut self) {
         let prev_id = self.nodes.get(self.selected).map(|n| n.entry_id.clone());
-        self.nodes = flatten(&self.tree, &self.active_path, &self.folded, self.filter);
+        self.nodes = flatten(&self.tree, &self.folded, self.filter);
         // Try to keep selection on the same entry; fall back to clamped position.
         if let Some(id) = prev_id {
             if let Some(pos) = self.nodes.iter().position(|n| n.entry_id == id) {
@@ -308,19 +312,18 @@ impl FullscreenList for TreeSelector {
             let is_active = self.active_path.contains(&node.entry_id);
 
             // ── indent + connector ─────────────────────────────────────────
-            // Each indent level is 3 chars wide: "│  " or "   "
-            // At the node itself: "├─ " / "└─ " / "   "
-            let mut prefix = String::from(" ");
-            if node.indent > 0 {
-                let base = (node.indent - 1) * 3;
-                for _ in 0..base {
-                    prefix.push(' ');
+            // Each indent level is 2 chars wide.
+            // Ancestor levels draw "│ " if that level still has more siblings,
+            // or "  " if it was the last sibling at that level.
+            // At the node itself: "├─" / "└─" / (nothing for root).
+            let mut prefix = String::new();
+            if node.show_connector {
+                // Draw continuation lines for ancestor levels.
+                for &more in &node.ancestors_with_more {
+                    prefix.push_str(if more { "│ " } else { "  " });
                 }
-                if node.show_connector {
-                    prefix.push_str(if node.is_last { "└─ " } else { "├─ " });
-                } else {
-                    prefix.push_str("   ");
-                }
+                // Draw this node's own connector.
+                prefix.push_str(if node.is_last { "└─" } else { "├─" });
             }
 
             // ── fold indicator ──────────────────────────────────────────────
@@ -453,25 +456,32 @@ fn should_show(entry_type: &str, is_user: bool, filter: FilterMode) -> bool {
     }
 }
 
-/// Flatten tree into display order, active branch first, respecting fold + filter state.
+/// Flatten tree into natural depth-first display order (root first), respecting fold + filter.
+///
+/// Each level of indentation is 2 chars. Children of a branching node (multiple visible
+/// children) get `indent+1`; single-child chains stay at the same indent so linear
+/// conversations don't waste horizontal space.
+///
+/// `ancestor_has_more`: a bitmask / Vec tracking which ancestor levels still have
+/// siblings below them, so we can draw `│` continuation lines correctly.
 fn flatten(
     tree: &[SessionTreeNode],
-    active_path: &HashSet<String>,
     folded: &HashSet<String>,
     filter: FilterMode,
 ) -> Vec<FlatNode> {
     let mut result = Vec::new();
 
-    // Stack entry: (node, indent, show_connector, is_last, parent_id)
-    let mut stack: Vec<(&SessionTreeNode, usize, bool, bool, Option<String>)> = Vec::new();
+    // Stack entry: (node, indent, ancestors_with_more: Vec<bool>, is_last, parent_id)
+    // ancestors_with_more[i] = true means level i still has more siblings below.
+    let mut stack: Vec<(&SessionTreeNode, usize, Vec<bool>, bool, Option<String>)> = Vec::new();
 
     let roots: Vec<&SessionTreeNode> = tree.iter().collect();
-    let multi_root = roots.len() > 1;
+    // Push roots in reverse so we pop them in order (first root = first displayed).
     for (i, root) in roots.iter().enumerate().rev() {
-        stack.push((root, if multi_root { 1 } else { 0 }, multi_root, i == roots.len() - 1, None));
+        stack.push((root, 0, vec![], i != roots.len() - 1, None));
     }
 
-    while let Some((node, indent, show_connector, is_last, parent_id)) = stack.pop() {
+    while let Some((node, indent, ancestors_with_more, has_more_siblings, parent_id)) = stack.pop() {
         let entry_type = node.entry_type.as_str();
         let is_meta = matches!(
             entry_type,
@@ -481,25 +491,16 @@ fn flatten(
 
         let visible = should_show(entry_type, node.is_user, filter);
 
-        // Collect visible children (sorted: active branch first, then by timestamp).
-        let mut children: Vec<&SessionTreeNode> = node.children.iter().collect();
-        children.sort_by(|a, b| {
-            let a_active = contains_active(a, active_path);
-            let b_active = contains_active(b, active_path);
-            b_active.cmp(&a_active).then(a.timestamp.cmp(&b.timestamp))
-        });
-        // Filter children to only those that would produce ≥1 visible descendant.
-        let visible_children: Vec<&SessionTreeNode> = children
+        // Collect visible children sorted by timestamp (natural order).
+        let visible_children: Vec<&SessionTreeNode> = node
+            .children
             .iter()
-            .cloned()
             .filter(|c| has_visible(c, filter))
             .collect();
 
         let has_children = !visible_children.is_empty();
         let is_folded = folded.contains(&node.entry_id);
-        // A node is a branch start if it has multiple visible children (branching point)
-        // or if it is the first node at the root level and there are multiple roots.
-        let is_branch_start = visible_children.len() > 1 || (indent == 0 && multi_root);
+        let is_branch_start = visible_children.len() > 1;
 
         if visible {
             result.push(FlatNode {
@@ -509,30 +510,50 @@ fn flatten(
                 is_user: node.is_user,
                 has_tool_calls: node.has_tool_calls,
                 indent,
-                show_connector,
-                is_last,
+                // show_connector = true when the parent had multiple children (we drew a branch)
+                show_connector: !ancestors_with_more.is_empty(),
+                is_last: !has_more_siblings,
                 is_meta,
                 is_folded,
                 is_branch_start,
                 parent_id: parent_id.clone(),
                 has_children,
+                // Pass through the ancestor continuation flags for │ lines.
+                ancestors_with_more: ancestors_with_more.clone(),
             });
         }
 
-        // If folded, don't push children onto the stack.
         if is_folded {
             continue;
         }
 
         let multi = visible_children.len() > 1;
+        // Only increase indent when branching; linear chains stay at same level.
         let child_indent = if multi { indent + 1 } else { indent };
 
+        // Build the ancestors_with_more for children.
+        // If branching: children are at indent+1, and the current level "has_more_siblings"
+        // propagates to whether this level still has continuations.
+        let child_ancestors = if multi {
+            // Children at indent+1 need to know their parent level (indent) has_more_siblings?
+            // No — ancestors_with_more tracks whether *ancestor levels* still have siblings.
+            // When we branch, children are one level deeper, so we extend with: does this
+            // parent level have more siblings below? (has_more_siblings for the current node)
+            let mut a = ancestors_with_more.clone();
+            a.push(has_more_siblings);
+            a
+        } else {
+            ancestors_with_more.clone()
+        };
+
+        // Push in reverse order so first child is popped first.
         for (i, child) in visible_children.iter().enumerate().rev() {
+            let is_last_child = i == visible_children.len() - 1;
             stack.push((
                 child,
                 child_indent,
-                multi,
-                i == visible_children.len() - 1,
+                child_ancestors.clone(),
+                !is_last_child,
                 Some(node.entry_id.clone()),
             ));
         }
@@ -547,15 +568,6 @@ fn has_visible(node: &SessionTreeNode, filter: FilterMode) -> bool {
         return true;
     }
     node.children.iter().any(|c| has_visible(c, filter))
-}
-
-fn contains_active(node: &SessionTreeNode, active_path: &HashSet<String>) -> bool {
-    if active_path.contains(&node.entry_id) {
-        return true;
-    }
-    node.children
-        .iter()
-        .any(|c| contains_active(c, active_path))
 }
 
 /// Truncate a string to at most `max` chars at a char boundary.

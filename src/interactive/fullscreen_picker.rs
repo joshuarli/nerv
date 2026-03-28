@@ -108,13 +108,14 @@ pub fn run_fullscreen_picker(list: &mut dyn FullscreenList) -> Option<String> {
                     } else if keys::matches_key(&seq, "right") || keys::matches_key(&seq, "page_down") {
                         list.move_page_down();
                         needs_redraw = true;
+                    } else if list.handle_extra_key(&seq) {
+                        // handle_extra_key has priority (e.g. Ctrl+U for tree filter vs. clear_query)
+                        needs_redraw = true;
                     } else if keys::matches_key(&seq, "ctrl+u") {
                         list.clear_query();
                         needs_redraw = true;
                     } else if keys::matches_key(&seq, "backspace") {
                         list.pop_char();
-                        needs_redraw = true;
-                    } else if list.handle_extra_key(&seq) {
                         needs_redraw = true;
                     } else {
                         // Printable chars (including multi-byte UTF-8).
