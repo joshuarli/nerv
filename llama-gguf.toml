@@ -1,0 +1,114 @@
+# llama-gguf configuration
+# All values shown are defaults. Uncomment and modify as needed.
+#
+# Precedence: CLI arguments > environment variables > this file > defaults
+
+# ─────────────────────────────────────────────────────────────────────
+# Model
+# ─────────────────────────────────────────────────────────────────────
+[model]
+# Path to the GGUF model file (can also use LLAMA_MODEL_PATH env var)
+# path = "/path/to/model.gguf"
+
+# Use GPU acceleration (CUDA/Metal/Vulkan)
+# Also: LLAMA_GPU=1
+gpu = false
+
+# ─────────────────────────────────────────────────────────────────────
+# Generation / Sampling Parameters
+# Used by: run, chat, serve
+# ─────────────────────────────────────────────────────────────────────
+[generation]
+# Sampling temperature (0.0 = greedy/deterministic, higher = more random)
+# Also: LLAMA_TEMPERATURE
+temperature = 0.7
+
+# Top-K sampling: only consider the K most likely next tokens (0 = disabled)
+# Also: LLAMA_TOP_K
+top_k = 40
+
+# Top-P (nucleus) sampling: cumulative probability cutoff
+# Also: LLAMA_TOP_P
+top_p = 0.95
+
+# Repetition penalty (1.0 = no penalty, higher = less repetition)
+# Also: LLAMA_REPEAT_PENALTY
+repeat_penalty = 1.1
+
+# Default maximum tokens to generate per request
+# Also: LLAMA_MAX_TOKENS
+max_tokens = 512
+
+# Random seed for reproducible generation (comment out for random)
+# Also: LLAMA_SEED
+# seed = 42
+
+# ─────────────────────────────────────────────────────────────────────
+# Chat Mode Overrides
+# Values here override [generation] when using the `chat` command.
+# Omitted values fall back to [generation].
+# ─────────────────────────────────────────────────────────────────────
+[chat]
+# Default system prompt for chat sessions
+# Also: LLAMA_SYSTEM_PROMPT
+# system_prompt = "You are a helpful AI assistant."
+
+# Override generation settings for chat specifically
+# max_tokens = 1024
+# temperature = 0.7
+# top_p = 0.9
+# top_k = 40
+# repeat_penalty = 1.1
+
+# ─────────────────────────────────────────────────────────────────────
+# HTTP Server (used by `serve` command)
+# ─────────────────────────────────────────────────────────────────────
+[server]
+# Host address to bind to
+# Also: LLAMA_HOST
+host = "127.0.0.1"
+
+# Port to listen on
+# Also: LLAMA_PORT
+port = 8080
+
+# PostgreSQL/pgvector URL for RAG (requires `rag` feature)
+# Also: RAG_DATABASE_URL
+# rag_database_url = "postgres://user:pass@localhost:5432/mydb"
+
+# Path to separate RAG config file
+# rag_config = "rag.toml"
+
+# ─────────────────────────────────────────────────────────────────────
+# Quantization (used by `quantize` command)
+# ─────────────────────────────────────────────────────────────────────
+[quantize]
+# Target quantization type
+# Options: q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k, q5_k, q6_k
+output_type = "q4_0"
+
+# Number of threads (default: all available cores)
+# threads = 8
+
+# ─────────────────────────────────────────────────────────────────────
+# Benchmarking (used by `bench` command)
+# ─────────────────────────────────────────────────────────────────────
+[bench]
+# Number of prompt tokens to process
+n_prompt = 512
+
+# Number of tokens to generate
+n_gen = 128
+
+# Number of repetitions for averaging results
+repetitions = 3
+
+# Number of threads (default: all available cores)
+# threads = 4
+
+# ─────────────────────────────────────────────────────────────────────
+# Embeddings (used by `embed` command)
+# ─────────────────────────────────────────────────────────────────────
+[embed]
+# Output format: "json" or "raw"
+format = "json"
