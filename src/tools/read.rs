@@ -9,6 +9,8 @@ use crate::errors::ToolError;
 struct ReadCacheEntry {
     mtime: SystemTime,
     line_count: usize,
+    /// Line ranges already returned to the model: (start_0based, end_0based).
+    ranges_served: Vec<(usize, usize)>,
 }
 
 pub struct ReadTool {
@@ -67,13 +69,14 @@ impl AgentTool for ReadTool {
         let limit = input.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize);
         let has_range = offset.is_some() || limit.is_some();
 
-        // Mtime cache: if file unchanged since last read AND no range specified, return short marker.
-        if !has_range {
-            if let Ok(meta) = std::fs::metadata(&abs_path) {
-                if let Ok(mtime) = meta.modified() {
-                    if let Ok(cache) = self.cache.lock() {
-                        if let Some(entry) = cache.get(&abs_path) {
-                            if entry.mtime == mtime {
+        // Mtime cache: if file unchanged since last read, check for dedup.
+        if let Ok(meta) = std::fs::metadata(&abs_path) {
+            if let Ok(mtime) = meta.modified() {
+                if let Ok(cache) = self.cache.lock() {
+                    if let Some(entry) = cache.get(&abs_path) {
+                        if entry.mtime == mtime {
+                            if !has_range {
+                                // Full re-read of unchanged file
                                 let msg = format!(
                                     "[unchanged since last read: {} ({} lines)]",
                                     path_str, entry.line_count
@@ -81,6 +84,24 @@ impl AgentTool for ReadTool {
                                 return ToolResult::ok_with_details(
                                     msg,
                                     serde_json::json!({"display": format!("{} (unchanged)", path_str)}),
+                                );
+                            }
+                            // Range dedup: if this range is fully covered by a previous read, skip.
+                            let req_start = offset.unwrap_or(1).max(1) - 1;
+                            let req_end = if let Some(lim) = limit {
+                                req_start + lim
+                            } else {
+                                entry.line_count
+                            };
+                            let covered = entry.ranges_served.iter().any(|&(s, e)| s <= req_start && e >= req_end);
+                            if covered {
+                                let msg = format!(
+                                    "[already read {} lines {}-{} — use content from earlier in this conversation]",
+                                    path_str, req_start + 1, req_end
+                                );
+                                return ToolResult::ok_with_details(
+                                    msg,
+                                    serde_json::json!({"display": format!("{} (already read)", path_str)}),
                                 );
                             }
                         }
@@ -140,14 +161,19 @@ impl AgentTool for ReadTool {
                     format!("{} ({} lines)", path_str, total_lines)
                 };
 
-                // Update cache with total line count
+                // Update cache with total line count + range
                 if let Ok(meta) = std::fs::metadata(&abs_path) {
                     if let Ok(mtime) = meta.modified() {
                         if let Ok(mut cache) = self.cache.lock() {
-                            cache.insert(
-                                abs_path,
-                                ReadCacheEntry { mtime, line_count: total_lines },
-                            );
+                            let range = (start, end);
+                            let entry = cache.entry(abs_path).or_insert_with(|| ReadCacheEntry {
+                                mtime,
+                                line_count: total_lines,
+                                ranges_served: Vec::new(),
+                            });
+                            entry.mtime = mtime;
+                            entry.line_count = total_lines;
+                            entry.ranges_served.push(range);
                         }
                     }
                 }
@@ -264,20 +290,85 @@ mod tests {
     }
 
     #[test]
-    fn range_read_bypasses_mtime_cache() {
+    fn range_after_full_read_deduped() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("f.txt"), "hello\nworld\n").unwrap();
         let tool = make_tool(dir.path());
 
-        // First full read populates cache
+        // First full read populates cache with range (0, 2)
         let _ = read(tool.as_ref(), "f.txt");
-        // Second full read should hit cache
+        // Second full read should hit mtime cache
         let r2 = read(tool.as_ref(), "f.txt");
         assert!(r2.content.contains("unchanged"));
-        // Range read should NOT hit cache
+        // Range read for a subset should hit range dedup
         let r3 = read_range(tool.as_ref(), "f.txt", Some(1), Some(1));
-        assert!(!r3.content.contains("unchanged"));
-        assert!(r3.content.contains("hello"));
+        assert!(r3.content.contains("already read"), "subset range should be deduped: {}", r3.content);
+    }
+
+    #[test]
+    fn range_dedup_exact_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: String = (1..=20).map(|i| format!("line {}\n", i)).collect();
+        std::fs::write(dir.path().join("f.txt"), &content).unwrap();
+        let tool = make_tool(dir.path());
+
+        // First range read
+        let r1 = read_range(tool.as_ref(), "f.txt", Some(5), Some(10));
+        assert!(!r1.is_error);
+        assert!(r1.content.contains("line 5"));
+        // Exact same range again — should be deduped
+        let r2 = read_range(tool.as_ref(), "f.txt", Some(5), Some(10));
+        assert!(r2.content.contains("already read"), "exact dup should be deduped: {}", r2.content);
+    }
+
+    #[test]
+    fn range_dedup_subset() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: String = (1..=20).map(|i| format!("line {}\n", i)).collect();
+        std::fs::write(dir.path().join("f.txt"), &content).unwrap();
+        let tool = make_tool(dir.path());
+
+        // Read a wide range
+        let r1 = read_range(tool.as_ref(), "f.txt", Some(3), Some(15));
+        assert!(!r1.is_error);
+        // Subset request — should be deduped
+        let r2 = read_range(tool.as_ref(), "f.txt", Some(5), Some(5));
+        assert!(r2.content.contains("already read"), "subset should be deduped: {}", r2.content);
+    }
+
+    #[test]
+    fn range_dedup_non_overlapping_not_deduped() {
+        let dir = tempfile::tempdir().unwrap();
+        let content: String = (1..=20).map(|i| format!("line {}\n", i)).collect();
+        std::fs::write(dir.path().join("f.txt"), &content).unwrap();
+        let tool = make_tool(dir.path());
+
+        // Read lines 1-5
+        let r1 = read_range(tool.as_ref(), "f.txt", Some(1), Some(5));
+        assert!(!r1.is_error);
+        // Read lines 10-15 — different range, should NOT be deduped
+        let r2 = read_range(tool.as_ref(), "f.txt", Some(10), Some(5));
+        assert!(!r2.content.contains("already read"), "non-overlapping range should not be deduped: {}", r2.content);
+        assert!(r2.content.contains("line 10"));
+    }
+
+    #[test]
+    fn range_dedup_invalidated_by_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        let content: String = (1..=10).map(|i| format!("line {}\n", i)).collect();
+        std::fs::write(&path, &content).unwrap();
+        let tool = make_tool(dir.path());
+
+        // First read
+        let r1 = read_range(tool.as_ref(), "f.txt", Some(1), Some(5));
+        assert!(r1.content.contains("line 1"));
+        // Modify file
+        std::fs::write(&path, "new content\n").unwrap();
+        // Same range — should NOT be deduped because mtime changed
+        let r2 = read_range(tool.as_ref(), "f.txt", Some(1), Some(5));
+        assert!(!r2.content.contains("already read"), "should re-read after edit: {}", r2.content);
+        assert!(r2.content.contains("new content"));
     }
 
     #[test]
