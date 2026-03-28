@@ -4,13 +4,6 @@ pub struct StdinBuffer {
     buf: Vec<u8>,
     in_paste: bool,
     paste_buf: Vec<u8>,
-    /// Set when a lone `\r` arrived at the end of a read and we're waiting to
-    /// see if the next read starts with `\n` (tmux sends Ctrl+Enter as two
-    /// separate reads: `\r` then `\n`).
-    pending_cr: bool,
-    /// Whether we're running inside tmux.  Only tmux splits Ctrl+Enter across
-    /// two reads; outside tmux a lone `\r` is always plain Enter.
-    tmux_mode: bool,
 }
 
 pub enum StdinEvent {
@@ -35,30 +28,13 @@ impl StdinBuffer {
             buf: Vec::with_capacity(256),
             in_paste: false,
             paste_buf: Vec::new(),
-            pending_cr: false,
-            tmux_mode: std::env::var_os("TMUX").is_some(),
         }
     }
 
     /// Process incoming bytes and return parsed events.
     pub fn process(&mut self, data: &[u8]) -> Vec<StdinEvent> {
+        self.buf.extend_from_slice(data);
         let mut events = Vec::new();
-
-        // A previous read ended with a lone `\r`.  If this read starts with
-        // `\n` it's Ctrl+Enter (tmux sends them in separate reads); otherwise
-        // it was a plain Enter followed by whatever came next.
-        if self.pending_cr {
-            self.pending_cr = false;
-            if data.first() == Some(&0x0A) {
-                events.push(StdinEvent::Sequence(vec![0x0D, 0x0A]));
-                self.buf.extend_from_slice(&data[1..]);
-            } else {
-                events.push(StdinEvent::Sequence(vec![0x0D]));
-                self.buf.extend_from_slice(data);
-            }
-        } else {
-            self.buf.extend_from_slice(data);
-        }
 
         while !self.buf.is_empty() {
             if self.in_paste {
@@ -128,14 +104,6 @@ impl StdinBuffer {
                 // CR+LF in the same read: Ctrl+Enter.
                 events.push(StdinEvent::Sequence(vec![0x0D, 0x0A]));
                 self.buf.drain(..2);
-            } else if self.buf[0] == 0x0D && self.buf.len() == 1 && self.tmux_mode {
-                // Lone CR at end of this read — hold it; the next read may
-                // start with LF (tmux Ctrl+Enter arrives as two separate reads).
-                // Only applies inside tmux; outside tmux a lone \r is always
-                // plain Enter and must be emitted immediately.
-                self.pending_cr = true;
-                self.buf.drain(..1);
-                break;
             } else {
                 // Regular byte(s) — could be UTF-8 multi-byte
                 let ch_len = utf8_char_len(self.buf[0]);
@@ -239,49 +207,14 @@ mod tests {
     }
 
     #[test]
-    fn enter_outside_tmux_immediate() {
-        // Outside tmux a lone \r must emit Enter immediately (not be held as
-        // pending_cr), otherwise the user has to press Enter twice.
+    fn enter_emits_immediately() {
+        // A lone \r must always emit Enter immediately — no buffering.
         let mut buf = StdinBuffer::new();
-        buf.tmux_mode = false; // force non-tmux
         let events = buf.process(b"\r");
-        assert_eq!(events.len(), 1, "Enter should emit immediately outside tmux");
+        assert_eq!(events.len(), 1, "Enter should emit immediately");
         match &events[0] {
             StdinEvent::Sequence(s) => assert_eq!(s.as_slice(), b"\r"),
             _ => panic!("expected Sequence"),
-        }
-    }
-
-    #[test]
-    fn ctrl_enter_tmux_split_reads() {
-        // In tmux Ctrl+Enter arrives as \r then \n in separate reads.
-        let mut buf = StdinBuffer::new();
-        buf.tmux_mode = true;
-        let events1 = buf.process(b"\r");
-        assert!(events1.is_empty(), "\\r should be held in tmux mode");
-        let events2 = buf.process(b"\n");
-        assert_eq!(events2.len(), 1);
-        match &events2[0] {
-            StdinEvent::Sequence(s) => assert_eq!(s.as_slice(), b"\r\n"),
-            _ => panic!("expected Sequence([0x0D, 0x0A])"),
-        }
-    }
-
-    #[test]
-    fn enter_tmux_followed_by_char() {
-        // In tmux: \r not followed by \n → plain Enter, char follows normally.
-        let mut buf = StdinBuffer::new();
-        buf.tmux_mode = true;
-        let events1 = buf.process(b"\r");
-        assert!(events1.is_empty());
-        let events2 = buf.process(b"a");
-        assert_eq!(events2.len(), 2, "should get Enter then 'a'");
-        match (&events2[0], &events2[1]) {
-            (StdinEvent::Sequence(r), StdinEvent::Sequence(a)) => {
-                assert_eq!(r.as_slice(), b"\r");
-                assert_eq!(a.as_slice(), b"a");
-            }
-            _ => panic!("expected two Sequence events"),
         }
     }
 
