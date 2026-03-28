@@ -747,12 +747,19 @@ impl Component for Editor {
             self.move_end();
             return true;
         }
-        // Word movement
-        if keys::matches_key(input, "alt+f") {
+        // Word movement (alt+f/b = Emacs, alt+right/left = macOS/GUI convention,
+        // ctrl+right/left = common terminal convention for word skip)
+        if keys::matches_key(input, "alt+f")
+            || keys::matches_key(input, "alt+right")
+            || keys::matches_key(input, "ctrl+right")
+        {
             self.move_word_forward();
             return true;
         }
-        if keys::matches_key(input, "alt+b") {
+        if keys::matches_key(input, "alt+b")
+            || keys::matches_key(input, "alt+left")
+            || keys::matches_key(input, "ctrl+left")
+        {
             self.move_word_backward();
             return true;
         }
