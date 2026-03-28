@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use nerv::agent::agent::Agent;
 use nerv::agent::provider::ProviderRegistry;
-use nerv::compaction::count_tokens;
 use nerv::core::*;
 use nerv::session::SessionManager;
 use nerv::tools::*;
@@ -112,16 +111,6 @@ fn bench_system_prompt_build(c: &mut Criterion) {
     });
 }
 
-fn bench_tiktoken_first_call(c: &mut Criterion) {
-    c.bench_function("tiktoken_count_tokens", |b| {
-        b.iter(|| {
-            black_box(count_tokens(
-                "Hello, world! This is a test of token counting.",
-            ))
-        });
-    });
-}
-
 fn bench_list_sessions(c: &mut Criterion) {
     let dir = nerv_dir();
     let sm = SessionManager::new(&dir);
@@ -196,7 +185,6 @@ criterion_group!(
     bench_session_manager_new,
     bench_agent_new,
     bench_system_prompt_build,
-    bench_tiktoken_first_call,
     bench_list_sessions,
     bench_find_repo_root,
     bench_full_startup,

@@ -36,10 +36,10 @@ impl Default for CompactionSettings {
     }
 }
 
-/// Count tokens using tiktoken (cl100k_base, used by Claude and GPT-4).
+/// Estimate token count using the chars/4 heuristic.
+/// Approximate but fast — the authoritative count always comes from the API usage response.
 pub fn count_tokens(text: &str) -> usize {
-    let enc = tiktoken::get_encoding("cl100k_base").unwrap();
-    enc.encode(text).len()
+    (text.chars().count() + 3) / 4
 }
 
 /// Estimate tokens for an AgentMessage.

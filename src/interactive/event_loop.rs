@@ -584,7 +584,7 @@ impl InteractiveMode {
                     .next();
                 layout.chat.finish_stream(&text, thinking.as_deref());
 
-                // Output tokens: use API value if available, otherwise tiktoken
+                // Output tokens: use API value if available, otherwise chars/4 heuristic (local models)
                 let raw = message.usage.clone().unwrap_or_default();
                 let output_tokens = if raw.output > 0 {
                     raw.output
