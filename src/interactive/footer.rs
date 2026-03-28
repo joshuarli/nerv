@@ -1,7 +1,98 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
 use crate::agent::types::*;
 use crate::interactive::theme;
 use crate::tui::tui::Component;
 use crate::tui::utils::{truncate_to_width, visible_width};
+
+/// Returns `true` when the `NERV_DEBUG` environment variable is set to `1`.
+pub fn nerv_debug() -> bool {
+    std::env::var("NERV_DEBUG").as_deref() == Ok("1")
+}
+
+/// How many extra lines the nervHud adds to the fixed footer (0 or 1).
+pub fn hud_line_count() -> usize {
+    if nerv_debug() { 1 } else { 0 }
+}
+
+/// Sample the current process RSS in kilobytes.
+/// Returns 0 on unsupported platforms or if the read fails.
+fn sample_rss_kb() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        // task_info(TASK_BASIC_INFO) gives resident_size in bytes.
+        use std::mem;
+        unsafe extern "C" {
+            fn task_self_trap() -> libc::mach_port_t;
+        }
+        #[allow(non_camel_case_types)]
+        type mach_port_t = u32;
+        #[allow(non_camel_case_types)]
+        type task_t = mach_port_t;
+        #[allow(non_camel_case_types)]
+        type natural_t = u32;
+        #[allow(non_camel_case_types)]
+        type integer_t = i32;
+        #[allow(non_camel_case_types)]
+        type kern_return_t = integer_t;
+        const TASK_BASIC_INFO: natural_t = 5;
+        #[repr(C)]
+        struct TaskBasicInfo {
+            suspend_count: integer_t,
+            virtual_size: usize,
+            resident_size: usize,
+            user_time: [u32; 2],
+            system_time: [u32; 2],
+            policy: integer_t,
+        }
+        unsafe extern "C" {
+            fn task_info(
+                target_task: task_t,
+                flavor: natural_t,
+                task_info_out: *mut integer_t,
+                task_info_outCnt: *mut natural_t,
+            ) -> kern_return_t;
+        }
+        unsafe {
+            let task = libc::mach_task_self();
+            let mut info: TaskBasicInfo = mem::zeroed();
+            let mut count = (mem::size_of::<TaskBasicInfo>() / mem::size_of::<integer_t>()) as natural_t;
+            let kr = task_info(
+                task,
+                TASK_BASIC_INFO,
+                &mut info as *mut TaskBasicInfo as *mut integer_t,
+                &mut count,
+            );
+            if kr == 0 {
+                (info.resident_size / 1024) as u64
+            } else {
+                0
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // /proc/self/status contains "VmRSS: <n> kB"
+        if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
+            for line in s.lines() {
+                if let Some(rest) = line.strip_prefix("VmRSS:") {
+                    let kb: u64 = rest.split_whitespace().next()
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or(0);
+                    return kb;
+                }
+            }
+        }
+        0
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        0
+    }
+}
 
 pub struct FooterComponent {
     cwd: String,
@@ -33,6 +124,9 @@ pub struct FooterComponent {
     total_cache_write: u64,
     /// Number of API calls made in this session.
     api_calls: u32,
+    /// nervHud: current process RSS in KiB, written by a background thread.
+    /// Only displayed when `NERV_DEBUG=1`.
+    rss_kb: Arc<AtomicU64>,
 }
 
 impl FooterComponent {
@@ -85,6 +179,21 @@ impl FooterComponent {
             total_cache_read: 0,
             total_cache_write: 0,
             api_calls: 0,
+            rss_kb: {
+                let cell = Arc::new(AtomicU64::new(0));
+                if nerv_debug() {
+                    // nervHud background poller: sample RSS every 500 ms.
+                    let cell2 = cell.clone();
+                    std::thread::Builder::new()
+                        .name("nerv-hud".into())
+                        .spawn(move || loop {
+                            cell2.store(sample_rss_kb(), Ordering::Relaxed);
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                        })
+                        .ok();
+                }
+                cell
+            },
         }
     }
 
@@ -375,7 +484,24 @@ impl Component for FooterComponent {
         let cost_pad = w.saturating_sub(cost_width) / 2;
         let line5 = format!("{}{}", " ".repeat(cost_pad), cost_line);
 
-        vec![line1, line2, hex_bar, line4, line5]
+        // nervHud: process RSS — shown only when NERV_DEBUG=1
+        if nerv_debug() {
+            let rss = self.rss_kb.load(Ordering::Relaxed);
+            let rss_str = if rss >= 1024 {
+                format!("{:.1} MB", rss as f64 / 1024.0)
+            } else {
+                format!("{} KB", rss)
+            };
+            let hud_line = format!(
+                "{}nervHud  rss {}{}",
+                theme::HUD_PINK,
+                rss_str,
+                r,
+            );
+            vec![line1, line2, hex_bar, line4, line5, hud_line]
+        } else {
+            vec![line1, line2, hex_bar, line4, line5]
+        }
     }
 }
 

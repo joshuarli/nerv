@@ -34,3 +34,5 @@ pub const DIFF_HUNK: &str = "\x1b[38;5;67m";
 pub const FOOTER_DIM: &str = "\x1b[38;5;240m";
 pub const FOOTER_LABEL: &str = "\x1b[38;5;248m";
 pub const COST: &str = "\x1b[38;5;180m";
+/// nervHud diagnostic line — hot pink, only shown when NERV_DEBUG=1.
+pub const HUD_PINK: &str = "\x1b[38;5;205m";
