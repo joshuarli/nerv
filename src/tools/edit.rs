@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use super::file_mutation_queue::FileMutationQueue;
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::provider::CancelFlag;
 use crate::errors::ToolError;
 
 pub struct EditTool {
@@ -137,7 +138,7 @@ impl AgentTool for EditTool {
         Ok(())
     }
 
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");
         let abs_path = self.resolve_path(path_str);
 

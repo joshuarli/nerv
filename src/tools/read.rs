@@ -4,6 +4,7 @@ use std::time::SystemTime;
 
 use super::truncate::{DEFAULT_MAX_LINES, truncate_head};
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::provider::CancelFlag;
 use crate::errors::ToolError;
 
 struct ReadCacheEntry {
@@ -62,7 +63,7 @@ impl AgentTool for ReadTool {
         }
         Ok(())
     }
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");
         let abs_path = self.resolve_path(path_str);
         let offset = input.get("offset").and_then(|v| v.as_u64()).map(|v| v as usize);

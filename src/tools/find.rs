@@ -3,6 +3,7 @@ use std::process::Command;
 
 use super::truncate::{DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncate_tail};
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::provider::CancelFlag;
 use crate::errors::ToolError;
 
 pub struct FindTool {
@@ -46,7 +47,7 @@ impl AgentTool for FindTool {
         }
         Ok(())
     }
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
         let pattern = input["pattern"].as_str().unwrap_or("");
         let path = input["path"].as_str().unwrap_or(".");
         let resolved_path = self.resolve_path(path);

@@ -28,7 +28,9 @@ pub trait AgentTool: Send + Sync {
     fn validate(&self, input: &serde_json::Value) -> Result<(), crate::errors::ToolError>;
 
     /// Execute the tool synchronously.
-    fn execute(&self, input: serde_json::Value, update: UpdateCallback) -> ToolResult;
+    /// `cancel` is the shared abort flag — long-running tools should poll it
+    /// and return early (with an error result) when it fires.
+    fn execute(&self, input: serde_json::Value, update: UpdateCallback, cancel: &CancelFlag) -> ToolResult;
 }
 
 #[derive(Debug, Clone)]
@@ -203,6 +205,11 @@ impl Agent {
                     if let Some(ref mut f) = persist_fn {
                         f(&r);
                     }
+                }
+                // If the user interrupted while a tool was running, stop the loop now.
+                if self.cancel.load(Ordering::Relaxed) {
+                    on_event(AgentEvent::TurnEnd);
+                    break;
                 }
             }
 
@@ -543,7 +550,7 @@ impl Agent {
             match tool.validate(&args) {
                 Ok(()) => {
                     let update_cb: UpdateCallback = Arc::new(|_output: String| {});
-                    tool.execute(args, update_cb)
+                    tool.execute(args, update_cb, &self.cancel)
                 }
                 Err(e) => ToolResult {
                     content: format!("Validation error: {}", e),

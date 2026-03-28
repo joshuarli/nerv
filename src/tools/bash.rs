@@ -4,7 +4,9 @@ use std::process::Command;
 
 use super::truncate::{DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncate_tail};
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::provider::CancelFlag;
 use crate::errors::ToolError;
+use std::sync::atomic::Ordering;
 
 pub struct BashTool {
     cwd: PathBuf,
@@ -39,7 +41,7 @@ impl AgentTool for BashTool {
         }
         Ok(())
     }
-    fn execute(&self, input: serde_json::Value, update: UpdateCallback) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, update: UpdateCallback, cancel: &CancelFlag) -> ToolResult {
         let command = input["command"].as_str().unwrap_or("");
         let mut child = match Command::new(&self.shell)
             .arg("-c")
@@ -70,6 +72,11 @@ impl AgentTool for BashTool {
         if let Some(mut stdout) = child.stdout.take() {
             let mut buf = [0u8; 8192];
             loop {
+                // Check cancel flag — if set, kill the child and abort.
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = child.kill();
+                    return ToolResult::error("Interrupted");
+                }
                 match stdout.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {

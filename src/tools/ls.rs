@@ -3,6 +3,7 @@ use std::process::Command;
 
 use super::truncate::{DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncate_tail};
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::provider::CancelFlag;
 use crate::errors::ToolError;
 
 pub struct LsTool {
@@ -40,7 +41,7 @@ impl AgentTool for LsTool {
     fn validate(&self, _input: &serde_json::Value) -> Result<(), ToolError> {
         Ok(())
     }
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
         let path = input["path"].as_str().unwrap_or(".");
         let resolved_path = self.resolve_path(path);
         match Command::new("eza")
