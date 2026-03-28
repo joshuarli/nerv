@@ -1343,3 +1343,56 @@ fn edit_fuzzy_content_includes_diff() {
     );
 }
 
+#[test]
+fn symbols_tool_finds_definitions() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("lib.rs"),
+        "pub struct Config;\n\nimpl Config {\n    pub fn load() -> Self { Config }\n}\n\nfn helper() {}\n",
+    )
+    .unwrap();
+
+    let tool = SymbolsTool::new(tmp.path().to_path_buf());
+
+    // Search by type name
+    let result = tool.execute(serde_json::json!({"query": "Config"}), noop_update());
+    assert!(!result.is_error);
+    assert!(result.content.contains("struct"), "should find struct: {}", result.content);
+
+    // Search by method name — should show parent impl
+    let result = tool.execute(serde_json::json!({"query": "load"}), noop_update());
+    assert!(!result.is_error);
+    assert!(result.content.contains("fn"), "should find method: {}", result.content);
+    assert!(result.content.contains("impl Config"), "should show parent: {}", result.content);
+}
+
+#[test]
+fn symbols_tool_kind_filter() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("lib.rs"),
+        "fn foo() {}\nstruct Foo;\n",
+    )
+    .unwrap();
+
+    let tool = SymbolsTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(
+        serde_json::json!({"query": "foo", "kind": "function"}),
+        noop_update(),
+    );
+    assert!(!result.is_error);
+    assert!(result.content.contains("fn foo"), "{}", result.content);
+    assert!(!result.content.contains("struct Foo"), "struct should be filtered out: {}", result.content);
+}
+
+#[test]
+fn symbols_tool_no_results() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("lib.rs"), "fn hello() {}\n").unwrap();
+
+    let tool = SymbolsTool::new(tmp.path().to_path_buf());
+    let result = tool.execute(serde_json::json!({"query": "nonexistent"}), noop_update());
+    assert!(!result.is_error);
+    assert!(result.content.contains("No definitions found"), "{}", result.content);
+}
+

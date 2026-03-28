@@ -5,6 +5,7 @@ pub mod core;
 pub mod errors;
 pub mod export;
 pub mod http;
+pub mod index;
 pub mod interactive;
 pub mod log;
 pub mod session;

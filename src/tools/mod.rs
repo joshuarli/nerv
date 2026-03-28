@@ -7,6 +7,7 @@ pub mod grep;
 pub mod ls;
 pub mod memory;
 pub mod read;
+pub mod symbols;
 pub mod truncate;
 pub mod write;
 
@@ -18,4 +19,5 @@ pub use grep::GrepTool;
 pub use ls::LsTool;
 pub use memory::MemoryTool;
 pub use read::ReadTool;
+pub use symbols::SymbolsTool;
 pub use write::WriteTool;

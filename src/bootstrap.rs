@@ -60,6 +60,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
             Arc::new(GrepTool::new(cwd.to_path_buf())),
             Arc::new(FindTool::new(cwd.to_path_buf())),
             Arc::new(LsTool::new(cwd.to_path_buf())),
+            Arc::new(SymbolsTool::new(cwd.to_path_buf())),
         ];
         if opts.memory {
             t.push(Arc::new(MemoryTool::new(nerv_dir.to_path_buf())));
