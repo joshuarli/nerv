@@ -859,6 +859,9 @@ fn worktree_create_and_merge() {
             .expect("git failed")
     };
     git(&["init"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "init.defaultBranch", "main"]);
     std::fs::write(repo.join("file.txt"), "v1\n").unwrap();
     git(&["add", "."]);
     git(&["commit", "-m", "init"]);
@@ -890,6 +893,8 @@ fn worktree_create_and_merge() {
             .output()
             .expect("git failed")
     };
+    git_wt(&["config", "user.email", "test@example.com"]);
+    git_wt(&["config", "user.name", "Test"]);
     git_wt(&["add", "."]);
     git_wt(&["commit", "-m", "worktree change"]);
 
@@ -926,6 +931,8 @@ fn worktree_merge_rejects_dirty() {
             .expect("git failed")
     };
     git(&["init"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
     std::fs::write(repo.join("file.txt"), "v1\n").unwrap();
     git(&["add", "."]);
     git(&["commit", "-m", "init"]);
@@ -993,6 +1000,8 @@ fn worktree_merge_aborts_on_conflict() {
             .expect("git failed")
     };
     git(&repo, &["init"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
     std::fs::write(repo.join("file.txt"), "original\n").unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "init"]);
@@ -1009,6 +1018,8 @@ fn worktree_merge_aborts_on_conflict() {
     git(&repo, &["commit", "-m", "main diverges"]);
 
     std::fs::write(wt_path.join("file.txt"), "worktree change\n").unwrap();
+    git(&wt_path, &["config", "user.email", "test@example.com"]);
+    git(&wt_path, &["config", "user.name", "Test"]);
     git(&wt_path, &["add", "."]);
     git(&wt_path, &["commit", "-m", "worktree diverges"]);
 
