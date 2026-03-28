@@ -2,33 +2,47 @@
 
 Token-efficient coding agent. Every tool result, system prompt, and display output is designed to minimize context consumption while maximizing the model's ability to act.
 
-## What's different
-
-- **Tool results split into LLM content vs TUI display.** The edit tool returns "Edited foo.rs" to the model (3 tokens) but shows the full unified diff to the user. Read, grep, find, ls all show compact summaries in the TUI while sending full content to the model.
-- **Per-model system prompts.** `~/.nerv/prompts/{model_id}.md` lets you tune behavior per model — terse numbered rules for small models, nuanced guidelines for large ones.
-- **Multi-edit tool.** Multiple disjoint replacements in one call, matched against the original file. One tool call instead of five.
-- **Per-turn token deltas.** The statusbar shows "↑800 ↓110" — what this turn *added*, not the cumulative 32k context.
-- **Session tree branching.** Fork conversations at any point, navigate branches with `/tree`.
-- **Headless mode with structured output.** `echo "fix the bug" | nerv --print --model sonnet` outputs JSON with full message trace, per-turn token usage, and cost.
-- **Eval harness.** `eval/run.py` drives nerv against coding tasks, measures turns/tools/tokens/cost, checks efficiency goals, supports on_fail hints.
-
 ## Setup
 
-**With Anthropic (Claude):**
+Download from GitHub releases.
+
 ```
+# optional but recommended: brew install fd ripgrep
 nerv
-/login                   # opens browser for OAuth
-/model sonnet            # or opus, haiku
+/login  # login (anthropic supported)
+        # credentials stored on macos keychain
+/model  # select model
+/help
 ```
 
-Or set `ANTHROPIC_API_KEY` for API key auth.
+**local models:**
+```
+brew install llama.cpp
+nerv add unsloth/Qwen3.5-9B-GGUF Q4_K_XL
+nerv load qwen3.5-9b-q4_k_xl
+```
 
-**With local models:**
+## Notable Features
+
 ```
-nerv add unsloth/Qwen3.5-27B-GGUF Q4_K_XL
-nerv load qwen3.5-27b
-nerv
+nerv wt branch-name  # start a worktree
+nerv talk            # just chat (zero context)
 ```
+
+And a lot more under the hood, see documentation.
+
+
+## Documentation
+
+- [Design](docs/design.md) — core principles, eval-driven insights, what actually saves tokens
+- [Tools](docs/tools.md) — built-in tool design, content vs display, multi-edit algorithm
+- [Permissions](docs/permissions.md) — auto-approve in repo, prompt outside
+- [Context](docs/context.md) — transform_context, compaction, token savings
+- [Cancellation](docs/cancellation.md) — ^C flow, reader threads
+- [Authentication](docs/auth.md) — OAuth PKCE, Keychain
+- [Local models](docs/local-models.md) — GGUF download, llama-server
+- [Evals](eval/AGENTS.md) — eval harness, task design, report analysis
+
 
 ## Keybindings
 
@@ -96,19 +110,6 @@ nerv load [alias]                 # start llama-server
 ├── system-prompt.md     # global system prompt override
 └── debug.log            # NERV_LOG=debug for verbose
 ```
-
-Credentials stored in macOS Keychain (not on disk).
-
-## Documentation
-
-- [Design](docs/design.md) — core principles, eval-driven insights, what actually saves tokens
-- [Tools](docs/tools.md) — built-in tool design, content vs display, multi-edit algorithm
-- [Permissions](docs/permissions.md) — auto-approve in repo, prompt outside
-- [Context](docs/context.md) — transform_context, compaction, token savings
-- [Cancellation](docs/cancellation.md) — ^C flow, reader threads
-- [Authentication](docs/auth.md) — OAuth PKCE, Keychain
-- [Local models](docs/local-models.md) — GGUF download, llama-server
-- [Evals](eval/AGENTS.md) — eval harness, task design, report analysis
 
 ## Environment
 
