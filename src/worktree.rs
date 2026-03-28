@@ -26,6 +26,16 @@ pub fn create_worktree(
 
     std::fs::create_dir_all(nerv_dir.join("worktrees"))?;
 
+    // Refuse to branch from a dirty tree — the worktree starts at HEAD,
+    // so uncommitted changes would be silently left behind and the agent
+    // would start from a state the user didn't intend.
+    let status = git_output(repo_root, &["status", "--porcelain"])?;
+    if !status.is_empty() {
+        anyhow::bail!(
+            "repository has uncommitted changes — commit or stash them before creating a worktree"
+        );
+    }
+
     let output = std::process::Command::new("git")
         .args([
             "worktree",
@@ -33,6 +43,7 @@ pub fn create_worktree(
             &wt_path.to_string_lossy(),
             "-b",
             &git_branch,
+            "HEAD",
         ])
         .current_dir(repo_root)
         .output()?;
