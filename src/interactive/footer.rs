@@ -289,6 +289,11 @@ impl FooterComponent {
         self.cost_output = 0.0;
     }
 
+    /// Return the total accumulated cost so far (input + output).
+    pub fn current_cost(&self) -> f64 {
+        self.cost_input + self.cost_output
+    }
+
     pub fn add_cost(&mut self, usage: &Usage, pricing: &ModelPricing) {
         // usage.input is the full context window (uncached + cache_read + cache_write).
         // Only the uncached slice is billed at the regular input rate; cache tokens are

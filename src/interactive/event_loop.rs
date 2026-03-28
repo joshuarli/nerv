@@ -504,12 +504,15 @@ impl InteractiveMode {
                         }
                     }
 
-                    // Update footer context estimate from post-compaction messages
+                    // Update footer context estimate from post-compaction messages.
+                    // Preserve the running cost total — reset_context() zeroes it.
+                    let prior_cost = layout.footer.current_cost();
                     let context_tokens: usize = messages
                         .iter()
                         .map(crate::compaction::estimate_tokens)
                         .sum();
                     layout.footer.reset_context();
+                    layout.footer.restore_cost(prior_cost);
                     layout.footer.set_context_used(context_tokens as u32);
 
                     tui.request_render(true); // full redraw — context replaced
