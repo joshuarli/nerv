@@ -248,7 +248,7 @@ fn args_preview_for(name: &str, arguments: &serde_json::Value, args_str: &str) -
             // Show the path(s) being edited
             if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
                 path.to_string()
-            } else if let Some(edits) = arguments.get("edits").and_then(|v| v.as_array()) {
+            } else if let Some(_edits) = arguments.get("edits").and_then(|v| v.as_array()) {
                 // multi-edit: collect unique paths if present, otherwise fall back
                 let path = arguments.get("path").and_then(|v| v.as_str());
                 if let Some(p) = path {

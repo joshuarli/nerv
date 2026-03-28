@@ -102,9 +102,9 @@ fn parse_args() -> Cmd {
     // Peek at the first positional to route subcommands.
     // lexopt doesn't have lookahead, so we collect args into a command.
     let mut model: Option<String> = None;
-    let mut resume = ResumeOpt::None;
+    let resume = ResumeOpt::None;
     let mut log_level: Option<String> = None;
-    let mut wt: Option<String> = None;
+    let _wt: Option<String> = None;
 
     // First token determines which branch we're in.
     let first = match parser.next() {
