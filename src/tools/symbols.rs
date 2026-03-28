@@ -57,7 +57,7 @@ impl AgentTool for SymbolsTool {
                 },
                 "kind": {
                     "type": "string",
-                    "enum": ["function", "method", "struct", "enum", "trait", "type", "module", "macro"],
+                    "enum": ["function", "method", "struct", "enum", "union", "trait", "type", "const", "module", "macro"],
                     "description": "Filter by symbol kind"
                 },
                 "file": {
@@ -176,8 +176,10 @@ fn parse_kind_filter(s: &str) -> Option<SymbolKind> {
         "method" => Some(SymbolKind::Method),
         "struct" => Some(SymbolKind::Struct),
         "enum" => Some(SymbolKind::Enum),
+        "union" => Some(SymbolKind::Union),
         "trait" => Some(SymbolKind::Trait),
         "type" => Some(SymbolKind::Type),
+        "const" | "static" => Some(SymbolKind::Const),
         "module" | "mod" => Some(SymbolKind::Module),
         "macro" => Some(SymbolKind::Macro),
         _ => None,

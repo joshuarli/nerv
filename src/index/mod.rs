@@ -10,11 +10,12 @@ pub enum SymbolKind {
     Method,
     Struct,
     Enum,
+    Union,
     Trait,
     Type,
+    Const,
     Module,
     Macro,
-    Impl,
 }
 
 impl SymbolKind {
@@ -24,11 +25,12 @@ impl SymbolKind {
             Self::Method => "fn",
             Self::Struct => "struct",
             Self::Enum => "enum",
+            Self::Union => "union",
             Self::Trait => "trait",
             Self::Type => "type",
+            Self::Const => "const",
             Self::Module => "mod",
             Self::Macro => "macro",
-            Self::Impl => "impl",
         }
     }
 
@@ -36,10 +38,14 @@ impl SymbolKind {
         match tag {
             "definition.function" => Some(Self::Function),
             "definition.method" => Some(Self::Method),
-            "definition.class" => Some(Self::Struct),
+            "definition.struct" => Some(Self::Struct),
+            "definition.enum" => Some(Self::Enum),
+            "definition.union" => Some(Self::Union),
+            "definition.type" => Some(Self::Type),
             "definition.interface" => Some(Self::Trait),
             "definition.module" => Some(Self::Module),
             "definition.macro" => Some(Self::Macro),
+            "definition.const" => Some(Self::Const),
             _ => None,
         }
     }
@@ -72,16 +78,21 @@ pub struct SymbolIndex {
 /// Captures: @name = symbol name, @def = whole node (for range/signature).
 /// Tag names after @def encode the SymbolKind.
 const RUST_QUERY: &str = r#"
-(struct_item name: (type_identifier) @name) @definition.class
-(enum_item name: (type_identifier) @name) @definition.class
-(union_item name: (type_identifier) @name) @definition.class
-(type_item name: (type_identifier) @name) @definition.class
+(struct_item name: (type_identifier) @name) @definition.struct
+(enum_item name: (type_identifier) @name) @definition.enum
+(union_item name: (type_identifier) @name) @definition.union
+(type_item name: (type_identifier) @name) @definition.type
 (trait_item name: (type_identifier) @name) @definition.interface
 (mod_item name: (identifier) @name) @definition.module
 (macro_definition name: (identifier) @name) @definition.macro
+(const_item name: (identifier) @name) @definition.const
+(static_item name: (identifier) @name) @definition.const
 
 (declaration_list
     (function_item name: (identifier) @name) @definition.method)
+
+(declaration_list
+    (function_signature_item name: (identifier) @name) @definition.method)
 
 (function_item name: (identifier) @name) @definition.function
 "#;
@@ -249,12 +260,6 @@ impl SymbolIndex {
         results
     }
 
-    pub fn all_symbols(&self) -> Vec<&SymbolDef> {
-        self.files
-            .values()
-            .flat_map(|entry| entry.symbols.iter())
-            .collect()
-    }
 }
 
 /// Walk up the tree from a method node to find the enclosing impl_item and extract its type.
@@ -360,7 +365,7 @@ mod tests {
         assert_eq!(syms[0].name, "Foo");
         assert_eq!(syms[0].kind, SymbolKind::Struct);
         assert_eq!(syms[1].name, "Bar");
-        assert_eq!(syms[1].kind, SymbolKind::Struct); // enum → class → Struct
+        assert_eq!(syms[1].kind, SymbolKind::Enum);
     }
 
     #[test]
@@ -399,7 +404,7 @@ mod tests {
         let syms = parse_source("type Result<T> = std::result::Result<T, Error>;\n");
         assert_eq!(syms.len(), 1);
         assert_eq!(syms[0].name, "Result");
-        assert_eq!(syms[0].kind, SymbolKind::Struct); // type_item → class
+        assert_eq!(syms[0].kind, SymbolKind::Type);
     }
 
     #[test]
@@ -447,15 +452,15 @@ mod tests {
     }
 
     #[test]
-    fn trait_methods_with_bodies_extracted() {
-        // Trait method *declarations* (no body) are function_signature_item, not
-        // function_item, so they won't appear. Only default methods (with bodies) do.
+    fn trait_methods_both_kinds() {
+        // Both declarations (no body) and default methods (with body) are extracted
         let syms = parse_source(
             "pub trait AgentTool {\n    fn name(&self) -> &str;\n    fn default_impl(&self) { }\n}\n",
         );
         let methods: Vec<_> = syms.iter().filter(|s| s.kind == SymbolKind::Method).collect();
-        assert_eq!(methods.len(), 1);
-        assert_eq!(methods[0].name, "default_impl");
+        assert_eq!(methods.len(), 2);
+        assert_eq!(methods[0].name, "name");
+        assert_eq!(methods[1].name, "default_impl");
     }
 
     #[test]
@@ -567,6 +572,57 @@ mod tests {
 
         let sub_only = index.search("target", None, Some(&sub));
         assert_eq!(sub_only.len(), 1);
+    }
+
+    #[test]
+    fn const_and_static() {
+        let syms = parse_source(
+            "const MAX: usize = 100;\nstatic COUNTER: AtomicU32 = AtomicU32::new(0);\n",
+        );
+        assert_eq!(syms.len(), 2);
+        assert_eq!(syms[0].name, "MAX");
+        assert_eq!(syms[0].kind, SymbolKind::Const);
+        assert_eq!(syms[1].name, "COUNTER");
+        assert_eq!(syms[1].kind, SymbolKind::Const);
+    }
+
+    #[test]
+    fn union_definition() {
+        let syms = parse_source("union MyUnion {\n    i: i32,\n    f: f32,\n}\n");
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "MyUnion");
+        assert_eq!(syms[0].kind, SymbolKind::Union);
+    }
+
+    #[test]
+    fn trait_method_declarations() {
+        // Trait method declarations (no body) are function_signature_item
+        let syms = parse_source(
+            "pub trait AgentTool {\n    fn name(&self) -> &str;\n    fn execute(&self);\n}\n",
+        );
+        let methods: Vec<_> = syms.iter().filter(|s| s.kind == SymbolKind::Method).collect();
+        assert_eq!(methods.len(), 2, "trait method declarations should be indexed: {:#?}", syms);
+        assert_eq!(methods[0].name, "name");
+        assert_eq!(methods[1].name, "execute");
+    }
+
+    #[test]
+    fn enum_kind_filter() {
+        let mut index = SymbolIndex::new();
+        let source = "struct Foo;\nenum Bar { A }\nfn baz() {}\n";
+        let syms = index.parse_symbols(Path::new("test.rs"), source);
+        index.files.insert(
+            PathBuf::from("test.rs"),
+            FileEntry { mtime: SystemTime::UNIX_EPOCH, symbols: syms },
+        );
+
+        let enums = index.search("", Some(SymbolKind::Enum), None);
+        assert_eq!(enums.len(), 1);
+        assert_eq!(enums[0].name, "Bar");
+
+        let structs = index.search("", Some(SymbolKind::Struct), None);
+        assert_eq!(structs.len(), 1);
+        assert_eq!(structs[0].name, "Foo");
     }
 
     #[test]
