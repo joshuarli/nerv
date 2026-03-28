@@ -58,7 +58,7 @@ pub fn format_tool_call(name: &str, args: &serde_json::Value) -> String {
         ),
         "bash" => {
             let cmd = args["command"].as_str().unwrap_or("?");
-            format!("{}bash{} {}$ {}{}", tn, r, d, truncate_str(cmd, 80), r)
+            format!("{}bash{} {}$ {}{}", tn, r, d, cmd, r)
         }
         "grep" => {
             let pattern = args["pattern"].as_str().unwrap_or("?");
