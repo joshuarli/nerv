@@ -16,56 +16,49 @@ pub fn hud_line_count() -> usize {
     if nerv_debug() { 1 } else { 0 }
 }
 
-/// Sample the current process RSS in kilobytes.
-/// Returns 0 on unsupported platforms or if the read fails.
-fn sample_rss_kb() -> u64 {
+/// Sample the whole-process RSS in kilobytes.
+/// Returns 0 on unsupported platforms or if the syscall fails.
+pub(crate) fn sample_rss_kb() -> u64 {
     #[cfg(target_os = "macos")]
     {
-        // task_info(TASK_BASIC_INFO) gives resident_size in bytes.
+        // MACH_TASK_BASIC_INFO (flavor 20) — stable 64-bit struct, whole process.
         use std::mem;
-        unsafe extern "C" {
-            fn task_self_trap() -> libc::mach_port_t;
-        }
-        #[allow(non_camel_case_types)]
-        type mach_port_t = u32;
-        #[allow(non_camel_case_types)]
-        type task_t = mach_port_t;
         #[allow(non_camel_case_types)]
         type natural_t = u32;
         #[allow(non_camel_case_types)]
         type integer_t = i32;
-        #[allow(non_camel_case_types)]
-        type kern_return_t = integer_t;
-        const TASK_BASIC_INFO: natural_t = 5;
+        const MACH_TASK_BASIC_INFO: natural_t = 20;
         #[repr(C)]
-        struct TaskBasicInfo {
-            suspend_count: integer_t,
-            virtual_size: usize,
-            resident_size: usize,
-            user_time: [u32; 2],
-            system_time: [u32; 2],
-            policy: integer_t,
+        struct MachTaskBasicInfo {
+            virtual_size: u64,
+            resident_size: u64,
+            resident_size_max: u64,
+            user_time: [u32; 2],   // time_value_t
+            system_time: [u32; 2], // time_value_t
+            policy: i32,
+            suspend_count: i32,
         }
         unsafe extern "C" {
             fn task_info(
-                target_task: task_t,
+                target_task: u32,
                 flavor: natural_t,
                 task_info_out: *mut integer_t,
                 task_info_outCnt: *mut natural_t,
-            ) -> kern_return_t;
+            ) -> i32;
         }
         unsafe {
+            #[allow(deprecated)]
             let task = libc::mach_task_self();
-            let mut info: TaskBasicInfo = mem::zeroed();
-            let mut count = (mem::size_of::<TaskBasicInfo>() / mem::size_of::<integer_t>()) as natural_t;
+            let mut info: MachTaskBasicInfo = mem::zeroed();
+            let mut count = (mem::size_of::<MachTaskBasicInfo>() / mem::size_of::<integer_t>()) as natural_t;
             let kr = task_info(
                 task,
-                TASK_BASIC_INFO,
-                &mut info as *mut TaskBasicInfo as *mut integer_t,
+                MACH_TASK_BASIC_INFO,
+                &mut info as *mut MachTaskBasicInfo as *mut integer_t,
                 &mut count,
             );
             if kr == 0 {
-                (info.resident_size / 1024) as u64
+                info.resident_size / 1024
             } else {
                 0
             }
@@ -569,5 +562,21 @@ fn fmt_tokens(count: u32) -> String {
         format!("{:.1}M", count as f64 / 1_000_000.0)
     } else {
         format!("{}M", count / 1_000_000)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_rss_returns_sane_value() {
+        let kb = sample_rss_kb();
+        eprintln!("sample_rss_kb() = {} KB ({:.1} MB)", kb, kb as f64 / 1024.0);
+        // A Rust test binary should use at least a few MB of RSS.
+        // 150 KB would indicate the bug (thread-only or wrong struct).
+        assert!(kb > 1024, "RSS {} KB is suspiciously low — probably not whole-process", kb);
+        // And it shouldn't be insanely high (sanity: <16 GB).
+        assert!(kb < 16 * 1024 * 1024, "RSS {} KB is suspiciously high", kb);
     }
 }
