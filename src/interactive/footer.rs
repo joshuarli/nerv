@@ -206,15 +206,7 @@ impl Component for FooterComponent {
         if let Some(ref branch) = self.git_branch {
             pwd = format!("{} {}({}){}", pwd, theme::ACCENT, branch, r);
         }
-        let pwd_left = if let Some(ref name) = self.session_name {
-            format!(
-                "{}{}{} {}\"{}\"{} ",
-                dim, pwd, r,
-                theme::FOOTER_LABEL, name, r,
-            )
-        } else {
-            format!("{}{}{}", dim, pwd, r)
-        };
+        let pwd_left = format!("{}{}{}", dim, pwd, r);
 
         let plan_tag = if self.plan_mode {
             format!("{}PLAN{} ", theme::ACCENT_BOLD, r)
