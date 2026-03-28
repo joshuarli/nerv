@@ -156,8 +156,14 @@ impl InteractiveMode {
                 }
             }
             AgentSessionEvent::ExportDone { result } => match result {
-                Ok(path) => {
-                    self.status_message = Some(format!("Exported to {}", path));
+                Ok(paths) => {
+                    // paths contains newline-separated export paths (html + jsonl)
+                    let msg = paths
+                        .lines()
+                        .map(|p| format!("Exported to {}", p))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    self.status_message = Some(msg);
                 }
                 Err(e) => {
                     self.status_message = Some(format!("Export failed: {}", e));
@@ -794,13 +800,8 @@ impl InteractiveMode {
                 });
             }
             "/export" | "/share" => {
-                if args == "jsonl" {
-                    let _ = self.cmd_tx.send(SessionCommand::ExportJsonl);
-                    self.status_message = Some("Exporting JSONL...".into());
-                } else {
-                    let _ = self.cmd_tx.send(SessionCommand::ExportHtml);
-                    self.status_message = Some("Exporting HTML...".into());
-                }
+                let _ = self.cmd_tx.send(SessionCommand::Export);
+                self.status_message = Some("Exporting...".into());
             }
             "/resume" => {
                 if args.is_empty() {
@@ -883,7 +884,7 @@ impl InteractiveMode {
                      /compact        — compact context now
                      /compact at N   — set auto-compact threshold to N% for this session\n\
                      /session        — browse and resume sessions\n\
-                     /export [jsonl]  — export session to ~/.nerv/exports/ (html by default)\n\
+                     /export          — export session to ~/.nerv/exports/ (html + jsonl)\n\
                      /copy           — copy last response to clipboard\n\
                      /resume [id]    — list/load sessions\n\
                      /tree           — browse/switch session branches\n\

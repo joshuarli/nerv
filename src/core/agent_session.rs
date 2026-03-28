@@ -126,8 +126,7 @@ pub enum SessionCommand {
     SetEffortLevel { level: Option<EffortLevel> },
     Compact { custom_instructions: Option<String> },
     SetCompactThreshold { pct: u8 },
-    ExportJsonl,
-    ExportHtml,
+    Export,
     Login { provider: String },
     ListSessions { repo_root: Option<String> },
     GetTree,
@@ -1091,38 +1090,38 @@ pub fn session_task(
                     }
                 }
             }
-            SessionCommand::ExportJsonl => {
+            SessionCommand::Export => {
                 let sid = session.session_manager.session_id().to_string();
                 let sid_short = if sid.len() >= 8 { &sid[..8] } else { &sid };
                 let leaf = session.session_manager.leaf_id().unwrap_or("").to_string();
                 let leaf_short = if leaf.len() >= 6 { &leaf[..6] } else { &leaf };
                 let exports_dir = crate::nerv_dir().join("exports");
                 let _ = std::fs::create_dir_all(&exports_dir);
-                let path = exports_dir.join(format!("{sid_short}-{leaf_short}.jsonl"));
-                let result = if let Some(content) = session.session_manager.export_jsonl() {
-                    std::fs::write(&path, content)
-                        .map(|_| path.to_string_lossy().to_string())
+
+                // Export HTML — current branch (root → leaf) only.
+                let html_path = exports_dir.join(format!("{sid_short}-{leaf_short}.html"));
+                let branch_entries = session.session_manager.current_branch_entries();
+                let html_result = crate::export::export_entries_html(
+                    &branch_entries,
+                    &session.agent.state.messages,
+                    &html_path,
+                );
+
+                // Export JSONL.
+                let jsonl_path = exports_dir.join(format!("{sid_short}-{leaf_short}.jsonl"));
+                let jsonl_result = if let Some(content) = session.session_manager.export_jsonl() {
+                    std::fs::write(&jsonl_path, content)
+                        .map(|_| jsonl_path.to_string_lossy().to_string())
                         .map_err(|e| e.to_string())
                 } else {
                     Err("no active session".into())
                 };
-                let _ = event_tx.send(AgentSessionEvent::ExportDone { result });
-            }
-            SessionCommand::ExportHtml => {
-                let sid = session.session_manager.session_id().to_string();
-                let sid_short = if sid.len() >= 8 { &sid[..8] } else { &sid };
-                let leaf = session.session_manager.leaf_id().unwrap_or("").to_string();
-                let leaf_short = if leaf.len() >= 6 { &leaf[..6] } else { &leaf };
-                let exports_dir = crate::nerv_dir().join("exports");
-                let _ = std::fs::create_dir_all(&exports_dir);
-                let path = exports_dir.join(format!("{sid_short}-{leaf_short}.html"));
-                // Export only the current branch (root → leaf), not all branches.
-                let branch_entries = session.session_manager.current_branch_entries();
-                let result = crate::export::export_entries_html(
-                    &branch_entries,
-                    &session.agent.state.messages,
-                    &path,
-                );
+
+                // Combine results into a single status message.
+                let result = match (html_result, jsonl_result) {
+                    (Ok(h), Ok(j)) => Ok(format!("{}\n{}", h, j)),
+                    (Err(e), _) | (_, Err(e)) => Err(e),
+                };
                 let _ = event_tx.send(AgentSessionEvent::ExportDone { result });
             }
             SessionCommand::Login { provider } => {
