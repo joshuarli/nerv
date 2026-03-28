@@ -54,18 +54,33 @@ pub fn now_millis() -> u64 {
 /// so it can be used as a stable identifier for session and cache lookups even
 /// after the directory is relocated.
 ///
+/// The result is cached per repo root for the lifetime of the process — repeated
+/// calls for the same path are a single mutex + HashMap lookup.
+///
 /// Returns `None` if the path is not a git repository or git is unavailable.
 pub fn repo_fingerprint(repo_root: &std::path::Path) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .args(["rev-list", "--max-parents=0", "HEAD"])
-        .current_dir(repo_root)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<std::path::PathBuf, Option<String>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = cache.lock().unwrap();
+    if let Some(cached) = map.get(repo_root) {
+        return cached.clone();
     }
-    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if sha.is_empty() { None } else { Some(sha) }
+    let result = (|| {
+        let out = std::process::Command::new("git")
+            .args(["rev-list", "--max-parents=0", "HEAD"])
+            .current_dir(repo_root)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if sha.is_empty() { None } else { Some(sha) }
+    })();
+    map.insert(repo_root.to_path_buf(), result.clone());
+    result
 }
 
 /// Find the repo root by walking up from `start` looking for `.git/`.

@@ -29,11 +29,15 @@ impl SessionManager {
 
         db.execute(
             "CREATE TABLE IF NOT EXISTS sessions (
-                id         TEXT PRIMARY KEY,
-                cwd        TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                preview    TEXT NOT NULL DEFAULT ''
+                id                TEXT PRIMARY KEY,
+                cwd               TEXT NOT NULL,
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL,
+                preview           TEXT NOT NULL DEFAULT '',
+                worktree          TEXT,
+                name              TEXT,
+                compact_threshold REAL,
+                repo_id           TEXT
             )",
         )
         .expect("failed to create sessions table");
@@ -51,15 +55,6 @@ impl SessionManager {
 
         db.execute("CREATE INDEX IF NOT EXISTS idx_entries_session ON entries(session_id, seq)")
             .ok();
-
-        // Migration: add worktree column
-        db.execute("ALTER TABLE sessions ADD COLUMN worktree TEXT").ok();
-        // Migration: add name column for auto-generated session titles
-        db.execute("ALTER TABLE sessions ADD COLUMN name TEXT").ok();
-        // Migration: per-session auto-compact threshold (fraction 0.0–1.0)
-        db.execute("ALTER TABLE sessions ADD COLUMN compact_threshold REAL").ok();
-        // Migration: stable repo fingerprint (SHA of initial commit) for rename-safe filtering
-        db.execute("ALTER TABLE sessions ADD COLUMN repo_id TEXT").ok();
 
         db.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
