@@ -22,6 +22,10 @@ pub struct NervConfig {
     /// Extra HTTP headers per provider, e.g. {"anthropic": {"user-agent": "claude-cli/1.0.0"}}
     #[serde(default)]
     pub headers: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    /// Notification hooks fired on specific events.
+    /// Matchers: "onPermissionDenied", "onCompactionDone", "onResponseComplete".
+    #[serde(default)]
+    pub notifications: Vec<super::notifications::NotificationRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +54,7 @@ impl Default for NervConfig {
             auto_compact: Some(true),
             compaction_model: Some("claude-haiku-4-5".to_string()),
             headers: std::collections::HashMap::new(),
+            notifications: Vec::new(),
         }
     }
 }

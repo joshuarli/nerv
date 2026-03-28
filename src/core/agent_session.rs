@@ -291,6 +291,13 @@ impl AgentSession {
                                 let mut c = cache.lock().unwrap();
                                 c.insert(key.clone());
                                 c.insert(reason_key);
+                            } else {
+                                // Fire onPermissionDenied hooks (fire-and-forget).
+                                let cfg = NervConfig::load(crate::nerv_dir());
+                                super::notifications::fire(
+                                    super::notifications::NotificationMatcher::OnPermissionDenied,
+                                    &cfg.notifications,
+                                );
                             }
                             approved
                         }
@@ -557,6 +564,17 @@ impl AgentSession {
             });
         }
 
+        // Fire onResponseComplete for successful, non-error turns.
+        if let Some(last) = last_assistant(&new_messages) {
+            if !last.stop_reason.is_error() && !last.stop_reason.is_context_overflow() {
+                let cfg = NervConfig::load(crate::nerv_dir());
+                super::notifications::fire(
+                    super::notifications::NotificationMatcher::OnResponseComplete,
+                    &cfg.notifications,
+                );
+            }
+        }
+
         new_messages
     }
 
@@ -677,6 +695,12 @@ impl AgentSession {
                     summary.clone(),
                     first_kept_id.clone(),
                     tokens_before,
+                );
+                // Fire onCompactionDone hooks (fire-and-forget).
+                let cfg = NervConfig::load(crate::nerv_dir());
+                super::notifications::fire(
+                    super::notifications::NotificationMatcher::OnCompactionDone,
+                    &cfg.notifications,
                 );
                 Ok(Some(CompactionResult {
                     summary,
