@@ -309,22 +309,26 @@ def run_task(task_dir: Path, binary: Path, report_dir: Path,
         return result
 
 
-def check_goals(goals: dict, all_outputs: list[dict], result: EvalResult) -> list[str]:
-    """Check efficiency goals against the trace. Returns list of pass/fail strings."""
-    results = []
-
-    # Count edit calls and multi-edits from traces
-    edit_calls = 0
-    multi_edits = 0
+def extract_tool_sequence(all_outputs: list[dict]) -> list[dict]:
+    """Extract ordered list of {tool, args} from all trace messages."""
+    sequence = []
     for output in all_outputs:
         for msg in output.get("trace", []):
             if msg.get("role") != "assistant":
                 continue
             for tc in msg.get("tool_calls", []):
-                if tc.get("tool") == "edit":
-                    edit_calls += 1
-                    if "edits" in tc.get("args", {}):
-                        multi_edits += 1
+                sequence.append({"tool": tc.get("tool", ""), "args": tc.get("args", {})})
+    return sequence
+
+
+def check_goals(goals: dict, all_outputs: list[dict], result: EvalResult) -> list[str]:
+    """Check efficiency goals against the trace. Returns list of pass/fail strings."""
+    results = []
+    tool_seq = extract_tool_sequence(all_outputs)
+
+    # Count edit calls and multi-edits
+    edit_calls = sum(1 for t in tool_seq if t["tool"] == "edit")
+    multi_edits = sum(1 for t in tool_seq if t["tool"] == "edit" and "edits" in t["args"])
 
     if "max_edit_calls" in goals:
         limit = goals["max_edit_calls"]
@@ -340,6 +344,53 @@ def check_goals(goals: dict, all_outputs: list[dict], result: EvalResult) -> lis
         limit = goals["max_turns"]
         ok = result.turns <= limit
         results.append(f"{'GOAL' if ok else 'MISS'} turns: {result.turns} (goal: <={limit})")
+
+    # Tool ordering: require certain tools before any `read` call
+    if "require_before_read" in goals:
+        required = set(goals["require_before_read"])
+        first_read = next((i for i, t in enumerate(tool_seq) if t["tool"] == "read"), None)
+        first_required = next(
+            (i for i, t in enumerate(tool_seq) if t["tool"] in required), None
+        )
+        if first_required is None:
+            tools_used = [t["tool"] for t in tool_seq]
+            results.append(f"MISS require_before_read: never used {required} (tools: {tools_used})")
+        elif first_read is not None and first_required > first_read:
+            results.append(
+                f"MISS require_before_read: {tool_seq[first_required]['tool']} at position "
+                f"{first_required}, but read at {first_read}"
+            )
+        else:
+            results.append(f"GOAL require_before_read: {tool_seq[first_required]['tool']} at position {first_required}")
+
+    # Forbid bash for searching (grep, rg, find, fd, cat, head, tail)
+    if "forbid_bash_search" in goals and goals["forbid_bash_search"]:
+        search_cmds = {"grep", "rg", "find", "fd", "cat", "head", "tail", "awk", "sed"}
+        violations = []
+        for t in tool_seq:
+            if t["tool"] != "bash":
+                continue
+            cmd = t["args"].get("command", "")
+            words = cmd.replace("|", " ").replace(";", " ").replace("&&", " ").split()
+            for w in words:
+                base = w.split("/")[-1]
+                if base in search_cmds:
+                    violations.append(cmd.strip()[:80])
+                    break
+        if violations:
+            results.append(f"MISS forbid_bash_search: {len(violations)} violation(s)")
+            for v in violations[:3]:
+                results.append(f"  bash: {v}")
+        else:
+            results.append("GOAL forbid_bash_search: no bash search commands")
+
+    # Require specific tools were used at least once
+    if "require_tools" in goals:
+        for tool_name in goals["require_tools"]:
+            used = any(t["tool"] == tool_name for t in tool_seq)
+            results.append(
+                f"{'GOAL' if used else 'MISS'} require_tools: {tool_name} {'used' if used else 'never used'}"
+            )
 
     return results
 

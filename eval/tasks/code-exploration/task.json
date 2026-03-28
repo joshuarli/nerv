@@ -1,0 +1,12 @@
+{
+  "prompt": "I need to understand how this data pipeline works. Explore the codebase and write a clear explanation to answer.md covering: what the Pipeline struct does, how filters are applied, what the Filter trait requires of implementations, and how scheduling integrates with processing. Include the key types and their relationships.",
+  "verify": "python3 verify_tools.py",
+  "max_turns": 10,
+  "goals": {
+    "require_before_read": ["symbols", "codemap"],
+    "forbid_bash_search": true,
+    "require_tools": ["symbols", "codemap"],
+    "max_turns": 6,
+    "description": "Use symbols/codemap to explore, then write the answer. No bash searching, no read-first. 4-6 turns."
+  }
+}

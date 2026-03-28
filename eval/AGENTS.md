@@ -130,6 +130,25 @@ every edit (~25+ turns). This task directly measures the impact of:
 - Small file auto-sizing (all files are < 50 lines)
 - System prompt batch guidance (read all first, then edit)
 
+### code-exploration (Tool Discipline)
+
+Explore a small Rust codebase (3 source files, ~200 lines) and write an
+explanation of how it works to `answer.md`. The task is pure exploration —
+no edits, no tests, just understanding code and explaining it.
+
+**What this tests**: Tool selection discipline. The system prompt tells the
+model to use `symbols`/`codemap` before `read`, and to never use bash for
+searching. Goals assert:
+- `symbols` or `codemap` is called before any `read`
+- Both `symbols` and `codemap` are used at least once
+- No bash calls containing search commands (grep, rg, find, fd, cat, etc.)
+- Completed in ≤6 turns
+
+The ideal flow: `symbols ""` to get an overview → `codemap` with `depth: full`
+on key types → write answer.md. 3-4 turns. A model that ignores the system
+prompt and reads files directly, or shells out to grep, will fail the goals
+even if the answer is correct.
+
 ## Task structure
 
 ```
