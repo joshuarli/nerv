@@ -86,7 +86,7 @@ def run_nerv(
     nerv handles SIGINT gracefully (sets cancel flag, finishes current turn,
     flushes JSON). On ^C we wait up to 30s for it to finish. Second ^C kills.
     """
-    cmd = [str(binary), "--print", "--max-turns", str(max_turns)]
+    cmd = [str(binary), "print", "--max-turns", str(max_turns)]
     if model:
         cmd.extend(["--model", model])
     if stream:

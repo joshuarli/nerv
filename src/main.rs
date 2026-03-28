@@ -22,97 +22,482 @@ extern "C" fn handle_sigint_print(_: libc::c_int) {
     }
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
+// ---------------------------------------------------------------------------
+// CLI argument model
+// ---------------------------------------------------------------------------
 
-    // Subcommands (run before TUI setup)
-    if let Some(cmd) = args.get(1).map(|s| s.as_str()) {
-        match cmd {
-            "-h" | "--help" => {
-                println!("nerv — coding agent for the terminal");
+enum Cmd {
+    /// Interactive TUI session (default)
+    Interactive {
+        model: Option<String>,
+        resume: ResumeOpt,
+        log_level: Option<String>,
+    },
+    /// Interactive TUI session inside a fresh git worktree
+    Wt {
+        branch: String,
+        model: Option<String>,
+        log_level: Option<String>,
+    },
+    /// Headless: read prompt from stdin, stream JSON to stdout
+    Print {
+        model: Option<String>,
+        max_turns: u32,
+        verbose: bool,
+    },
+    /// Open session picker (no id) or load a specific session, then drop into TUI
+    Resume { id: Option<String> },
+    // --- one-shot subcommands ---
+    Models,
+    Export { id: String },
+    Add { rest: Vec<String> },
+    Load { rest: Vec<String> },
+    Unload,
+    Codemap { rest: Vec<String> },
+    Symbols { rest: Vec<String> },
+    Version,
+}
+
+enum ResumeOpt {
+    None,
+    Picker,
+    Session(String),
+}
+
+fn print_top_help() {
+    println!("nerv — coding agent for the terminal");
+    println!();
+    println!("Usage: nerv [options]");
+    println!("       nerv <command> [args]");
+    println!();
+    println!("Options:");
+    println!("  --model <name>     Select model");
+    println!("  --log-level <lvl>  Set log level (debug, info, warn, error)");
+    println!("  -h, --help         Show this help");
+    println!("  --version          Show version");
+    println!();
+    println!("Commands:");
+    println!("  resume [id]                    Open session picker, or resume a specific session");
+    println!("  print [--model M] [--max-turns N] [--verbose]");
+    println!("                                 Headless mode: read prompt from stdin, output JSON");
+    println!("  wt <branch> [--model M]        Start session in a fresh git worktree on <branch>");
+    println!("  models                         List all configured models and their status");
+    println!("  export <id>                    Export session (HTML + JSONL) to ~/.nerv/exports/");
+    println!("  add <hf-repo> <quant>          Download GGUF model from HuggingFace");
+    println!("  load [alias]                   Start llama-server for a local model");
+    println!("  unload                         Stop running llama-server");
+    println!("  codemap <query> [path]         Show symbol implementations matching query");
+    println!("  symbols <query> [path]         List symbol definitions matching query");
+    println!();
+    println!("Environment:");
+    println!("  NERV_LOG=<level>   Set log level (default: warn)");
+}
+
+/// Parse CLI args with lexopt. Returns the resolved Cmd or exits on error.
+fn parse_args() -> Cmd {
+    use lexopt::prelude::*;
+
+    let mut parser = lexopt::Parser::from_env();
+
+    // Peek at the first positional to route subcommands.
+    // lexopt doesn't have lookahead, so we collect args into a command.
+    let mut model: Option<String> = None;
+    let mut resume = ResumeOpt::None;
+    let mut log_level: Option<String> = None;
+    let mut wt: Option<String> = None;
+
+    // First token determines which branch we're in.
+    let first = match parser.next() {
+        Ok(Some(arg)) => arg,
+        Ok(None) => {
+            // No args — plain interactive mode.
+            return Cmd::Interactive { model: None, resume: ResumeOpt::None, log_level: None };
+        }
+        Err(e) => {
+            eprintln!("error: {e}. Try: nerv --help");
+            std::process::exit(1);
+        }
+    };
+
+    match first {
+        // ── top-level flags (interactive mode) ──────────────────────────────
+        Short('h') | Long("help") => {
+            print_top_help();
+            std::process::exit(0);
+        }
+        Long("version") => return Cmd::Version,
+        Long("model") => {
+            model = Some(parser.value().unwrap_or_else(|_| {
+                eprintln!("--model requires a value");
+                std::process::exit(1);
+            }).string().unwrap());
+        }
+        Long("log-level") => {
+            log_level = Some(parser.value().unwrap_or_else(|_| {
+                eprintln!("--log-level requires a value");
+                std::process::exit(1);
+            }).string().unwrap());
+        }
+        // ── subcommands ──────────────────────────────────────────────────────
+        Value(v) if v == "resume" => {
+            // resume [-h] [id]
+            match parser.next() {
+                Ok(Some(Short('h') | Long("help"))) => {
+                    println!("Usage: nerv resume [id]");
+                    println!();
+                    println!("Open the session picker, or resume a specific session by id prefix.");
+                    println!();
+                    println!("Arguments:");
+                    println!("  id   Session id (or prefix) to resume directly");
+                    std::process::exit(0);
+                }
+                Ok(Some(Value(id))) => return Cmd::Resume { id: Some(id.string().unwrap()) },
+                Ok(None) => return Cmd::Resume { id: None },
+                Ok(Some(arg)) => {
+                    eprintln!("nerv resume: unexpected argument '{}'", arg.unexpected());
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("nerv resume: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Value(v) if v == "print" => {
+            // print [-h] [--model M] [--max-turns N] [--verbose]
+            let mut p_model: Option<String> = None;
+            let mut max_turns: u32 = 20;
+            let mut verbose = false;
+            loop {
+                match parser.next() {
+                    Ok(None) => break,
+                    Ok(Some(Short('h') | Long("help"))) => {
+                        println!("Usage: nerv print [options]");
+                        println!();
+                        println!("Headless mode: read prompt from stdin, run agent, output JSON to stdout.");
+                        println!();
+                        println!("Options:");
+                        println!("  --model <name>      Model to use (e.g. opus, sonnet)");
+                        println!("  --max-turns <n>     Max agent turns (default: 20)");
+                        println!("  --verbose           Stream tool progress to stderr");
+                        println!("  -h, --help          Show this help");
+                        std::process::exit(0);
+                    }
+                    Ok(Some(Long("model"))) => {
+                        p_model = Some(parser.value().unwrap_or_else(|_| {
+                            eprintln!("--model requires a value");
+                            std::process::exit(1);
+                        }).string().unwrap());
+                    }
+                    Ok(Some(Long("max-turns"))) => {
+                        let s = parser.value().unwrap_or_else(|_| {
+                            eprintln!("--max-turns requires a value");
+                            std::process::exit(1);
+                        }).string().unwrap();
+                        max_turns = s.parse().unwrap_or_else(|_| {
+                            eprintln!("--max-turns must be a number");
+                            std::process::exit(1);
+                        });
+                    }
+                    Ok(Some(Long("verbose"))) => verbose = true,
+                    Ok(Some(arg)) => {
+                        eprintln!("nerv print: unexpected argument. Try: nerv print --help");
+                        eprintln!("  {}", arg.unexpected());
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("nerv print: {e}. Try: nerv print --help");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            return Cmd::Print { model: p_model, max_turns, verbose };
+        }
+        Value(v) if v == "wt" => {
+            // wt [-h] <branch> [--model M] [--log-level L]
+            let mut wt_model: Option<String> = None;
+            let mut wt_log: Option<String> = None;
+            let mut branch: Option<String> = None;
+            loop {
+                match parser.next() {
+                    Ok(None) => break,
+                    Ok(Some(Short('h') | Long("help"))) => {
+                        println!("Usage: nerv wt <branch> [options]");
+                        println!();
+                        println!("Start an interactive session in a fresh git worktree on <branch>.");
+                        println!("The worktree is created under ~/.nerv/worktrees/ and checked out");
+                        println!("to a new branch. Merged and cleaned up when the session ends.");
+                        println!();
+                        println!("Arguments:");
+                        println!("  branch   Name of the new git branch to create");
+                        println!();
+                        println!("Options:");
+                        println!("  --model <name>      Model to use");
+                        println!("  --log-level <lvl>   Log level (debug, info, warn, error)");
+                        println!("  -h, --help          Show this help");
+                        std::process::exit(0);
+                    }
+                    Ok(Some(Long("model"))) => {
+                        wt_model = Some(parser.value().unwrap_or_else(|_| {
+                            eprintln!("--model requires a value");
+                            std::process::exit(1);
+                        }).string().unwrap());
+                    }
+                    Ok(Some(Long("log-level"))) => {
+                        wt_log = Some(parser.value().unwrap_or_else(|_| {
+                            eprintln!("--log-level requires a value");
+                            std::process::exit(1);
+                        }).string().unwrap());
+                    }
+                    Ok(Some(Value(v))) if branch.is_none() => {
+                        branch = Some(v.string().unwrap());
+                    }
+                    Ok(Some(arg)) => {
+                        eprintln!("nerv wt: unexpected argument. Try: nerv wt --help");
+                        eprintln!("  {}", arg.unexpected());
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("nerv wt: {e}. Try: nerv wt --help");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            let branch = branch.unwrap_or_else(|| {
+                eprintln!("nerv wt: branch name required. Try: nerv wt --help");
+                std::process::exit(1);
+            });
+            return Cmd::Wt { branch, model: wt_model, log_level: wt_log };
+        }
+        Value(v) if v == "models" => {
+            if matches!(parser.next(), Ok(Some(Short('h') | Long("help")))) {
+                println!("Usage: nerv models");
                 println!();
-                println!("Usage: nerv [options]");
-                println!("       nerv <command> [args]");
+                println!("List all configured models and their online status.");
+                std::process::exit(0);
+            }
+            return Cmd::Models;
+        }
+        Value(v) if v == "export" => {
+            match parser.next() {
+                Ok(Some(Short('h') | Long("help"))) => {
+                    println!("Usage: nerv export <session-id>");
+                    println!();
+                    println!("Export a session to HTML and JSONL in ~/.nerv/exports/.");
+                    std::process::exit(0);
+                }
+                Ok(Some(Value(id))) => return Cmd::Export { id: id.string().unwrap() },
+                _ => {
+                    eprintln!("Usage: nerv export <session-id>");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Value(v) if v == "add" => {
+            if matches!(parser.clone().next(), Ok(Some(Short('h') | Long("help")))) {
+                println!("Usage: nerv add <hf-repo> <quant>");
+                println!();
+                println!("Download a GGUF model from HuggingFace and register it.");
+                println!();
+                println!("Arguments:");
+                println!("  hf-repo   HuggingFace repo (e.g. Org/Model-GGUF)");
+                println!("  quant     Quantization level (e.g. Q4_K_M)");
+                std::process::exit(0);
+            }
+            return Cmd::Add { rest: remaining_strings(parser) };
+        }
+        Value(v) if v == "load" => {
+            if matches!(parser.clone().next(), Ok(Some(Short('h') | Long("help")))) {
+                println!("Usage: nerv load [alias]");
+                println!();
+                println!("Start llama-server for a local GGUF model.");
+                println!("Replaces this process via exec — Ctrl+C to stop.");
+                std::process::exit(0);
+            }
+            return Cmd::Load { rest: remaining_strings(parser) };
+        }
+        Value(v) if v == "unload" => {
+            if matches!(parser.next(), Ok(Some(Short('h') | Long("help")))) {
+                println!("Usage: nerv unload");
+                println!();
+                println!("Stop the running llama-server (Ctrl+C the process directly).");
+                std::process::exit(0);
+            }
+            return Cmd::Unload;
+        }
+        Value(v) if v == "codemap" => {
+            if matches!(parser.clone().next(), Ok(Some(Short('h') | Long("help")))) {
+                println!("Usage: nerv codemap <query> [path] [--kind <kind>] [--depth full|signatures]");
+                println!();
+                println!("Show symbol implementations matching a query.");
                 println!();
                 println!("Options:");
-                println!("  --resume           Open session picker immediately");
-                println!("  --resume <id>      Resume a specific session");
-                println!("  --print            Headless mode: read prompt from stdin, output JSON");
-                println!("  --max-turns <n>    Max agent turns in print mode (default 20)");
-                println!("  --model <name>     Select model (e.g. opus, sonnet, haiku)");
-                println!("  --json             JSON output in print mode (default)");
-                println!("  --list-models      List all configured models");
-                println!("  --log-level <lvl>  Set log level (debug, info, warn, error)");
-                println!("  --wt <branch>      Create git worktree for session");
-                println!("  export <id>        Export session (HTML + JSONL) to ~/.nerv/exports/");
-                println!("  -h, --help         Show this help");
-                println!("  --version          Show version");
-                println!();
-                println!("Environment:");
-                println!("  NERV_LOG=<level>   Set log level (default: warn)");
-                println!();
-                println!("Commands:");
-                println!("  export <id>          Export session (HTML + JSONL) to ~/.nerv/exports/");
-                println!("  add <repo> <quant>   Download GGUF from HuggingFace");
-                println!("  load [alias]         Run llama-server for a model");
-                println!("  models               List configured local models");
-                println!("  unload               Kill running llama-server");
-                println!("  codemap <query> [path]  Show symbol implementations matching query");
-                println!("  symbols <query> [path]  List symbol definitions matching query");
-                return;
+                println!("  --kind <kind>          Filter by symbol kind");
+                println!("  --depth full|signatures  Output verbosity (default: full)");
+                std::process::exit(0);
             }
-            "--version" => {
-                println!("nerv {}", env!("CARGO_PKG_VERSION"));
-                return;
-            }
-            "--print" => {
-                print_mode(&args);
-                return;
-            }
-            "--list-models" => {
-                list_all_models();
-                return;
-            }
-            "add" | "load" | "models" | "unload" | "export" | "codemap" | "symbols" => {
-                let nerv_dir = nerv_dir();
-                std::fs::create_dir_all(nerv_dir).ok();
-                handle_subcommand(cmd, &args[2..], nerv_dir);
-                return;
-            }
-            _ => {}
+            return Cmd::Codemap { rest: remaining_strings(parser) };
         }
-    }
-    if args.iter().any(|a| a == "--version") {
-        println!("nerv {}", env!("CARGO_PKG_VERSION"));
-        return;
+        Value(v) if v == "symbols" => {
+            if matches!(parser.clone().next(), Ok(Some(Short('h') | Long("help")))) {
+                println!("Usage: nerv symbols <query> [path] [--kind <kind>] [--refs]");
+                println!();
+                println!("List symbol definitions matching a query.");
+                println!();
+                println!("Options:");
+                println!("  --kind <kind>   Filter by symbol kind");
+                println!("  --refs          Also show call sites via ripgrep");
+                std::process::exit(0);
+            }
+            return Cmd::Symbols { rest: remaining_strings(parser) };
+        }
+        Value(v) => {
+            eprintln!("unknown command '{}'. Try: nerv --help", v.to_string_lossy());
+            std::process::exit(1);
+        }
+        arg => {
+            eprintln!("unexpected argument. Try: nerv --help");
+            eprintln!("  {}", arg.unexpected());
+            std::process::exit(1);
+        }
     }
 
-    // Reject unknown flags early
-    {
-        let known = [
-            "--resume", "--model", "--log-level", "--version", "--wt",
-        ];
-        let mut i = 1;
-        while i < args.len() {
-            let arg = &args[i];
-            if arg.starts_with('-') && !known.contains(&arg.as_str()) {
-                eprintln!("Unknown option: {}. Try nerv --help", arg);
+    // Remaining args for interactive mode (--model / --log-level / --wt may follow).
+    loop {
+        match parser.next() {
+            Ok(None) => break,
+            Ok(Some(Long("model"))) => {
+                model = Some(parser.value().unwrap_or_else(|_| {
+                    eprintln!("--model requires a value");
+                    std::process::exit(1);
+                }).string().unwrap());
+            }
+            Ok(Some(Long("log-level"))) => {
+                log_level = Some(parser.value().unwrap_or_else(|_| {
+                    eprintln!("--log-level requires a value");
+                    std::process::exit(1);
+                }).string().unwrap());
+            }
+            Ok(Some(Short('h') | Long("help"))) => {
+                print_top_help();
+                std::process::exit(0);
+            }
+            Ok(Some(Long("version"))) => {
+                println!("nerv {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
+            Ok(Some(arg)) => {
+                eprintln!("unexpected argument. Try: nerv --help");
+                eprintln!("  {}", arg.unexpected());
                 std::process::exit(1);
             }
-            // Skip the value for flags that take one
-            if matches!(arg.as_str(), "--resume" | "--model" | "--log-level" | "--wt") {
-                i += 1;
+            Err(e) => {
+                eprintln!("error: {e}. Try: nerv --help");
+                std::process::exit(1);
             }
-            i += 1;
         }
     }
+
+    Cmd::Interactive { model, resume, log_level }
+}
+
+/// Drain remaining positional values from a lexopt parser into a Vec<String>.
+fn remaining_strings(mut parser: lexopt::Parser) -> Vec<String> {
+    use lexopt::prelude::*;
+    let mut out = Vec::new();
+    loop {
+        match parser.next() {
+            Ok(Some(lexopt::Arg::Value(v))) => out.push(v.string().unwrap_or_default()),
+            Ok(Some(lexopt::Arg::Long(l))) => out.push(format!("--{}", l)),
+            Ok(Some(lexopt::Arg::Short(s))) => out.push(format!("-{}", s)),
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+    out
+}
+
+fn main() {
+    let cmd = parse_args();
+
+    match cmd {
+        Cmd::Version => {
+            println!("nerv {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        Cmd::Print { model, max_turns, verbose } => {
+            print_mode(model.as_deref(), max_turns, verbose);
+            return;
+        }
+        Cmd::Models => {
+            let nerv_dir = nerv_dir();
+            std::fs::create_dir_all(nerv_dir).ok();
+            handle_subcommand("models", &[], nerv_dir);
+            return;
+        }
+        Cmd::Export { id } => {
+            let nerv_dir = nerv_dir();
+            std::fs::create_dir_all(nerv_dir).ok();
+            handle_subcommand("export", &[id], nerv_dir);
+            return;
+        }
+        Cmd::Add { rest } => {
+            let nerv_dir = nerv_dir();
+            std::fs::create_dir_all(nerv_dir).ok();
+            handle_subcommand("add", &rest, nerv_dir);
+            return;
+        }
+        Cmd::Load { rest } => {
+            let nerv_dir = nerv_dir();
+            std::fs::create_dir_all(nerv_dir).ok();
+            handle_subcommand("load", &rest, nerv_dir);
+            return;
+        }
+        Cmd::Unload => {
+            let nerv_dir = nerv_dir();
+            std::fs::create_dir_all(nerv_dir).ok();
+            handle_subcommand("unload", &[], nerv_dir);
+            return;
+        }
+        Cmd::Codemap { rest } => {
+            let nerv_dir = nerv_dir();
+            std::fs::create_dir_all(nerv_dir).ok();
+            handle_subcommand("codemap", &rest, nerv_dir);
+            return;
+        }
+        Cmd::Symbols { rest } => {
+            let nerv_dir = nerv_dir();
+            std::fs::create_dir_all(nerv_dir).ok();
+            handle_subcommand("symbols", &rest, nerv_dir);
+            return;
+        }
+        Cmd::Resume { .. } | Cmd::Interactive { .. } | Cmd::Wt { .. } => {
+            // Fall through to TUI startup below.
+        }
+    }
+
+    // ── TUI startup ─────────────────────────────────────────────────────────
+
+    // Re-destructure for the three TUI-launching variants.
+    let (opt_model, resume_opt, log_level_opt, wt_opt) = match cmd {
+        Cmd::Interactive { model, resume, log_level } => (model, resume, log_level, None),
+        Cmd::Wt { branch, model, log_level } => (model, ResumeOpt::None, log_level, Some(branch)),
+        Cmd::Resume { id } => {
+            let resume = match id {
+                Some(id) => ResumeOpt::Session(id),
+                None    => ResumeOpt::Picker,
+            };
+            (None, resume, None, None)
+        }
+        _ => unreachable!(),
+    };
 
     let nerv_dir = nerv_dir();
     std::fs::create_dir_all(nerv_dir).ok();
 
     nerv::log::init(&nerv_dir.join("debug.log"));
-    if let Some(pos) = args.iter().position(|a| a == "--log-level") {
-        if let Ok(level) = args.get(pos + 1).map(|s| s.parse()).unwrap_or(Err(())) {
+    if let Some(ref lvl) = log_level_opt {
+        if let Ok(level) = lvl.parse() {
             nerv::log::set_level(level);
         }
     } else if let Ok(level) = std::env::var("NERV_LOG").unwrap_or_default().parse() {
@@ -123,17 +508,13 @@ fn main() {
     let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut worktree_path: Option<PathBuf> = None;
 
-    if let Some(pos) = args.iter().position(|a| a == "--wt") {
-        let branch = args.get(pos + 1).unwrap_or_else(|| {
-            eprintln!("Usage: nerv --wt <branch-name>");
-            std::process::exit(1);
-        });
+    if let Some(branch) = wt_opt {
         let repo_root = nerv::find_repo_root(&cwd).unwrap_or_else(|| {
             eprintln!("--wt requires a git repository");
             std::process::exit(1);
         });
         let prefix = &nerv::session::types::gen_session_id()[..8];
-        match nerv::worktree::create_worktree(&repo_root, &nerv_dir, branch, prefix) {
+        match nerv::worktree::create_worktree(&repo_root, &nerv_dir, &branch, prefix) {
             Ok(wt) => {
                 cwd = wt.clone();
                 worktree_path = Some(wt);
@@ -287,40 +668,37 @@ fn main() {
         });
     }
 
-    // Handle --model CLI flag (interactive mode)
-    if let Some(pos) = args.iter().position(|a| a == "--model") {
-        if let Some(name) = args.get(pos + 1) {
-            let found = if let Some((p, m)) = name.split_once('/') {
-                model_registry.get_model(p, m)
-            } else {
-                model_registry.find_model(name)
-            };
-            if let Some(m) = found {
-                let _ = interactive.cmd_tx().send(SessionCommand::SetModel {
-                    provider: m.provider_name.clone(),
-                    model_id: m.id.clone(),
-                });
-            } else {
-                eprintln!("Unknown model: {}", name);
-                std::process::exit(1);
-            }
+    // Apply --model flag (interactive mode)
+    if let Some(ref name) = opt_model {
+        let found = if let Some((p, m)) = name.split_once('/') {
+            model_registry.get_model(p, m)
+        } else {
+            model_registry.find_model(name)
+        };
+        if let Some(m) = found {
+            let _ = interactive.cmd_tx().send(SessionCommand::SetModel {
+                provider: m.provider_name.clone(),
+                model_id: m.id.clone(),
+            });
+        } else {
+            eprintln!("Unknown model: {}", name);
+            std::process::exit(1);
         }
     }
 
-    // Handle --resume CLI flag
-    let resume_pos = args.iter().position(|a| a == "--resume");
-    if let Some(pos) = resume_pos {
-        if let Some(id) = args.get(pos + 1).filter(|s| !s.starts_with('-')) {
-            // --resume <id> — load directly
+    // Handle resume subcommand / flag
+    match resume_opt {
+        ResumeOpt::Session(id) => {
             let _ = interactive
                 .cmd_tx()
-                .send(SessionCommand::LoadSession { id: id.clone() });
-        } else {
-            // --resume — open picker
+                .send(SessionCommand::LoadSession { id });
+        }
+        ResumeOpt::Picker => {
             let _ = interactive.cmd_tx().send(SessionCommand::ListSessions {
                 repo_root: interactive.repo_root(),
             });
         }
+        ResumeOpt::None => {}
     }
 
     // Health check custom providers (non-blocking, retries until online)
@@ -625,7 +1003,7 @@ fn main() {
     if let Some(id) = &interactive.session_id {
         let short = if id.len() > 8 { &id[..8] } else { id };
         // Print below the shell prompt line — println scrolls the terminal
-        println!("To resume this session: nerv --resume {}", short);
+        println!("To resume this session: nerv resume {}", short);
     }
 }
 
@@ -865,7 +1243,7 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
                         .chars()
                         .take(30)
                         .collect::<String>();
-                    
+
                     // Append quant to alias for uniqueness
                     let alias = format!("{}-{}", base_alias, quant.to_lowercase());
 
@@ -1153,7 +1531,7 @@ fn format_args_brief(args: &serde_json::Value) -> String {
     parts.join(", ")
 }
 
-fn print_mode(args: &[String]) {
+fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
     use std::io::Read;
 
     let nerv_dir = nerv_dir();
@@ -1163,14 +1541,6 @@ fn print_mode(args: &[String]) {
     if let Ok(level) = std::env::var("NERV_LOG").unwrap_or_default().parse() {
         nerv::log::set_level(level);
     }
-
-    let max_turns: u32 = args
-        .iter()
-        .position(|a| a == "--max-turns")
-        .and_then(|i| args.get(i + 1))
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(20);
-    let verbose = args.iter().any(|a| a == "--verbose");
 
     // Read prompt from stdin
     let mut prompt = String::new();
@@ -1197,10 +1567,6 @@ fn print_mode(args: &[String]) {
     let mut agent = b.session.agent;
 
     // Select model
-    let model_arg = args
-        .iter()
-        .position(|a| a == "--model")
-        .and_then(|i| args.get(i + 1));
     let model = if let Some(name) = model_arg {
         nerv::bootstrap::resolve_model(&b.model_registry, name)
     } else {
