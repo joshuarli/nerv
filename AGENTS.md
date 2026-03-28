@@ -26,11 +26,14 @@ src/
 ├── errors.rs                  # ProviderError, ToolError
 ├── agent/
 │   ├── types.rs               # AgentMessage, Model, Usage, AgentEvent, ToolResultData
-│   ├── convert.rs             # AgentMessage → LlmMessage, transform_context (9 optimizations)
+│   ├── convert.rs             # AgentMessage → LlmMessage (role mapping, merge)
+│   ├── transform.rs           # transform_context: 12 optimizations, ContextConfig, pipeline
 │   ├── provider.rs            # Provider trait, ProviderRegistry, CancelFlag
 │   ├── anthropic.rs           # Anthropic Messages API + SSE + OAuth headers
 │   ├── openai_compat.rs       # OpenAI-compatible (llama-server, Ollama)
 │   └── agent.rs               # Agentic loop: stream → tool calls → permissions → context gate → loop
+├── index/
+│   └── mod.rs                 # tree-sitter symbol index (Rust), incremental by mtime
 ├── tools/
 │   ├── read.rs                # Whole-file read with line numbers + mtime cache
 │   ├── edit.rs                # Single + multi-edit, fuzzy match, BOM/CRLF
@@ -39,6 +42,7 @@ src/
 │   ├── grep.rs                # ripgrep wrapper (--context=3 for fewer follow-up reads)
 │   ├── find.rs                # fd wrapper
 │   ├── ls.rs                  # eza tree wrapper
+│   ├── symbols.rs             # tree-sitter symbol lookup tool (definitions + references)
 │   ├── memory.rs              # Persistent memory read/add/remove
 │   ├── diff.rs                # In-process Myers diff (replaced `similar` crate)
 │   ├── file_mutation_queue.rs # Per-file mutex for concurrent writes
@@ -91,6 +95,7 @@ src/
 - **Per-turn token deltas**: statusbar shows marginal cost (↑800 ↓110), footer shows cumulative context
 - **SQLite sessions**: WAL mode, entries table with parent_id chain, 12µs listing
 - **Context optimization**: 12 zero-LLM-cost transforms in `transform_context` (strip thinking, denied args, orphans; truncate stale results; superseded result dedup for read/grep/ls/find/edit; bash success compression; stale edit arg stripping; compact diff in edit results; read result folding around referenced lines; adaptive stale cutoff; tool description pruning after 4 turns) plus tool-level optimizations (read mtime cache, auto-size small files, grep context lines) and a circuit breaker for unexpected context growth. See [docs/context.md](docs/context.md).
+- **Symbol index**: tree-sitter-based symbol index (`src/index/`) gives the model structured access to definitions (functions, methods, structs, enums, traits, types, consts, macros) with signatures and parent scopes. Initial scan runs on a background thread at bootstrap; the mutex serves as the join — if `symbols` is called before the scan finishes, it blocks on `lock()`. After file-writing tools, a `PostToolFn` callback does targeted `index_file` for the affected path (or `mark_dirty` after bash). Full rescans are debounced to 5s. Replaces multi-round-trip grep/read cycles with a single structured lookup.
 - **Per-API-call token tracking**: each `AssistantMessage` carries its own `Usage` from its API call. Footer shows cumulative API usage `(N calls, Mk tok)` when multiple calls occur in one turn.
 - **Context circuit breaker**: `ContextGateFn` callback in `stream_response` — prompts user to confirm when context grows >20k tokens AND >30% between consecutive API calls (skips first 4 rounds for warmup)
 - **Plan mode**: `/plan`, Shift+Tab, or bare "plan" toggles read-only research mode. Removes edit/write from the tool set and injects a planning-focused system prompt section. `ToolRegistry::set_active` handles the filtering.

@@ -1,6 +1,6 @@
 # Built-in Tools
 
-Nerv provides 8 tools to the LLM. All execute synchronously in the session
+Nerv provides 9 tools to the LLM. All execute synchronously in the session
 thread. File-mutating tools (`edit`, `write`) serialize through a per-file
 mutex to prevent concurrent writes to the same path.
 

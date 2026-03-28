@@ -43,6 +43,22 @@ impl Default for BootstrapOptions {
 /// Construct agent + tools + session from disk config.
 /// Both interactive and headless modes call this.
 pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstrap {
+    // Symbol index scan is the most expensive startup cost — kick it off
+    // immediately so it runs in parallel with config/auth/resource loading.
+    // The mutex serves as the join: if `symbols` is called before this
+    // finishes, it blocks on lock() until the scan completes.
+    let symbols_tool = Arc::new(SymbolsTool::new(cwd.to_path_buf()));
+    let symbol_index = symbols_tool.index();
+    {
+        let idx = symbol_index.clone();
+        let root = cwd.to_path_buf();
+        std::thread::spawn(move || {
+            if let Ok(mut index) = idx.lock() {
+                index.force_index_dir(&root);
+            }
+        });
+    }
+
     let config = NervConfig::load(nerv_dir);
     let mut auth = crate::core::auth::AuthStorage::load(nerv_dir);
     let model_registry = Arc::new(ModelRegistry::new(&config, &mut auth));
@@ -50,9 +66,6 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
 
     let mutation_queue = Arc::new(FileMutationQueue::new());
     let mut tool_registry = ToolRegistry::new();
-
-    let symbols_tool = Arc::new(SymbolsTool::new(cwd.to_path_buf()));
-    let symbol_index = symbols_tool.index();
 
     let tools: Vec<Arc<dyn crate::agent::agent::AgentTool>> = {
         let mut t: Vec<Arc<dyn crate::agent::agent::AgentTool>> = vec![
