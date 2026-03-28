@@ -797,6 +797,13 @@ impl InteractiveMode {
                 };
                 self.status_message = Some(format!("Effort: {}", label));
             }
+            "/btw" => {
+                if args.is_empty() {
+                    self.status_message = Some("Usage: /btw <note>".into());
+                } else {
+                    let _ = self.cmd_tx.send(SessionCommand::Btw { note: args.to_string() });
+                }
+            }
             "/plan" => {
                 let enabled = !self.plan_mode;
                 self.plan_mode = enabled;
@@ -902,6 +909,7 @@ impl InteractiveMode {
                      /tree           — browse/switch session branches\n\
                      /wt <branch>    — create git worktree for session\n\
                      /wt merge       — merge worktree back and clean up\n\
+                     /btw <note>     — add background context; model acknowledges briefly\n\
                      /plan           — toggle plan mode (read-only research)\n\
                      /fork           — fork session into a new independent copy\n\
                      /new            — start new session\n\
@@ -995,6 +1003,7 @@ impl InteractiveMode {
             "/resume".into(),
             "/tree".into(),
             "/plan".into(),
+            "/btw".into(),
             "/fork".into(),
             "/wt".into(),
             "/login".into(),
