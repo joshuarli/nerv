@@ -23,6 +23,16 @@ pub struct CodemapParams<'a> {
 pub fn codemap(index: &SymbolIndex, project_root: &Path, params: &CodemapParams) -> String {
     let results = index.search(params.query, params.kind, params.file);
     if results.is_empty() {
+        if !params.query.is_empty() {
+            // Check if empty query would find definitions — nudge the model to use it.
+            let total = index.search("", params.kind, params.file).len();
+            if total > 0 {
+                return format!(
+                    "No symbols matching '{}'. {} definitions exist in this scope — use query: \"\" to see them all.",
+                    params.query, total
+                );
+            }
+        }
         return "No symbols found".to_string();
     }
 

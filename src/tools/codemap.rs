@@ -55,7 +55,7 @@ impl AgentTool for CodemapTool {
 
     fn prompt_guidelines(&self) -> Vec<String> {
         vec![
-            "IMPORTANT: Use `query: \"\"` (empty string) with a `file` filter. This returns every definition in that file or directory in one call. Specific queries miss definitions and force redundant follow-up calls. Never call `codemap` on the same file twice. `depth: full` returns source; `depth: signatures` returns one-line summaries.".into(),
+            "ALWAYS call with `query: \"\"` and a `file` filter. Non-empty queries miss definitions — never use them. One call per file, never re-read. `depth: full` = source bodies, `depth: signatures` = one-line summaries.".into(),
         ]
     }
 

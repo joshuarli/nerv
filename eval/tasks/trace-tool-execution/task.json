@@ -3,10 +3,10 @@
   "verify": "python3 verify_trace.py",
   "max_turns": 12,
   "goals": {
-    "require_before_read": ["symbols", "codemap"],
+    "require_before_read": ["codemap"],
     "forbid_bash_search": true,
-    "require_tools": ["symbols", "codemap"],
+    "require_tools": ["codemap"],
     "max_turns": 8,
-    "description": "symbols to find execute_tools and trace its dependencies across files, codemap to read implementations. Must use both — codebase too large for broad codemap. 5-8 turns."
+    "description": "codemap with empty queries to read implementations. symbols optional — can skip when task names specific subsystems. 5-8 turns."
   }
 }

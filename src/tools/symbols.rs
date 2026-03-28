@@ -75,7 +75,7 @@ impl AgentTool for SymbolsTool {
 
     fn prompt_guidelines(&self) -> Vec<String> {
         vec![
-            "`symbols` with `query: \"\"` MUST be your first call when exploring code. Returns every definition with name, kind, file, line, and signature. Use this to decide which files to read with `codemap`.".into(),
+            "`symbols` with `query: \"\"` returns every definition (name, kind, file, line, signature). Use to orient before targeted `codemap` calls.".into(),
         ]
     }
 
