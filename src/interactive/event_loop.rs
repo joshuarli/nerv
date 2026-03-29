@@ -1,10 +1,11 @@
 use crossbeam_channel as channel;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use super::layout::AppLayout;
 use super::theme;
-use crate::agent::provider::ProviderRegistry;
+use crate::agent::provider::{CancelFlag, ProviderRegistry};
 use crate::agent::types::*;
 use crate::core::model_registry::ModelRegistry;
 use crate::core::*;
@@ -82,6 +83,11 @@ pub struct InteractiveMode {
     pub compact_threshold: u8,
     /// Directories the user has granted full access to (shared with the session thread).
     pub allowed_dirs: Arc<Mutex<Vec<PathBuf>>>,
+    /// Shared cancel flag — set this to interrupt a running stream immediately.
+    cancel_flag: CancelFlag,
+    /// Shared compact threshold (percent 0–100) — written directly so `/compact at N`
+    /// takes effect before the next turn without going through cmd_tx.
+    compact_threshold_arc: Arc<AtomicU32>,
 }
 
 impl InteractiveMode {
@@ -97,6 +103,8 @@ impl InteractiveMode {
         repo_root: Option<String>,
         repo_id: Option<String>,
         allowed_dirs: Arc<Mutex<Vec<PathBuf>>>,
+        cancel_flag: CancelFlag,
+        compact_threshold_arc: Arc<AtomicU32>,
     ) -> Self {
         Self {
             cmd_tx,
@@ -128,6 +136,8 @@ impl InteractiveMode {
             plan_mode: false,
             compact_threshold: 50,
             allowed_dirs,
+            cancel_flag,
+            compact_threshold_arc,
         }
     }
 
@@ -772,6 +782,9 @@ impl InteractiveMode {
     }
 
     pub fn handle_abort(&mut self) {
+        // Set the cancel flag immediately so the running stream stops between chunks,
+        // without waiting for the session thread to dequeue the Abort command.
+        self.cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = self.cmd_tx.send(SessionCommand::Abort);
         // Immediately queue the top pending message behind the Abort so the
         // session thread starts on it as soon as the current turn is cancelled,
@@ -799,6 +812,11 @@ impl InteractiveMode {
                 if let Some(rest) = args.strip_prefix("at ") {
                     if let Ok(pct) = rest.trim().parse::<u8>() {
                         self.compact_threshold = pct;
+                        // Write the shared atomic directly — takes effect immediately
+                        // even if a stream is in progress (the session thread reads
+                        // this before each auto-compact check).
+                        self.compact_threshold_arc.store(pct as u32, Ordering::Relaxed);
+                        // Also send through the channel so the session persists it to DB.
                         let _ = self
                             .cmd_tx
                             .send(SessionCommand::SetCompactThreshold { pct });
@@ -807,6 +825,10 @@ impl InteractiveMode {
                             Some("Usage: /compact at <1-100>".into());
                     }
                 } else {
+                    // Interrupt any running stream immediately so the session thread
+                    // can pick up the Compact command without waiting for it to finish.
+                    self.cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let _ = self.cmd_tx.send(SessionCommand::Abort);
                     let _ = self.cmd_tx.send(SessionCommand::Compact {
                         custom_instructions: None,
                     });

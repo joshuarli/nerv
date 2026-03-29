@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
@@ -168,6 +169,9 @@ pub struct AgentSession {
     pub session_manager: SessionManager,
     pub tool_registry: ToolRegistry,
     compaction_settings: CompactionSettings,
+    /// Compact threshold as integer percent (0-100). Shared with the main thread
+    /// so `/compact at N` takes effect immediately without going through cmd_tx.
+    pub compact_threshold_pct: Arc<AtomicU32>,
     model_registry: Arc<ModelRegistry>,
     resources: LoadedResources,
     cwd: PathBuf,
@@ -204,6 +208,7 @@ impl AgentSession {
             session_manager,
             tool_registry,
             compaction_settings: CompactionSettings::default(),
+            compact_threshold_pct: Arc::new(AtomicU32::new(80)),
             model_registry,
             resources,
             cwd,
@@ -939,6 +944,7 @@ impl AgentSession {
     fn apply_saved_compact_threshold(&mut self) -> Option<u8> {
         let pct = self.session_manager.get_compact_threshold()?;
         self.compaction_settings.threshold_pct = pct.clamp(0.01, 1.0);
+        self.compact_threshold_pct.store((pct * 100.0) as u32, Ordering::Relaxed);
         Some((pct * 100.0).round() as u8)
     }
 
@@ -1176,6 +1182,7 @@ pub fn session_task(
             SessionCommand::SetCompactThreshold { pct } => {
                 let frac = (pct as f64 / 100.0).clamp(0.01, 1.0);
                 session.compaction_settings.threshold_pct = frac;
+                session.compact_threshold_pct.store(pct as u32, Ordering::Relaxed);
                 session.session_manager.set_compact_threshold(frac);
                 let _ = event_tx.send(AgentSessionEvent::CompactThresholdChanged { pct });
                 let _ = event_tx.send(AgentSessionEvent::Status {

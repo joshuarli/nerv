@@ -854,8 +854,12 @@ fn main() {
     // Clone the allowed_dirs Arc so the main thread (UI) can add entries while
     // the session thread's permission_fn reads them.
     let allowed_dirs = session.allowed_dirs.clone();
+    // Clone compact_threshold_arc so the main thread can write it directly for
+    // immediate effect without waiting for SetCompactThreshold through cmd_tx.
+    let compact_threshold_arc = session.compact_threshold_pct.clone();
     // Clone the provider_registry Arc so the main thread can make /btw overlay calls.
     let provider_registry = session.agent.provider_registry.clone();
+    // cancel_flag was cloned from session.agent.cancel in bootstrap — same Arc, no re-clone needed.
 
     // Session thread
     let evt_tx = event_tx.clone();
@@ -943,6 +947,8 @@ fn main() {
         repo_root,
         repo_id,
         allowed_dirs,
+        cancel_flag.clone(),
+        compact_threshold_arc,
     );
 
     layout
