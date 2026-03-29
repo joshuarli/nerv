@@ -62,6 +62,35 @@ impl ChatWriter {
         self.cache.borrow_mut().block_lines.clear();
     }
 
+    /// Called after the TUI flushes `flushed_lines` lines to terminal scrollback.
+    /// Drops source blocks and cached render lines that are fully covered, freeing
+    /// their heap allocation.  Re-render cost is zero because the terminal owns
+    /// the scrollback — these blocks will never be diff-rendered again.
+    pub fn notify_flushed(&mut self, flushed_lines: usize) {
+        if flushed_lines == 0 {
+            return;
+        }
+        let mut cache = self.cache.borrow_mut();
+        let mut covered = 0usize;
+        let mut to_drop = 0usize; // number of leading blocks to evict
+        for block_lines in &cache.block_lines {
+            let next = covered + block_lines.len();
+            if next > flushed_lines {
+                break; // this block straddles the flush boundary — keep it
+            }
+            covered = next;
+            to_drop += 1;
+        }
+        if to_drop == 0 {
+            return;
+        }
+        // Drop cached render lines for flushed blocks.
+        cache.block_lines.drain(..to_drop);
+        // Drop source blocks too — they are fully owned by terminal scrollback.
+        self.blocks.drain(..to_drop);
+        // block_lines and blocks are now in sync again (same length, same offset).
+    }
+
     pub fn begin_stream(&mut self) {
         self.streaming = Some(StreamingState {
             thinking: String::new(),

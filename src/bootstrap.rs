@@ -83,7 +83,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
             let root = cwd.to_path_buf();
             std::thread::Builder::new()
                 .name("nerv-index".into())
-                .stack_size(512 * 1024)
+                .stack_size(1024 * 1024)
                 .spawn(move || {
                     if let Ok(mut index) = idx.write() {
                         index.force_index_dir(&root);

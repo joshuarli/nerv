@@ -13,6 +13,16 @@ use nerv::interactive::statusbar::StatusBar;
 use nerv::tui::components::editor::Editor;
 use nerv::tui::*;
 
+/// Render a frame and notify ChatWriter of how many lines have been flushed to
+/// terminal scrollback, so it can free heap memory for blocks it will never
+/// need to diff-render again.
+macro_rules! render_frame {
+    ($tui:expr, $layout:expr) => {{
+        $tui.maybe_render(&$layout);
+        $layout.chat.notify_flushed($tui.scrollback_flushed());
+    }};
+}
+
 /// Global cancel flag for print mode — SIGINT sets this instead of killing the process.
 static PRINT_CANCEL: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
@@ -853,7 +863,7 @@ fn main() {
     let evt_tx = event_tx.clone();
     std::thread::Builder::new()
         .name("nerv-session".into())
-        .stack_size(2 * 1024 * 1024)
+        .stack_size(4 * 1024 * 1024)
         .spawn(move || session_task(cmd_rx, evt_tx, session))
         .expect("failed to spawn session thread");
 
@@ -919,7 +929,7 @@ fn main() {
 
     tui.terminal_mut().start();
     tui.request_render(true); // initial render
-    tui.maybe_render(&layout);
+    render_frame!(tui, layout);
 
     let repo_root_path = nerv::find_repo_root(&cwd);
     let repo_id = repo_root_path.as_deref().and_then(nerv::repo_fingerprint);
@@ -1088,7 +1098,7 @@ fn main() {
             cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
             interactive.handle_abort();
             layout.statusbar.cancel_streaming();
-            tui.request_render(false); tui.maybe_render(&layout);
+            tui.request_render(false); render_frame!(tui, layout);
         }
 
         if should_quit {
@@ -1130,7 +1140,7 @@ fn main() {
                                     interactive.pending_permission_details = None;
                                     interactive.status_message = None;
                                     interactive.status_is_error = false;
-                                    tui.request_render(false); tui.maybe_render(&layout);
+                                    tui.request_render(false); render_frame!(tui, layout);
                                     continue;
                                 }
 
@@ -1159,7 +1169,7 @@ fn main() {
                                         nerv::interactive::theme::ERROR
                                     };
                                     layout.chat.push_styled(style, &format!("  → {}", label));
-                                    tui.request_render(false); tui.maybe_render(&layout);
+                                    tui.request_render(false); render_frame!(tui, layout);
                                 }
                                 continue;
                             }
@@ -1172,7 +1182,7 @@ fn main() {
                                 cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                                 interactive.handle_abort();
                                 layout.statusbar.cancel_streaming();
-                                tui.request_render(false); tui.maybe_render(&layout);
+                                tui.request_render(false); render_frame!(tui, layout);
                                 continue;
                             }
                             if keys::matches_key(seq, "escape") || keys::matches_key(seq, "ctrl+d") {
@@ -1183,21 +1193,21 @@ fn main() {
                             if keys::matches_key(seq, "ctrl+z") {
                                 tui.suspend();
                                 unsafe { libc::raise(libc::SIGSTOP) };
-                                tui.resume(); tui.maybe_render(&layout); continue;
+                                tui.resume(); render_frame!(tui, layout); continue;
                             }
                             if keys::matches_key(seq, "shift+tab") {
                                 let enabled = interactive.toggle_plan_mode();
                                 let label = if enabled { "Plan mode on" } else { "Plan mode off" };
                                 push_status(&mut layout, label, false);
                                 interactive.refresh_footer(&mut layout.footer);
-                                tui.request_render(false); tui.maybe_render(&layout); continue;
+                                tui.request_render(false); render_frame!(tui, layout); continue;
                             }
                             if keys::matches_key(seq, "ctrl+s") {
                                 if interactive.session_id.is_some() {
                                     let _ = interactive.cmd_tx().try_send(SessionCommand::GetTree);
                                 } else {
                                     push_status(&mut layout, "No active session.", false);
-                                    tui.request_render(false); tui.maybe_render(&layout);
+                                    tui.request_render(false); render_frame!(tui, layout);
                                 }
                                 continue;
                             }
@@ -1205,7 +1215,7 @@ fn main() {
                                 let next = interactive.cycle_thinking();
                                 let _ = interactive.cmd_tx().try_send(SessionCommand::SetThinkingLevel { level: next });
                                 interactive.refresh_footer(&mut layout.footer);
-                                tui.request_render(false); tui.maybe_render(&layout); continue;
+                                tui.request_render(false); render_frame!(tui, layout); continue;
                             }
                             if keys::matches_key(seq, "ctrl+e") {
                                 let next = interactive.cycle_effort();
@@ -1221,7 +1231,7 @@ fn main() {
                                 };
                                 push_status(&mut layout, &label, false);
                                 interactive.refresh_footer(&mut layout.footer);
-                                tui.request_render(false); tui.maybe_render(&layout); continue;
+                                tui.request_render(false); render_frame!(tui, layout); continue;
                             }
                             if keys::matches_key(seq, "ctrl+g") {
                                 stdin_paused.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1230,7 +1240,7 @@ fn main() {
                                 layout.editor.open_in_external_editor();
                                 tui.terminal_mut().restart();
                                 stdin_paused.store(false, std::sync::atomic::Ordering::SeqCst);
-                                tui.request_render(true); tui.maybe_render(&layout); continue;
+                                tui.request_render(true); render_frame!(tui, layout); continue;
                             }
                             if keys::matches_key(seq, "shift+enter") || keys::matches_key(seq, "ctrl+enter") || keys::matches_key(seq, "newline") {
                                 layout.editor.handle_input(b"\n");
@@ -1242,7 +1252,7 @@ fn main() {
                                     let req = interactive.handle_submit(text);
                                     if let Some(req) = req {
                                         launch_picker(req, &mut interactive, &mut layout, &stdin_paused);
-                                        tui.request_render(true); tui.maybe_render(&layout); continue;
+                                        tui.request_render(true); render_frame!(tui, layout); continue;
                                     }
                                     if interactive.quit_requested { tui.terminal_mut().stop(); should_quit = true; break; }
                                     interactive.refresh_footer(&mut layout.footer);
@@ -1266,7 +1276,7 @@ fn main() {
                                     layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
                                     layout.statusbar.render_queue(tui.width());
                                     tui.fixed_bottom = nerv::interactive::layout::fixed_bottom_lines() + layout.statusbar.queue_line_count();
-                                    tui.request_render(false); tui.maybe_render(&layout); continue;
+                                    tui.request_render(false); render_frame!(tui, layout); continue;
                                 }
                             }
                             // Up-arrow when not streaming but there are queued messages: dequeue last into editor
@@ -1278,7 +1288,7 @@ fn main() {
                                 layout.statusbar.set_queue(&interactive.pending_messages, None);
                                 layout.statusbar.render_queue(tui.width());
                                 tui.fixed_bottom = nerv::interactive::layout::fixed_bottom_lines() + layout.statusbar.queue_line_count();
-                                tui.request_render(false); tui.maybe_render(&layout); continue;
+                                tui.request_render(false); render_frame!(tui, layout); continue;
                             }
                             if keys::matches_key(seq, "down") && interactive.editing_queue_idx.is_some() {
                                 if let Some(idx) = interactive.editing_queue_idx {
@@ -1290,7 +1300,7 @@ fn main() {
                                     layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
                                     layout.statusbar.render_queue(tui.width());
                                     tui.fixed_bottom = nerv::interactive::layout::fixed_bottom_lines() + layout.statusbar.queue_line_count();
-                                    tui.request_render(false); tui.maybe_render(&layout); continue;
+                                    tui.request_render(false); render_frame!(tui, layout); continue;
                                 }
                             }
                             if keys::matches_key(seq, "backspace") && interactive.editing_queue_idx.is_some()
@@ -1301,7 +1311,7 @@ fn main() {
                                 layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
                                 layout.statusbar.render_queue(tui.width());
                                 tui.fixed_bottom = nerv::interactive::layout::fixed_bottom_lines() + layout.statusbar.queue_line_count();
-                                tui.request_render(false); tui.maybe_render(&layout); continue;
+                                tui.request_render(false); render_frame!(tui, layout); continue;
                             }
                             // History navigation: up/down when not streaming and editor is empty
                             if keys::matches_key(seq, "up") && !interactive.is_streaming
@@ -1310,7 +1320,7 @@ fn main() {
                                 let current = layout.editor.text();
                                 if let Some(text) = interactive.history_up(&current) {
                                     layout.editor.set_text(&text);
-                                    tui.request_render(false); tui.maybe_render(&layout); continue;
+                                    tui.request_render(false); render_frame!(tui, layout); continue;
                                 }
                             }
                             if keys::matches_key(seq, "down") && !interactive.is_streaming
@@ -1318,7 +1328,7 @@ fn main() {
                                 && let Some(text) = interactive.history_down()
                             {
                                 layout.editor.set_text(&text);
-                                tui.request_render(false); tui.maybe_render(&layout); continue;
+                                tui.request_render(false); render_frame!(tui, layout); continue;
                             }
 
                             layout.editor.handle_input(seq);
@@ -1328,7 +1338,7 @@ fn main() {
                         }
                     }
                 }
-                tui.request_render(false); tui.maybe_render(&layout);
+                tui.request_render(false); render_frame!(tui, layout);
             }
             recv(event_rx) -> msg => {
                 let Ok(event) = msg else { break };
@@ -1337,7 +1347,7 @@ fn main() {
                     cancel_flag.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
                 process_event(event, &mut interactive, &mut layout, &mut tui, &stdin_paused);
-                tui.maybe_render(&layout);
+                render_frame!(tui, layout);
             }
             default(tick_interval) => {
                 // SIGWINCH — terminal resized
@@ -1352,7 +1362,7 @@ fn main() {
                     layout.footer.tick();
                     tui.request_render(false);
                 }
-                tui.maybe_render(&layout);
+                render_frame!(tui, layout);
             }
         }
     }

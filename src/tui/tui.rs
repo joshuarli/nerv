@@ -128,6 +128,10 @@ impl TUI {
         &mut *self.terminal
     }
 
+    pub fn scrollback_flushed(&self) -> usize {
+        self.scrollback_flushed
+    }
+
     pub fn width(&self) -> u16 {
         self.terminal.columns()
     }
