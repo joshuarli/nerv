@@ -170,23 +170,23 @@ impl TUI {
         buf.extend_from_slice(b"\x1b[?2026h"); // synchronized output begin
 
         if old_total == 0 || new_total < old_total {
-            // First render or line count shrank: full clear + repaint visible area.
+            // First render or line count shrank: full repaint visible area
             Self::full_render(buf, &new_lines, height, viewport_top);
-        } else {
-            // New chat content: write new lines to scrollback by positioning
-            // at the bottom and letting them scroll naturally
-            let chat_limit = new_lines.len().saturating_sub(fixed_bottom_lines);
-            if viewport_top > old_top && old_top < chat_limit {
-                let scroll_end = viewport_top.min(chat_limit);
-                // Position at the last visible row and write new lines,
-                // which will scroll past the bottom and enter scrollback
+        } else if new_total > old_total {
+            // Content grew: scroll new chat lines into scrollback, then update visible rows
+            let chat_limit = new_lines.len() - fixed_bottom_lines;
+            let new_chat_lines = viewport_top.min(chat_limit);
+            if new_chat_lines > old_top {
+                // Position at bottom row and write new lines, letting them scroll into history
                 let _ = write!(buf, "\x1b[{};1H", height);
-                for line in &new_lines[old_top..scroll_end] {
+                for line in &new_lines[old_top..new_chat_lines] {
                     buf.extend_from_slice(b"\r\n");
                     buf.extend_from_slice(line.as_bytes());
                 }
             }
-            
+            Self::diff_render(buf, &self.previous_lines, &new_lines, height, viewport_top, old_top);
+        } else {
+            // Content unchanged: just update rows that changed
             Self::diff_render(buf, &self.previous_lines, &new_lines, height, viewport_top, old_top);
         }
 
@@ -205,14 +205,13 @@ impl TUI {
     }
 
     fn full_render(buf: &mut Vec<u8>, lines: &[String], height: u16, viewport_top: usize) {
-        // On primary screen: use absolute positioning to avoid accidental scrolling
         let visible = &lines[viewport_top..];
         for (i, line) in visible.iter().take(height as usize).enumerate() {
             let _ = write!(buf, "\x1b[{};1H", i + 1);
             buf.extend_from_slice(line.as_bytes());
             buf.extend_from_slice(b"\x1b[K"); // clear to end of line
         }
-        // Clear remaining rows below content
+        // Clear rows below content
         for i in visible.len()..height as usize {
             let _ = write!(buf, "\x1b[{};1H\x1b[K", i + 1);
         }
