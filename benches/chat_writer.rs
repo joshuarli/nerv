@@ -20,7 +20,6 @@ fn fast() -> Criterion {
         .measurement_time(Duration::from_secs(2))
 }
 
-// --- sample content -------------------------------------------------------
 
 const PROSE_RESPONSE: &str = "\
 The `transform_context` function applies twelve optimisations in a single pass \
@@ -81,8 +80,6 @@ src/tools/memory.rs\n\
 src/tools/diff.rs\n\
 src/tools/truncate.rs\n";
 
-// --------------------------------------------------------------------------
-
 /// Build a ChatWriter that has already accumulated N turns of history.
 /// This is the steady state during a long session.
 fn preloaded_writer(turns: usize) -> ChatWriter {
@@ -102,8 +99,6 @@ fn preloaded_writer(turns: usize) -> ChatWriter {
     }
     w
 }
-
-// --------------------------------------------------------------------------
 
 fn bench_push_user(c: &mut Criterion) {
     c.bench_function("chat_writer/push_user", |b| {

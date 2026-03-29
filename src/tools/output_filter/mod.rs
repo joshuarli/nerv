@@ -64,7 +64,6 @@ pub fn filter_bash_output<'a>(command: &str, text: &'a str) -> std::borrow::Cow<
 fn apply_language_filter(command: &str, text: &str) -> Option<String> {
     let cmd = command.trim();
 
-    // --- Command-based routing (checked first; fast substring tests) ---
 
     // Rust / Cargo
     if cmd.contains("cargo test") {
@@ -99,7 +98,7 @@ fn apply_language_filter(command: &str, text: &str) -> Option<String> {
         return ts::filter_jest(text);
     }
 
-    // --- Heuristic fallback: output-content signals (e.g. Makefile targets) ---
+    // Heuristic fallback: output-content signals (e.g. Makefile targets)
     //
     // Check for Go JSON *before* the generic JSON schema step in the outer
     // pipeline so NDJSON blobs are never handed to serde_json::from_str.

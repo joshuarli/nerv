@@ -1262,7 +1262,6 @@ fn edit_multi_output_token_efficiency() {
     );
 }
 
-// --- compact diff in edit content ---
 
 #[test]
 fn edit_content_includes_diff() {
@@ -1448,7 +1447,6 @@ fn symbols_tool_no_results() {
     assert!(result.content.contains("No definitions found"), "{}", result.content);
 }
 
-// --- Codemap tool integration tests ---
 
 fn codemap_tool(tmp: &TempDir) -> CodemapTool {
     use std::sync::Mutex;
@@ -1528,4 +1526,3 @@ fn codemap_tool_kind_filter() {
     assert!(result.content.contains("Foo"), "{}", result.content);
     assert!(!result.content.contains("bar"), "should not contain fn: {}", result.content);
 }
-

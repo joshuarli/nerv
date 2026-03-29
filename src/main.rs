@@ -31,9 +31,6 @@ extern "C" fn handle_sigint_print(_: libc::c_int) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// CLI argument model
-// ---------------------------------------------------------------------------
 
 enum Cmd {
     /// Interactive TUI session (default)
@@ -70,7 +67,7 @@ enum Cmd {
         thinking: bool,
         effort: Option<EffortLevel>,
     },
-    // --- one-shot subcommands ---
+    /// One-shot subcommands
     Models,
     Export { id: String },
     Add { rest: Vec<String> },

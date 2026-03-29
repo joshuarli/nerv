@@ -234,7 +234,6 @@ fn turn_events_bracket_each_turn() {
     assert_eq!(turn_starts, turn_ends, "starts and ends should match");
 }
 
-// --- persist_fn tests ---
 
 /// Collect messages delivered to persist_fn during a prompt.
 fn collect_persisted(
@@ -312,7 +311,6 @@ fn persist_fn_order_matches_returned_messages() {
     }
 }
 
-// --- tool description pruning ---
 
 #[test]
 fn tool_descriptions_pruned_after_threshold() {

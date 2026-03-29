@@ -35,9 +35,6 @@ fn src_dir() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src").leak()
 }
 
-// --------------------------------------------------------------------------
-// Indexing benchmarks
-// --------------------------------------------------------------------------
 
 fn bench_force_index_dir(c: &mut Criterion) {
     let src = src_dir();
@@ -71,9 +68,6 @@ fn bench_incremental_reindex(c: &mut Criterion) {
     });
 }
 
-// --------------------------------------------------------------------------
-// Query benchmarks (index is already built)
-// --------------------------------------------------------------------------
 
 fn bench_symbol_queries(c: &mut Criterion) {
     let src = src_dir();
@@ -113,9 +107,6 @@ fn bench_symbol_queries(c: &mut Criterion) {
     group.finish();
 }
 
-// --------------------------------------------------------------------------
-// codemap render benchmarks
-// --------------------------------------------------------------------------
 
 fn bench_codemap_render(c: &mut Criterion) {
     use nerv::index::codemap::{CodemapParams, Depth, render, search, SearchResult};

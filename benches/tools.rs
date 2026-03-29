@@ -149,7 +149,6 @@ fn bench_mutation_queue(c: &mut Criterion) {
     });
 }
 
-// --- Codemap benchmarks ---
 
 use nerv::index::codemap::{self, CodemapParams, Depth};
 use nerv::index::SymbolIndex;

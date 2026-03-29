@@ -1155,7 +1155,6 @@ mod tests {
         assert_eq!(index.search("second", None, None).len(), 1);
     }
 
-    // --- SymbolCache tests ---
 
     fn cached_index(dir: &Path) -> SymbolIndex {
         let cache_dir = dir.join(".nerv");
@@ -1399,7 +1398,6 @@ mod tests {
         }
     }
 
-    // --- byte offset tests (added with commit 5daf22f) ---
 
     #[test]
     fn byte_offsets_point_to_exact_source() {

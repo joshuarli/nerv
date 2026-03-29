@@ -1370,5 +1370,3 @@ pub fn session_task(
         }
     }
 }
-
-

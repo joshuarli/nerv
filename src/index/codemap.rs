@@ -618,7 +618,6 @@ impl Foo {
         }
     }
 
-    // --- byte-slice render tests (added with commit 5daf22f) ---
 
     #[test]
     fn full_body_mid_file_correct() {

@@ -545,4 +545,3 @@ mod tests {
         assert!(matches!(result, Permission::Ask(_)));
     }
 }
-

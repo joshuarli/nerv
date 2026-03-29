@@ -204,7 +204,6 @@ impl Editor {
         }
     }
 
-    // -- Grapheme-level cursor helpers --
 
     /// Grapheme count up to byte offset in a string.
     fn grapheme_count_at(s: &str, byte_offset: usize) -> usize {
@@ -477,7 +476,6 @@ impl Editor {
         }
     }
 
-    // -- Layout (word wrapping + cursor tracking) --
 
     fn layout_text(&self, content_width: u16) -> Vec<LayoutLine> {
         let mut layout = Vec::new();

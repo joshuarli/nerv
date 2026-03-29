@@ -141,9 +141,6 @@ fn make_completion_request(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Benchmarks
-// ---------------------------------------------------------------------------
 
 fn bench_transform_context(c: &mut Criterion) {
     let mut group = c.benchmark_group("transform_context");

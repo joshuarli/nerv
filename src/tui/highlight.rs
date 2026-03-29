@@ -423,7 +423,6 @@ fn apply_hl_html(line: &str, hl: &[Hl]) -> String {
     out
 }
 
-// -- Language rules ----------------------------------------------------------
 
 macro_rules! s {
     ($o:expr, $c:expr, $m:expr) => {

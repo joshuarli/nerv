@@ -124,9 +124,6 @@ impl AuthStorage {
     }
 }
 
-// ---------------------------------------------------------------------------
-// macOS Keychain via `security` CLI
-// ---------------------------------------------------------------------------
 
 const KEYCHAIN_ACCOUNT: &str = "nerv";
 
@@ -184,9 +181,6 @@ fn keychain_delete(provider: &str) {
         .output();
 }
 
-// ---------------------------------------------------------------------------
-// Anthropic OAuth (PKCE + local callback server)
-// ---------------------------------------------------------------------------
 
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";

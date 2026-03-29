@@ -691,9 +691,6 @@ fn find_superseded_results(messages: &[AgentMessage]) -> std::collections::HashS
 mod tests {
     use super::*;
 
-    // -----------------------------------------------------------------------
-    // Helpers for building realistic conversations
-    // -----------------------------------------------------------------------
 
     fn user(text: &str) -> AgentMessage {
         AgentMessage::User {
@@ -833,9 +830,6 @@ mod tests {
             .sum()
     }
 
-    // -----------------------------------------------------------------------
-    // Context optimization tests
-    // -----------------------------------------------------------------------
 
     #[test]
     fn thinking_blocks_stripped() {
@@ -936,9 +930,6 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Realistic conversation scenarios
-    // -----------------------------------------------------------------------
 
     /// Simulate: user asks to fix a bug. Model thinks hard, reads a file,
     /// edits it, runs tests. 15 turns with large thinking + large diffs.
@@ -1567,7 +1558,6 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
     // valuable for context reduction but must not shift between consecutive
     // API calls within a single tool loop.
     // -----------------------------------------------------------------------
-
     /// Serialize transform_context output to a stable string for prefix comparison.
     fn serialize_messages(msgs: &[AgentMessage]) -> Vec<String> {
         msgs.iter()
@@ -1750,7 +1740,6 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         }
     }
 
-    // --- generalized superseded dedup ---
 
     #[test]
     fn superseded_grep_narrower_search_supersedes_broader() {
@@ -1858,7 +1847,6 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         assert!(!edit3.contains("superseded"), "last edit should be preserved");
     }
 
-    // --- adaptive stale cutoff ---
 
     #[test]
     fn adaptive_cutoff_shrinks_for_focused_editing() {
@@ -1912,7 +1900,6 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         assert_eq!(recent, RECENT_TURNS, "short conversations use base value");
     }
 
-    // --- tool description pruning ---
 
     #[test]
     fn tool_pruning_false_for_short_conversations() {
@@ -1947,7 +1934,6 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         assert!(!should_prune_tool_descriptions(&msgs));
     }
 
-    // --- read result folding ---
 
     #[test]
     fn stale_read_folds_unreferenced_lines() {
@@ -2121,4 +2107,3 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         );
     }
 }
-

@@ -9,9 +9,6 @@ use super::convert::{LlmContent, LlmMessage};
 use super::provider::*;
 use super::types::*;
 
-// ---------------------------------------------------------------------------
-// Typed SSE event structs — avoids serde_json::Value DOM on the hot path
-// ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 struct SseUsage {
@@ -788,7 +785,6 @@ mod tests {
         ));
     }
 
-    // --- cache breakpoint tests ---
 
     use crate::agent::convert::{LlmContent, LlmMessage};
 

@@ -9,9 +9,6 @@ use super::convert::{LlmContent, LlmMessage};
 use super::provider::*;
 use super::types::*;
 
-// ---------------------------------------------------------------------------
-// Typed SSE structs for OpenAI-compatible streaming
-// ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 struct OaiUsage {
