@@ -22,14 +22,24 @@ impl SymbolsTool {
     /// Construct with a persistent on-disk symbol cache stored in `nerv_dir`.
     /// If `cwd` is inside a git repo, paths are stored relative to the repo root
     /// so the cache survives directory renames.
+    ///
+    /// When `cwd` is not inside a git repo we skip the on-disk cache entirely —
+    /// there is no stable fingerprint to key the per-repo directory on, and the
+    /// fallback from `repo_data_dir` would be `~/.nerv` itself, causing
+    /// `~/.nerv/symbol_cache.db` to accumulate entries from arbitrary directories.
     pub fn new_with_cache(cwd: PathBuf, nerv_dir: &std::path::Path) -> Self {
-        let repo_dir = crate::repo_data_dir(&cwd);
-        let index = if let Some(repo_root) = crate::find_repo_root(&cwd) {
-            crate::index::SymbolIndex::new_with_cache_and_root(&repo_dir, &repo_root)
-        } else {
-            crate::index::SymbolIndex::new_with_cache(&repo_dir)
-        };
         let _ = nerv_dir; // kept in signature for API stability; path now derived from cwd
+        // Only open a cache when we have a stable per-repo path. Without a
+        // fingerprint `repo_data_dir` falls back to `~/.nerv`, which would
+        // create a global `~/.nerv/symbol_cache.db` mixing entries from every
+        // project.
+        let index = match crate::find_repo_root(&cwd) {
+            Some(repo_root) if crate::repo_fingerprint(&repo_root).is_some() => {
+                let repo_dir = crate::repo_data_dir(&cwd);
+                crate::index::SymbolIndex::new_with_cache_and_root(&repo_dir, &repo_root)
+            }
+            _ => crate::index::SymbolIndex::new(),
+        };
         Self {
             cwd,
             index: Arc::new(RwLock::new(index)),
