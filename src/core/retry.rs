@@ -1,6 +1,7 @@
+use std::sync::atomic::Ordering;
+
 use crate::agent::provider::CancelFlag;
 use crate::agent::types::{AssistantMessage, StopReason};
-use std::sync::atomic::Ordering;
 
 pub struct RetrySettings {
     pub enabled: bool,
@@ -34,10 +35,7 @@ pub struct RetryManager {
 
 impl RetryManager {
     pub fn new(settings: RetrySettings) -> Self {
-        Self {
-            settings,
-            attempt: 0,
-        }
+        Self { settings, attempt: 0 }
     }
 
     pub fn is_retryable(&self, msg: &AssistantMessage) -> bool {
@@ -74,11 +72,7 @@ impl RetryManager {
             std::thread::sleep(std::time::Duration::from_millis(chunk));
             remaining -= chunk;
         }
-        if cancel.load(Ordering::Relaxed) {
-            RetryDecision::GiveUp
-        } else {
-            RetryDecision::Continue
-        }
+        if cancel.load(Ordering::Relaxed) { RetryDecision::GiveUp } else { RetryDecision::Continue }
     }
 
     pub fn reset(&mut self) {

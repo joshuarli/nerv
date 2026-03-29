@@ -1,5 +1,5 @@
-/// Splits batched stdin bytes into individual escape sequences and paste events.
-/// Handles multi-byte UTF-8, CSI/SS3 sequences, and bracketed paste.
+/// Splits batched stdin bytes into individual escape sequences and paste
+/// events. Handles multi-byte UTF-8, CSI/SS3 sequences, and bracketed paste.
 pub struct StdinBuffer {
     buf: Vec<u8>,
     in_paste: bool,
@@ -24,11 +24,7 @@ impl Default for StdinBuffer {
 
 impl StdinBuffer {
     pub fn new() -> Self {
-        Self {
-            buf: Vec::with_capacity(256),
-            in_paste: false,
-            paste_buf: Vec::new(),
-        }
+        Self { buf: Vec::with_capacity(256), in_paste: false, paste_buf: Vec::new() }
     }
 
     /// Process incoming bytes and return parsed events.
@@ -97,10 +93,7 @@ impl StdinBuffer {
                     events.push(StdinEvent::Sequence(seq));
                     self.buf.drain(..2);
                 }
-            } else if self.buf[0] == 0x0D
-                && self.buf.len() >= 2
-                && self.buf[1] == 0x0A
-            {
+            } else if self.buf[0] == 0x0D && self.buf.len() >= 2 && self.buf[1] == 0x0A {
                 // CR+LF in the same read: Ctrl+Enter.
                 events.push(StdinEvent::Sequence(vec![0x0D, 0x0A]));
                 self.buf.drain(..2);

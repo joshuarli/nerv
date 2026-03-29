@@ -21,8 +21,7 @@ pub mod worktree;
 pub fn home_dir() -> Option<&'static std::path::Path> {
     use std::sync::OnceLock;
     static HOME: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
-    HOME.get_or_init(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
-        .as_deref()
+    HOME.get_or_init(|| std::env::var_os("HOME").map(std::path::PathBuf::from)).as_deref()
 }
 
 /// Return the `~/.nerv` directory.
@@ -32,11 +31,7 @@ pub fn home_dir() -> Option<&'static std::path::Path> {
 pub fn nerv_dir() -> &'static std::path::Path {
     use std::sync::OnceLock;
     static NERV: OnceLock<std::path::PathBuf> = OnceLock::new();
-    NERV.get_or_init(|| {
-        home_dir()
-            .map(|h| h.join(".nerv"))
-            .unwrap_or_default()
-    })
+    NERV.get_or_init(|| home_dir().map(|h| h.join(".nerv")).unwrap_or_default())
 }
 
 /// Millisecond timestamp (used for message timestamps).
@@ -54,8 +49,8 @@ pub fn now_millis() -> u64 {
 /// so it can be used as a stable identifier for session and cache lookups even
 /// after the directory is relocated.
 ///
-/// The result is cached per repo root for the lifetime of the process — repeated
-/// calls for the same path are a single mutex + HashMap lookup.
+/// The result is cached per repo root for the lifetime of the process —
+/// repeated calls for the same path are a single mutex + HashMap lookup.
 ///
 /// Returns `None` if the path is not a git repository or git is unavailable.
 pub fn repo_fingerprint(repo_root: &std::path::Path) -> Option<String> {

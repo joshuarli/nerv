@@ -61,9 +61,7 @@ impl Default for CacheConfig {
         // Long (1h TTL on api.anthropic.com) is the right default for agentic sessions
         // where the same system prompt + context is sent on every turn.
         // Override with NERV_CACHE_RETENTION=short|none to opt down.
-        Self {
-            retention: CacheRetention::from_env(),
-        }
+        Self { retention: CacheRetention::from_env() }
     }
 }
 
@@ -108,9 +106,10 @@ pub trait Provider: Send + Sync {
         on_event: &mut dyn FnMut(ProviderEvent),
     ) -> Result<(), crate::errors::ProviderError>;
 
-    /// Check if the provider endpoint is reachable and the credentials are valid.
-    /// Must not consume any tokens — use a cheap list/ping endpoint.
-    /// Default implementation returns `true` (used by providers without a dedicated check).
+    /// Check if the provider endpoint is reachable and the credentials are
+    /// valid. Must not consume any tokens — use a cheap list/ping endpoint.
+    /// Default implementation returns `true` (used by providers without a
+    /// dedicated check).
     fn healthcheck(&self) -> bool {
         true
     }
@@ -129,9 +128,7 @@ impl Default for ProviderRegistry {
 
 impl ProviderRegistry {
     pub fn new() -> Self {
-        Self {
-            providers: HashMap::new(),
-        }
+        Self { providers: HashMap::new() }
     }
 
     pub fn register(&mut self, name: &str, provider: Arc<dyn Provider>) {
@@ -159,10 +156,10 @@ pub fn resolve_thinking(
     // Effort overrides thinking level — map to concrete token budgets
     if let Some(e) = effort {
         let tokens = match e {
-            EffortLevel::Low    =>  2_000,
-            EffortLevel::Medium =>  8_000,
-            EffortLevel::High   => 16_000,
-            EffortLevel::Max    => 32_000,
+            EffortLevel::Low => 2_000,
+            EffortLevel::Medium => 8_000,
+            EffortLevel::High => 16_000,
+            EffortLevel::Max => 32_000,
         };
         return Some(ThinkingRequest::Budget { tokens });
     }
@@ -181,11 +178,7 @@ pub fn adjust_max_tokens_for_thinking(
     match thinking {
         ThinkingRequest::Budget { tokens } => {
             let adjusted = (base_max + tokens).min(model_max);
-            let budget = if adjusted <= *tokens {
-                adjusted.saturating_sub(1024)
-            } else {
-                *tokens
-            };
+            let budget = if adjusted <= *tokens { adjusted.saturating_sub(1024) } else { *tokens };
             (adjusted, budget)
         }
     }

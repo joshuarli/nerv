@@ -58,7 +58,8 @@ pub fn create_worktree(
     Ok(wt_path)
 }
 
-/// Merge worktree branch into the main worktree's HEAD, then remove the worktree and branch.
+/// Merge worktree branch into the main worktree's HEAD, then remove the
+/// worktree and branch.
 ///
 /// Returns the path to the main worktree (original repo) on success.
 pub fn merge_worktree(wt_path: &Path) -> anyhow::Result<PathBuf> {
@@ -140,10 +141,7 @@ pub fn merge_worktree(wt_path: &Path) -> anyhow::Result<PathBuf> {
 }
 
 fn git_output(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()?;
+    let output = std::process::Command::new("git").args(args).current_dir(cwd).output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("git {} failed: {}", args[0], stderr.trim());

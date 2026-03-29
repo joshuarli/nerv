@@ -5,11 +5,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::agent::agent::Agent;
+use crate::core::agent_session::AgentSession;
 use crate::core::config::NervConfig;
 use crate::core::model_registry::ModelRegistry;
 use crate::core::resource_loader::LoadedResources;
 use crate::core::tool_registry::{ToolDefinition, ToolRegistry};
-use crate::core::agent_session::AgentSession;
 use crate::session::SessionManager;
 use crate::tools::*;
 
@@ -36,11 +36,7 @@ pub struct BootstrapOptions {
 
 impl Default for BootstrapOptions {
     fn default() -> Self {
-        Self {
-            memory: true,
-            permissions: true,
-            talk_mode: false,
-        }
+        Self { memory: true, permissions: true, talk_mode: false }
     }
 }
 
@@ -68,7 +64,8 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     let mutation_queue = Arc::new(FileMutationQueue::new());
     let mut tool_registry = ToolRegistry::new();
     // Share the same provider registry Arc so login/logout updates are immediately
-    // reflected in model_registry.available_models() without rebuilding the registry.
+    // reflected in model_registry.available_models() without rebuilding the
+    // registry.
     let mut agent = Agent::new(model_registry.provider_registry.clone());
 
     if !opts.talk_mode {
@@ -117,29 +114,27 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
         // After file-writing tools, update the symbol index for the affected file.
         // For bash, mark the index dirty so the next symbols call does a full rescan.
         let project_root = cwd.to_path_buf();
-        agent.state.post_tool_fn = Some(Arc::new(move |tool_name, args| {
-            match tool_name {
-                "edit" | "write" => {
-                    if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
-                        let path = if path_str.starts_with('/') {
-                            std::path::PathBuf::from(path_str)
-                        } else {
-                            project_root.join(path_str)
-                        };
-                        if path.extension().is_some_and(|e| e == "rs") {
-                            if let Ok(mut index) = symbol_index.write() {
-                                index.index_file(&path);
-                            }
+        agent.state.post_tool_fn = Some(Arc::new(move |tool_name, args| match tool_name {
+            "edit" | "write" => {
+                if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
+                    let path = if path_str.starts_with('/') {
+                        std::path::PathBuf::from(path_str)
+                    } else {
+                        project_root.join(path_str)
+                    };
+                    if path.extension().is_some_and(|e| e == "rs") {
+                        if let Ok(mut index) = symbol_index.write() {
+                            index.index_file(&path);
                         }
                     }
                 }
-                "bash" => {
-                    if let Ok(mut index) = symbol_index.write() {
-                        index.mark_dirty();
-                    }
-                }
-                _ => {}
             }
+            "bash" => {
+                if let Ok(mut index) = symbol_index.write() {
+                    index.mark_dirty();
+                }
+            }
+            _ => {}
         }));
     }
 
@@ -161,7 +156,8 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     // Apply default thinking level from config (true = on, false = off).
     if let Some(enabled) = config.default_thinking {
         use crate::agent::types::ThinkingLevel;
-        session.agent.state.thinking_level = if enabled { ThinkingLevel::On } else { ThinkingLevel::Off };
+        session.agent.state.thinking_level =
+            if enabled { ThinkingLevel::On } else { ThinkingLevel::Off };
     }
 
     // Apply default effort level from config ("low", "medium", "high", "max").
@@ -178,14 +174,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     let known_ids: Vec<&str> = model_registry.all_models().iter().map(|m| m.id.as_str()).collect();
     let config_warnings = config.validate_model_ids(&known_ids);
 
-    Bootstrap {
-        session,
-        config,
-        model_registry,
-        resources,
-        cancel_flag,
-        config_warnings,
-    }
+    Bootstrap { session, config, model_registry, resources, cancel_flag, config_warnings }
 }
 
 /// Resolve a model by name (fuzzy match or provider/id).

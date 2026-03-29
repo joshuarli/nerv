@@ -1,15 +1,14 @@
 /// Full-screen session picker for /session.
 ///
-/// Implements [`FullscreenList`] so it can be driven by [`run_fullscreen_picker`].
-/// Search is performed synchronously via the `search_fn` closure passed at
-/// construction, which typically calls `SessionManager::search_sessions` on a
-/// dedicated read-only DB connection.
+/// Implements [`FullscreenList`] so it can be driven by
+/// [`run_fullscreen_picker`]. Search is performed synchronously via the
+/// `search_fn` closure passed at construction, which typically calls
+/// `SessionManager::search_sessions` on a dedicated read-only DB connection.
 use std::io::Write;
 
 use super::display::{format_age, shorten_path, truncate_str};
 use super::fullscreen_picker::FullscreenList;
 use super::theme;
-
 use crate::session::manager::{SearchResult, SessionSummary};
 
 // ─────────────────────────── types ──────────────────────────────────────────
@@ -107,9 +106,7 @@ impl FullscreenList for SessionPicker {
     }
 
     fn render(&self, out: &mut dyn Write, cols: u16, rows: u16) {
-        let home = crate::home_dir()
-            .map(|h| h.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let home = crate::home_dir().map(|h| h.to_string_lossy().to_string()).unwrap_or_default();
         let repo = self.repo_root.as_deref();
 
         // Available rows: 1 header + 1 search bar + list + 1 footer
@@ -149,7 +146,8 @@ impl FullscreenList for SessionPicker {
                     let _ = write!(
                         out,
                         "\r\n  {}No previous sessions.{}\r\n",
-                        theme::MUTED, theme::RESET
+                        theme::MUTED,
+                        theme::RESET
                     );
                 } else {
                     for (i, s) in self.all_sessions.iter().take(list_rows).enumerate() {
@@ -159,11 +157,7 @@ impl FullscreenList for SessionPicker {
             }
             Mode::Search => {
                 if self.search_results.is_empty() {
-                    let _ = write!(
-                        out,
-                        "\r\n  {}No matches.{}\r\n",
-                        theme::MUTED, theme::RESET
-                    );
+                    let _ = write!(out, "\r\n  {}No matches.{}\r\n", theme::MUTED, theme::RESET);
                 } else {
                     for (i, r) in self.search_results.iter().take(list_rows).enumerate() {
                         render_search_row(out, i, self.selected, r, &home, repo, cols);
@@ -202,9 +196,15 @@ fn render_session_row(
     let label = truncate_str(label, label_width);
 
     if selected {
-        let _ = write!(out, "{rev}{meta}{label:<lw$}{reset}\x1b[K\r\n",
-            rev = theme::REVERSE, reset = theme::RESET,
-            meta = meta, label = label, lw = label_width);
+        let _ = write!(
+            out,
+            "{rev}{meta}{label:<lw$}{reset}\x1b[K\r\n",
+            rev = theme::REVERSE,
+            reset = theme::RESET,
+            meta = meta,
+            label = label,
+            lw = label_width
+        );
     } else {
         let _ = write!(out, "{meta}{label}\x1b[K\r\n", meta = meta, label = label);
     }
@@ -235,9 +235,14 @@ fn render_search_row(
     };
 
     if is_selected {
-        let _ = write!(out, "{rev}{meta}{excerpt}{reset}\x1b[K\r\n",
-            rev = theme::REVERSE, reset = theme::RESET,
-            meta = meta, excerpt = excerpt);
+        let _ = write!(
+            out,
+            "{rev}{meta}{excerpt}{reset}\x1b[K\r\n",
+            rev = theme::REVERSE,
+            reset = theme::RESET,
+            meta = meta,
+            excerpt = excerpt
+        );
     } else {
         let _ = write!(out, "{meta}{excerpt}\x1b[K\r\n", meta = meta, excerpt = excerpt);
     }

@@ -1,16 +1,16 @@
 //! Plan mode tests — tool restriction and system prompt injection.
 
-use crate::helpers::*;
+use std::sync::Arc;
+
 use nerv::core::agent_session::AgentSessionEvent;
 use nerv::core::tool_registry::{ToolDefinition, ToolRegistry};
-use std::sync::Arc;
+
+use crate::helpers::*;
 
 #[test]
 fn set_active_filters_tools() {
     let mut registry = ToolRegistry::new();
-    registry.register(ToolDefinition {
-        tool: Arc::new(EchoTool),
-    });
+    registry.register(ToolDefinition { tool: Arc::new(EchoTool) });
 
     // No active filter → all tools returned
     let all = registry.active_tools();
@@ -32,10 +32,8 @@ fn set_active_filters_tools() {
 
 #[test]
 fn plan_mode_restricts_tools_and_injects_prompt() {
-    let (_tmp, mut session, tx) = mock_session(
-        vec![simple_response("plan output"), simple_response("edit done")],
-        true,
-    );
+    let (_tmp, mut session, tx) =
+        mock_session(vec![simple_response("plan output"), simple_response("edit done")], true);
 
     // Enable plan mode
     session.set_plan_mode(true, &tx);

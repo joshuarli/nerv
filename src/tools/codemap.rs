@@ -4,8 +4,8 @@ use std::sync::{Arc, RwLock};
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use crate::agent::provider::CancelFlag;
 use crate::errors::ToolError;
-use crate::index::codemap::{self, CodemapParams};
 use crate::index::SymbolIndex;
+use crate::index::codemap::{self, CodemapParams};
 
 pub struct CodemapTool {
     cwd: PathBuf,
@@ -70,12 +70,14 @@ impl AgentTool for CodemapTool {
         Ok(())
     }
 
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        _update: UpdateCallback,
+        _cancel: &CancelFlag,
+    ) -> ToolResult {
         let query = input["query"].as_str().unwrap_or("");
-        let kind = input
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .and_then(codemap::parse_kind);
+        let kind = input.get("kind").and_then(|v| v.as_str()).and_then(codemap::parse_kind);
         let depth = input
             .get("depth")
             .and_then(|v| v.as_str())
@@ -83,20 +85,10 @@ impl AgentTool for CodemapTool {
             .unwrap_or(codemap::Depth::Signatures);
 
         let file_str = input.get("file").and_then(|v| v.as_str());
-        let file_path = file_str.map(|f| {
-            if f.starts_with('/') {
-                PathBuf::from(f)
-            } else {
-                self.cwd.join(f)
-            }
-        });
+        let file_path =
+            file_str.map(|f| if f.starts_with('/') { PathBuf::from(f) } else { self.cwd.join(f) });
 
-        let params = CodemapParams {
-            query,
-            kind,
-            file: file_path.as_deref(),
-            depth,
-        };
+        let params = CodemapParams { query, kind, file: file_path.as_deref(), depth };
 
         // Fast path: check freshness under a read lock.
         // Only take a write lock if something on disk has actually changed.
@@ -126,11 +118,12 @@ impl AgentTool for CodemapTool {
             codemap::SearchResult::Empty => "No symbols found".to_string(),
         };
 
-        let sym_count = if content == "No symbols found" || content.starts_with("No symbols matching") {
-            0
-        } else {
-            content.lines().filter(|l| l.ends_with(':')).count()
-        };
+        let sym_count =
+            if content == "No symbols found" || content.starts_with("No symbols matching") {
+                0
+            } else {
+                content.lines().filter(|l| l.ends_with(':')).count()
+            };
         let display = format!("{} files", sym_count);
         ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
     }

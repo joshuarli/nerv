@@ -1,4 +1,5 @@
-//! Session persistence tests — SQLite storage, context reconstruction, compaction, export.
+//! Session persistence tests — SQLite storage, context reconstruction,
+//! compaction, export.
 
 use nerv::agent::types::*;
 use nerv::session::manager::SessionManager;
@@ -23,11 +24,7 @@ fn assistant_msg(text: &str) -> AgentMessage {
     AgentMessage::Assistant(AssistantMessage {
         content: vec![ContentBlock::Text { text: text.into() }],
         stop_reason: StopReason::EndTurn,
-        usage: Some(Usage {
-            input: 100,
-            output: 50,
-            ..Default::default()
-        }),
+        usage: Some(Usage { input: 100, output: 50, ..Default::default() }),
         timestamp: now_millis(),
     })
 }
@@ -40,11 +37,7 @@ fn tool_call_msg(id: &str, name: &str) -> AgentMessage {
             arguments: serde_json::json!({"path": "test.rs"}),
         }],
         stop_reason: StopReason::ToolUse,
-        usage: Some(Usage {
-            input: 80,
-            output: 20,
-            ..Default::default()
-        }),
+        usage: Some(Usage { input: 80, output: 20, ..Default::default() }),
         timestamp: now_millis(),
     })
 }
@@ -52,9 +45,7 @@ fn tool_call_msg(id: &str, name: &str) -> AgentMessage {
 fn tool_result_msg(id: &str, content: &str) -> AgentMessage {
     AgentMessage::ToolResult {
         tool_call_id: id.into(),
-        content: vec![ContentItem::Text {
-            text: content.into(),
-        }],
+        content: vec![ContentItem::Text { text: content.into() }],
         is_error: false,
         display: None,
         details: None,
@@ -68,14 +59,11 @@ fn round_trip_session_with_multiple_message_types() {
     mgr.new_session(tmp.path(), None).unwrap();
 
     mgr.append_message(&user_msg("hello"), None).unwrap();
-    mgr.append_message(&assistant_msg("hi there"), None)
-        .unwrap();
+    mgr.append_message(&assistant_msg("hi there"), None).unwrap();
     mgr.append_message(
         &AgentMessage::ToolResult {
             tool_call_id: "tc_1".into(),
-            content: vec![ContentItem::Text {
-                text: "result".into(),
-            }],
+            content: vec![ContentItem::Text { text: "result".into() }],
             is_error: false,
             display: None,
             details: None,
@@ -84,10 +72,8 @@ fn round_trip_session_with_multiple_message_types() {
         None,
     )
     .unwrap();
-    mgr.append_model_change("anthropic", "claude-sonnet-4-6")
-        .unwrap();
-    mgr.append_thinking_level_change(ThinkingLevel::On)
-        .unwrap();
+    mgr.append_model_change("anthropic", "claude-sonnet-4-6").unwrap();
+    mgr.append_thinking_level_change(ThinkingLevel::On).unwrap();
 
     let session_id = mgr.session_id().to_string();
     assert_eq!(mgr.entry_count(), 5);
@@ -98,10 +84,7 @@ fn round_trip_session_with_multiple_message_types() {
     let ctx = mgr2.load_session(&session_id).unwrap();
 
     assert_eq!(ctx.messages.len(), 3);
-    assert_eq!(
-        ctx.model,
-        Some(("anthropic".into(), "claude-sonnet-4-6".into()))
-    );
+    assert_eq!(ctx.model, Some(("anthropic".into(), "claude-sonnet-4-6".into())));
     assert_eq!(ctx.thinking_level, ThinkingLevel::On);
 }
 
@@ -119,13 +102,11 @@ fn list_sessions_returns_sorted_by_newest() {
     let (tmp, mut mgr) = setup();
 
     mgr.new_session(tmp.path(), None).unwrap();
-    mgr.append_message(&user_msg("first session"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("first session"), None).unwrap();
     let id1 = mgr.session_id().to_string();
 
     mgr.new_session(tmp.path(), None).unwrap();
-    mgr.append_message(&user_msg("second session"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("second session"), None).unwrap();
     let id2 = mgr.session_id().to_string();
 
     let sessions = mgr.list_sessions();
@@ -171,21 +152,16 @@ fn compaction_preserves_messages_after_cut_point() {
     mgr.new_session(tmp.path(), None).unwrap();
 
     for i in 0..10 {
-        mgr.append_message(&user_msg(&format!("msg {}", i)), None)
-            .unwrap();
+        mgr.append_message(&user_msg(&format!("msg {}", i)), None).unwrap();
     }
 
     let entry7_id = mgr.entries()[7].id().to_string();
-    mgr.append_compaction("summary of 0-6".into(), entry7_id, 3000)
-        .unwrap();
+    mgr.append_compaction("summary of 0-6".into(), entry7_id, 3000).unwrap();
 
     let ctx = mgr.build_session_context();
     // compaction summary + msgs 7,8,9 = 4
     assert_eq!(ctx.messages.len(), 4);
-    assert!(matches!(
-        ctx.messages[0],
-        AgentMessage::CompactionSummary { .. }
-    ));
+    assert!(matches!(ctx.messages[0], AgentMessage::CompactionSummary { .. }));
     if let AgentMessage::User { content, .. } = &ctx.messages[1]
         && let ContentItem::Text { text } = &content[0]
     {
@@ -199,23 +175,18 @@ fn compaction_survives_reload() {
     mgr.new_session(tmp.path(), None).unwrap();
 
     for i in 0..10 {
-        mgr.append_message(&user_msg(&format!("msg {}", i)), None)
-            .unwrap();
+        mgr.append_message(&user_msg(&format!("msg {}", i)), None).unwrap();
     }
 
     let entry5_id = mgr.entries()[5].id().to_string();
-    mgr.append_compaction("summary".into(), entry5_id, 2000)
-        .unwrap();
+    mgr.append_compaction("summary".into(), entry5_id, 2000).unwrap();
 
     let session_id = mgr.session_id().to_string();
     let ctx = mgr.load_session(&session_id).unwrap();
 
-    assert!(matches!(
-        ctx.messages[0],
-        AgentMessage::CompactionSummary { .. }
-    ));
-    // Entries before cut point were deleted. Remaining: entries 5-9 + compaction entry
-    // Context: summary + msgs 5-9 = 6
+    assert!(matches!(ctx.messages[0], AgentMessage::CompactionSummary { .. }));
+    // Entries before cut point were deleted. Remaining: entries 5-9 + compaction
+    // entry Context: summary + msgs 5-9 = 6
     assert_eq!(ctx.messages.len(), 6);
 }
 
@@ -225,29 +196,20 @@ fn compaction_with_tool_calls_across_boundary() {
     mgr.new_session(tmp.path(), None).unwrap();
 
     mgr.append_message(&user_msg("old msg"), None).unwrap();
-    mgr.append_message(&assistant_msg("old response"), None)
-        .unwrap();
+    mgr.append_message(&assistant_msg("old response"), None).unwrap();
 
     let kept_id_entry = mgr.entries().len();
-    mgr.append_message(&user_msg("read the file"), None)
-        .unwrap();
-    mgr.append_message(&tool_call_msg("tc1", "read"), None)
-        .unwrap();
-    mgr.append_message(&tool_result_msg("tc1", "contents"), None)
-        .unwrap();
-    mgr.append_message(&assistant_msg("here it is"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("read the file"), None).unwrap();
+    mgr.append_message(&tool_call_msg("tc1", "read"), None).unwrap();
+    mgr.append_message(&tool_result_msg("tc1", "contents"), None).unwrap();
+    mgr.append_message(&assistant_msg("here it is"), None).unwrap();
 
     let cut_id = mgr.entries()[kept_id_entry].id().to_string();
-    mgr.append_compaction("old conversation summary".into(), cut_id, 1000)
-        .unwrap();
+    mgr.append_compaction("old conversation summary".into(), cut_id, 1000).unwrap();
 
     let ctx = mgr.build_session_context();
     assert_eq!(ctx.messages.len(), 5);
-    assert!(matches!(
-        ctx.messages[0],
-        AgentMessage::CompactionSummary { .. }
-    ));
+    assert!(matches!(ctx.messages[0], AgentMessage::CompactionSummary { .. }));
     assert!(matches!(ctx.messages[3], AgentMessage::ToolResult { .. }));
 }
 
@@ -277,12 +239,9 @@ fn export_preserves_tool_calls_and_results() {
     let (tmp, mut mgr) = setup();
     mgr.new_session(tmp.path(), None).unwrap();
     mgr.append_message(&user_msg("read test.rs"), None).unwrap();
-    mgr.append_message(&tool_call_msg("tc1", "read"), None)
-        .unwrap();
-    mgr.append_message(&tool_result_msg("tc1", "fn main() {}"), None)
-        .unwrap();
-    mgr.append_message(&assistant_msg("Here's the file"), None)
-        .unwrap();
+    mgr.append_message(&tool_call_msg("tc1", "read"), None).unwrap();
+    mgr.append_message(&tool_result_msg("tc1", "fn main() {}"), None).unwrap();
+    mgr.append_message(&assistant_msg("Here's the file"), None).unwrap();
 
     let jsonl = mgr.export_jsonl().unwrap();
     assert!(jsonl.contains("fn main() {}"));
@@ -296,24 +255,15 @@ fn session_with_thinking_blocks_round_trips() {
     let (tmp, mut mgr) = setup();
     mgr.new_session(tmp.path(), None).unwrap();
 
-    mgr.append_message(&user_msg("think about this"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("think about this"), None).unwrap();
     mgr.append_message(
         &AgentMessage::Assistant(AssistantMessage {
             content: vec![
-                ContentBlock::Thinking {
-                    thinking: "Let me consider...".into(),
-                },
-                ContentBlock::Text {
-                    text: "The answer is 42.".into(),
-                },
+                ContentBlock::Thinking { thinking: "Let me consider...".into() },
+                ContentBlock::Text { text: "The answer is 42.".into() },
             ],
             stop_reason: StopReason::EndTurn,
-            usage: Some(Usage {
-                input: 100,
-                output: 50,
-                ..Default::default()
-            }),
+            usage: Some(Usage { input: 100, output: 50, ..Default::default() }),
             timestamp: now_millis(),
         }),
         None,
@@ -343,19 +293,11 @@ fn html_export_excludes_thinking() {
     mgr.append_message(
         &AgentMessage::Assistant(AssistantMessage {
             content: vec![
-                ContentBlock::Thinking {
-                    thinking: "SECRET_THINKING_CONTENT".into(),
-                },
-                ContentBlock::Text {
-                    text: "visible answer".into(),
-                },
+                ContentBlock::Thinking { thinking: "SECRET_THINKING_CONTENT".into() },
+                ContentBlock::Text { text: "visible answer".into() },
             ],
             stop_reason: StopReason::EndTurn,
-            usage: Some(Usage {
-                input: 100,
-                output: 50,
-                ..Default::default()
-            }),
+            usage: Some(Usage { input: 100, output: 50, ..Default::default() }),
             timestamp: now_millis(),
         }),
         None,
@@ -379,7 +321,8 @@ fn html_export_excludes_thinking() {
 
 // ── Session tree / branching ──
 
-// ── Branch-aware export ───────────────────────────────────────────────────────
+// ── Branch-aware export
+// ───────────────────────────────────────────────────────
 
 #[test]
 fn export_jsonl_includes_only_current_branch() {
@@ -426,7 +369,8 @@ fn export_jsonl_branch_order_root_to_leaf() {
 
     let jsonl = mgr.export_jsonl().unwrap();
     // Skip header line; entries should appear in root→leaf order
-    let texts: Vec<&str> = jsonl.lines()
+    let texts: Vec<&str> = jsonl
+        .lines()
         .skip(1)
         .filter(|l| l.contains("first") || l.contains("second") || l.contains("third"))
         .collect();
@@ -434,11 +378,14 @@ fn export_jsonl_branch_order_root_to_leaf() {
     let first_pos = jsonl.find("first").unwrap();
     let second_pos = jsonl.find("second").unwrap();
     let third_pos = jsonl.find("third").unwrap();
-    assert!(first_pos < second_pos && second_pos < third_pos,
-        "entries should be in root→leaf order");
+    assert!(
+        first_pos < second_pos && second_pos < third_pos,
+        "entries should be in root→leaf order"
+    );
 }
 
-// ── Branch-aware compaction ───────────────────────────────────────────────────
+// ── Branch-aware compaction
+// ───────────────────────────────────────────────────
 
 #[test]
 fn compaction_only_removes_current_branch_entries() {
@@ -497,12 +444,16 @@ fn compaction_removes_pre_cut_entries_on_current_branch() {
     assert!(matches!(ctx.messages[0], AgentMessage::CompactionSummary { .. }));
     // Last message is msg_5
     if let AgentMessage::User { content, .. } = &ctx.messages[3] {
-        let text = match &content[0] { ContentItem::Text { text } => text, _ => panic!() };
+        let text = match &content[0] {
+            ContentItem::Text { text } => text,
+            _ => panic!(),
+        };
         assert!(text.contains("msg_5"));
     }
 }
 
-// ── get_tree structure ────────────────────────────────────────────────────────
+// ── get_tree structure
+// ────────────────────────────────────────────────────────
 
 #[test]
 fn get_tree_linear_session_is_single_chain() {
@@ -545,8 +496,12 @@ fn get_tree_fork_produces_two_children() {
     // Walk to the fork node (the "root" user message)
     fn find_fork(nodes: &[nerv::session::types::SessionTreeNode]) -> Option<usize> {
         for n in nodes {
-            if n.children.len() == 2 { return Some(2); }
-            if let Some(c) = find_fork(&n.children) { return Some(c); }
+            if n.children.len() == 2 {
+                return Some(2);
+            }
+            if let Some(c) = find_fork(&n.children) {
+                return Some(c);
+            }
         }
         None
     }
@@ -560,7 +515,8 @@ fn get_tree_empty_session_returns_empty() {
     assert!(mgr.get_tree().is_empty());
 }
 
-// ── Search: branch-aware behaviour ────────────────────────────────────────────
+// ── Search: branch-aware behaviour
+// ────────────────────────────────────────────
 
 #[test]
 fn search_deduplicates_hits_across_branches_same_session() {
@@ -595,7 +551,8 @@ fn search_hit_in_inactive_branch_still_returns_session() {
     mgr.branch(&fork);
     mgr.append_message(&assistant_msg("unrelated content"), None).unwrap();
 
-    // Search should still find the session even though the hit is on the inactive branch
+    // Search should still find the session even though the hit is on the inactive
+    // branch
     let results = mgr.search_sessions("OBSCURE_TERM_47X");
     assert_eq!(results.len(), 1, "should find session even if hit is on inactive branch");
 }
@@ -637,10 +594,8 @@ fn branch_walk_from_leaf() {
 fn search_finds_user_message() {
     let (tmp, mut mgr) = setup();
     mgr.new_session(tmp.path(), None).unwrap();
-    mgr.append_message(&user_msg("implement the zorkblatt algorithm"), None)
-        .unwrap();
-    mgr.append_message(&assistant_msg("sure, here it is"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("implement the zorkblatt algorithm"), None).unwrap();
+    mgr.append_message(&assistant_msg("sure, here it is"), None).unwrap();
 
     let results = mgr.search_sessions("zorkblatt");
     assert_eq!(results.len(), 1);
@@ -652,8 +607,7 @@ fn search_finds_assistant_message() {
     let (tmp, mut mgr) = setup();
     mgr.new_session(tmp.path(), None).unwrap();
     mgr.append_message(&user_msg("hello"), None).unwrap();
-    mgr.append_message(&assistant_msg("the frobnitz value is 42"), None)
-        .unwrap();
+    mgr.append_message(&assistant_msg("the frobnitz value is 42"), None).unwrap();
 
     let results = mgr.search_sessions("frobnitz");
     assert_eq!(results.len(), 1);
@@ -664,10 +618,8 @@ fn search_finds_assistant_message() {
 fn search_finds_tool_result() {
     let (tmp, mut mgr) = setup();
     mgr.new_session(tmp.path(), None).unwrap();
-    mgr.append_message(&user_msg("read the file"), None)
-        .unwrap();
-    mgr.append_message(&tool_result_msg("tc1", "fn quuxinator() {}"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("read the file"), None).unwrap();
+    mgr.append_message(&tool_result_msg("tc1", "fn quuxinator() {}"), None).unwrap();
 
     let results = mgr.search_sessions("quuxinator");
     assert_eq!(results.len(), 1);
@@ -678,14 +630,11 @@ fn search_deduplicates_across_sessions() {
     let (tmp, mut mgr) = setup();
 
     mgr.new_session(tmp.path(), None).unwrap();
-    mgr.append_message(&user_msg("flamingo analysis part one"), None)
-        .unwrap();
-    mgr.append_message(&user_msg("flamingo analysis part two"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("flamingo analysis part one"), None).unwrap();
+    mgr.append_message(&user_msg("flamingo analysis part two"), None).unwrap();
 
     mgr.new_session(tmp.path(), None).unwrap();
-    mgr.append_message(&user_msg("unrelated flamingo topic"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("unrelated flamingo topic"), None).unwrap();
 
     let results = mgr.search_sessions("flamingo");
     // Two sessions, not three hits
@@ -715,8 +664,7 @@ fn search_no_match_returns_empty() {
 fn search_excerpt_contains_highlight_markers() {
     let (tmp, mut mgr) = setup();
     mgr.new_session(tmp.path(), None).unwrap();
-    mgr.append_message(&user_msg("debug the sprongle handler"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("debug the sprongle handler"), None).unwrap();
 
     let results = mgr.search_sessions("sprongle");
     assert_eq!(results.len(), 1);
@@ -729,8 +677,7 @@ fn search_excerpt_contains_highlight_markers() {
 fn search_with_special_characters() {
     let (tmp, mut mgr) = setup();
     mgr.new_session(tmp.path(), None).unwrap();
-    mgr.append_message(&user_msg("fix the \"quoted\" bug"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("fix the \"quoted\" bug"), None).unwrap();
 
     // Should not crash on special FTS characters
     let results = mgr.search_sessions("\"quoted\"");
@@ -741,8 +688,7 @@ fn search_with_special_characters() {
 fn search_stemming_works() {
     let (tmp, mut mgr) = setup();
     mgr.new_session(tmp.path(), None).unwrap();
-    mgr.append_message(&user_msg("implementing the parser"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("implementing the parser"), None).unwrap();
 
     // porter stemmer should match "implement" against "implementing"
     let results = mgr.search_sessions("implement");
@@ -759,8 +705,7 @@ fn backfill_indexes_preexisting_entries() {
     {
         let mut mgr = SessionManager::new(&nerv_dir);
         mgr.new_session(tmp.path(), None).unwrap();
-        mgr.append_message(&user_msg("backfill canary xylophone"), None)
-            .unwrap();
+        mgr.append_message(&user_msg("backfill canary xylophone"), None).unwrap();
     }
 
     // Wipe the FTS index to simulate a pre-FTS database
@@ -778,17 +723,14 @@ fn compaction_removes_fts_entries() {
     let (tmp, mut mgr) = setup();
     mgr.new_session(tmp.path(), None).unwrap();
 
-    mgr.append_message(&user_msg("ephemeral garblotz message"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("ephemeral garblotz message"), None).unwrap();
     for i in 0..5 {
-        mgr.append_message(&user_msg(&format!("msg {}", i)), None)
-            .unwrap();
+        mgr.append_message(&user_msg(&format!("msg {}", i)), None).unwrap();
     }
 
     // Compact away the first message (entry 0), keeping from entry 1
     let kept_id = mgr.entries()[1].id().to_string();
-    mgr.append_compaction("summary".into(), kept_id, 1000)
-        .unwrap();
+    mgr.append_compaction("summary".into(), kept_id, 1000).unwrap();
 
     // The compacted message's text should be gone from search
     let results = mgr.search_sessions("garblotz");
@@ -800,10 +742,8 @@ fn search_returns_session_metadata() {
     let (tmp, mut mgr) = setup();
     mgr.new_session(tmp.path(), None).unwrap();
     let session_id = mgr.session_id().to_string();
-    mgr.append_message(&user_msg("metadata test wibblefish"), None)
-        .unwrap();
-    mgr.append_message(&assistant_msg("response"), None)
-        .unwrap();
+    mgr.append_message(&user_msg("metadata test wibblefish"), None).unwrap();
+    mgr.append_message(&assistant_msg("response"), None).unwrap();
 
     let results = mgr.search_sessions("wibblefish");
     assert_eq!(results.len(), 1);
@@ -901,20 +841,14 @@ fn worktree_create_and_merge() {
     git_wt(&["commit", "-m", "worktree change"]);
 
     // Main repo still has v1
-    assert_eq!(
-        std::fs::read_to_string(repo.join("file.txt")).unwrap(),
-        "v1\n"
-    );
+    assert_eq!(std::fs::read_to_string(repo.join("file.txt")).unwrap(), "v1\n");
 
     // Merge worktree
     let main_wt = nerv::worktree::merge_worktree(&wt_path).unwrap();
     assert_eq!(main_wt, repo.canonicalize().unwrap());
 
     // Main repo now has v2
-    assert_eq!(
-        std::fs::read_to_string(repo.join("file.txt")).unwrap(),
-        "v2\n"
-    );
+    assert_eq!(std::fs::read_to_string(repo.join("file.txt")).unwrap(), "v2\n");
 
     // Worktree directory should be gone
     assert!(!wt_path.exists());
@@ -995,11 +929,7 @@ fn worktree_merge_aborts_on_conflict() {
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     let git = |dir: &std::path::Path, args: &[&str]| {
-        std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .expect("git failed")
+        std::process::Command::new("git").args(args).current_dir(dir).output().expect("git failed")
     };
     git(&repo, &["init"]);
     git(&repo, &["config", "user.email", "test@example.com"]);

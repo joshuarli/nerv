@@ -39,15 +39,8 @@ fn paste_large_creates_marker() {
     let large = "line\n".repeat(20);
     editor.insert_paste(&large);
     let text = editor.text();
-    assert!(
-        text.contains("[paste #1"),
-        "expected paste marker, got: {}",
-        text
-    );
-    assert!(
-        !text.contains("line\nline"),
-        "raw content should not be in buffer"
-    );
+    assert!(text.contains("[paste #1"), "expected paste marker, got: {}", text);
+    assert!(!text.contains("line\nline"), "raw content should not be in buffer");
 }
 
 #[test]
@@ -79,10 +72,7 @@ fn take_clears_pastes() {
     // After take, paste store is cleared
     editor.insert_paste(&"y\n".repeat(15));
     let text = editor.text();
-    assert!(
-        text.contains("[paste #1"),
-        "paste counter should reset after take"
-    );
+    assert!(text.contains("[paste #1"), "paste counter should reset after take");
 }
 
 #[test]

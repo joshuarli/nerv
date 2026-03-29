@@ -10,9 +10,7 @@ pub struct MemoryTool {
 
 impl MemoryTool {
     pub fn new(nerv_dir: PathBuf) -> Self {
-        Self {
-            memory_path: nerv_dir.join("memory.md"),
-        }
+        Self { memory_path: nerv_dir.join("memory.md") }
     }
 
     fn read_memories(&self) -> Vec<String> {
@@ -72,24 +70,26 @@ impl AgentTool for MemoryTool {
                 ),
             });
         }
-        if action == "add"
-            && input["content"]
-                .as_str()
-                .is_none_or(|s| s.trim().is_empty())
-        {
+        if action == "add" && input["content"].as_str().is_none_or(|s| s.trim().is_empty()) {
             return Err(ToolError::InvalidArguments {
                 message: "content (string) is required for action=\"add\"".into(),
             });
         }
         if action == "remove" && input["content"].as_str().is_none() {
             return Err(ToolError::InvalidArguments {
-                message: "content (index number as string) is required for action=\"remove\"".into(),
+                message: "content (index number as string) is required for action=\"remove\""
+                    .into(),
             });
         }
         Ok(())
     }
 
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        _update: UpdateCallback,
+        _cancel: &CancelFlag,
+    ) -> ToolResult {
         let action = input["action"].as_str().unwrap_or("list");
         let mut memories = self.read_memories();
 

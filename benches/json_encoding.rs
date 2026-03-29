@@ -1,12 +1,11 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use std::time::Duration;
 
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use nerv::agent::convert::{LlmMessage, convert_to_llm};
-use nerv::agent::transform::transform_context;
 use nerv::agent::provider::*;
+use nerv::agent::transform::transform_context;
 use nerv::agent::types::*;
 use nerv::agent::{AnthropicProvider, OpenAICompatProvider};
-
 
 fn pgo_criterion() -> Criterion {
     // For `make pgo-profile`: just hit the hot paths, no statistical rigor needed.
@@ -17,7 +16,9 @@ fn pgo_criterion() -> Criterion {
 }
 
 fn fast() -> Criterion {
-    if std::env::var("PGO_PROFILE").is_ok() { return pgo_criterion(); }
+    if std::env::var("PGO_PROFILE").is_ok() {
+        return pgo_criterion();
+    }
     Criterion::default()
         .warm_up_time(Duration::from_millis(200))
         .measurement_time(Duration::from_secs(2))
@@ -50,7 +51,10 @@ fn make_conversation(turns: usize) -> Vec<AgentMessage> {
     for i in 0..turns {
         messages.push(AgentMessage::User {
             content: vec![ContentItem::Text {
-                text: format!("Please read the file src/main.rs and tell me about the function on line {}. Also check for any issues with error handling.", i * 10),
+                text: format!(
+                    "Please read the file src/main.rs and tell me about the function on line {}. Also check for any issues with error handling.",
+                    i * 10
+                ),
             }],
             timestamp: 1000 + i as u64,
         });
@@ -79,9 +83,7 @@ fn make_conversation_with_tools(turns: usize) -> Vec<AgentMessage> {
     let mut messages = Vec::with_capacity(turns * 4);
     for i in 0..turns {
         messages.push(AgentMessage::User {
-            content: vec![ContentItem::Text {
-                text: format!("Read file src/module_{}.rs", i),
-            }],
+            content: vec![ContentItem::Text { text: format!("Read file src/module_{}.rs", i) }],
             timestamp: 1000 + i as u64,
         });
         messages.push(AgentMessage::Assistant(AssistantMessage {
@@ -91,11 +93,7 @@ fn make_conversation_with_tools(turns: usize) -> Vec<AgentMessage> {
                 arguments: serde_json::json!({"path": format!("src/module_{}.rs", i)}),
             }],
             stop_reason: StopReason::ToolUse,
-            usage: Some(Usage {
-                input: 500,
-                output: 50,
-                ..Default::default()
-            }),
+            usage: Some(Usage { input: 500, output: 50, ..Default::default() }),
             timestamp: 2000 + i as u64,
         }));
         messages.push(AgentMessage::ToolResult {
@@ -140,7 +138,6 @@ fn make_completion_request(
         cache: CacheConfig::default(),
     }
 }
-
 
 fn bench_transform_context(c: &mut Criterion) {
     let mut group = c.benchmark_group("transform_context");

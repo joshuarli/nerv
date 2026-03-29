@@ -1,4 +1,5 @@
-//! Integration tests — full AgentSession with mock provider, session persistence, export.
+//! Integration tests — full AgentSession with mock provider, session
+//! persistence, export.
 
 mod helpers;
 
@@ -78,21 +79,15 @@ fn system_prompt_saved_to_session() {
     session.prompt("test".into(), &event_tx);
 
     let entries = session.session_manager.entries();
-    let has_system_prompt = entries
-        .iter()
-        .any(|e| matches!(e, nerv::session::types::SessionEntry::SystemPrompt(_)));
-    assert!(
-        has_system_prompt,
-        "session should contain system prompt entry"
-    );
+    let has_system_prompt =
+        entries.iter().any(|e| matches!(e, nerv::session::types::SessionEntry::SystemPrompt(_)));
+    assert!(has_system_prompt, "session should contain system prompt entry");
 }
 
 #[test]
 fn multi_turn_conversation_persists() {
-    let (_tmp, mut session, event_tx) = setup_session(vec![
-        simple_response("First response"),
-        simple_response("Second response"),
-    ]);
+    let (_tmp, mut session, event_tx) =
+        setup_session(vec![simple_response("First response"), simple_response("Second response")]);
 
     session.prompt("First question".into(), &event_tx);
     session.prompt("Second question".into(), &event_tx);
@@ -114,16 +109,8 @@ fn session_survives_reload() {
     let ctx = mgr2.load_session(&session_id).unwrap();
 
     assert!(!ctx.messages.is_empty());
-    assert!(
-        ctx.messages
-            .iter()
-            .any(|m| matches!(m, AgentMessage::User { .. }))
-    );
-    assert!(
-        ctx.messages
-            .iter()
-            .any(|m| matches!(m, AgentMessage::Assistant(_)))
-    );
+    assert!(ctx.messages.iter().any(|m| matches!(m, AgentMessage::User { .. })));
+    assert!(ctx.messages.iter().any(|m| matches!(m, AgentMessage::Assistant(_))));
 }
 
 // ===========================================================================
@@ -147,10 +134,7 @@ fn token_info_saved_with_assistant_messages() {
 
     assert!(assistant_entry.is_some(), "should have assistant entry");
     let me = assistant_entry.unwrap();
-    assert!(
-        me.tokens.is_some(),
-        "assistant entry should have token info"
-    );
+    assert!(me.tokens.is_some(), "assistant entry should have token info");
     let tok = me.tokens.as_ref().unwrap();
     assert!(tok.context_window > 0, "context_window should be set");
     assert_eq!(tok.context_window, 100_000);
@@ -176,10 +160,7 @@ fn token_info_context_used_includes_output() {
         .unwrap();
     let tok = me.tokens.as_ref().unwrap();
     // context_used = input + output
-    assert!(
-        tok.context_used > tok.output,
-        "context_used should include input tokens"
-    );
+    assert!(tok.context_used > tok.output, "context_used should include input tokens");
 }
 
 // ===========================================================================
@@ -195,10 +176,7 @@ fn jsonl_export_contains_messages() {
     assert!(jsonl.is_some(), "export should produce output");
     let content = jsonl.unwrap();
     assert!(content.contains("Query"), "should contain user message");
-    assert!(
-        content.contains("Response text"),
-        "should contain assistant response"
-    );
+    assert!(content.contains("Response text"), "should contain assistant response");
 }
 
 #[test]
@@ -230,10 +208,7 @@ fn html_export_contains_messages() {
     html.push_str("</html>");
 
     assert!(html.contains("Hi there"), "should contain user message");
-    assert!(
-        html.contains("Hello world!"),
-        "should contain assistant response"
-    );
+    assert!(html.contains("Hello world!"), "should contain assistant response");
 
     // Unused but proves temp dir outlives the test
     let _ = tmp.path().join("export.html");
@@ -262,10 +237,8 @@ fn chunked_text_reassembled() {
 
 #[test]
 fn thinking_plus_text_produces_both_blocks() {
-    let (_tmp, mut session, event_tx) = setup_session(vec![thinking_then_text(
-        "Let me think...",
-        "The answer is 42.",
-    )]);
+    let (_tmp, mut session, event_tx) =
+        setup_session(vec![thinking_then_text("Let me think...", "The answer is 42.")]);
     session.prompt("meaning of life".into(), &event_tx);
 
     let messages = session_messages(&session);
@@ -277,14 +250,8 @@ fn thinking_plus_text_produces_both_blocks() {
         })
         .unwrap();
 
-    let has_thinking = assistant
-        .content
-        .iter()
-        .any(|b| matches!(b, ContentBlock::Thinking { .. }));
-    let has_text = assistant
-        .content
-        .iter()
-        .any(|b| matches!(b, ContentBlock::Text { .. }));
+    let has_thinking = assistant.content.iter().any(|b| matches!(b, ContentBlock::Thinking { .. }));
+    let has_text = assistant.content.iter().any(|b| matches!(b, ContentBlock::Text { .. }));
     assert!(has_thinking, "should have thinking block");
     assert!(has_text, "should have text block");
     assert_eq!(assistant.text_content(), "The answer is 42.");
@@ -308,16 +275,10 @@ fn tool_call_executes_and_continues() {
     let messages = session_messages(&session);
 
     // Should have: user, assistant (tool call), tool result, assistant (final)
-    assert!(
-        messages.len() >= 4,
-        "expected at least 4 messages, got {}",
-        messages.len()
-    );
+    assert!(messages.len() >= 4, "expected at least 4 messages, got {}", messages.len());
 
     // Find tool result
-    let has_tool_result = messages
-        .iter()
-        .any(|m| matches!(m, AgentMessage::ToolResult { .. }));
+    let has_tool_result = messages.iter().any(|m| matches!(m, AgentMessage::ToolResult { .. }));
     assert!(has_tool_result, "should have tool result message");
 
     // Final assistant should have the follow-up text
@@ -334,10 +295,8 @@ fn tool_call_executes_and_continues() {
 
 #[test]
 fn tool_result_content_contains_echo() {
-    let responses = vec![
-        tool_call_response("tc1", "echo", r#"{"text":"ping"}"#),
-        simple_response("done"),
-    ];
+    let responses =
+        vec![tool_call_response("tc1", "echo", r#"{"text":"ping"}"#), simple_response("done")];
     let (_tmp, mut session, event_tx) = setup_session_with_tools(responses, true);
     session.prompt("echo ping".into(), &event_tx);
 
@@ -357,20 +316,13 @@ fn tool_result_content_contains_echo() {
             _ => None,
         })
         .collect::<String>();
-    assert!(
-        text.contains("echo: ping"),
-        "tool result should contain 'echo: ping', got: {}",
-        text
-    );
+    assert!(text.contains("echo: ping"), "tool result should contain 'echo: ping', got: {}", text);
 }
 
 #[test]
 fn unknown_tool_returns_error_result() {
     // Model calls a tool that doesn't exist
-    let responses = vec![
-        tool_call_response("tc1", "nonexistent", r#"{}"#),
-        simple_response("ok"),
-    ];
+    let responses = vec![tool_call_response("tc1", "nonexistent", r#"{}"#), simple_response("ok")];
     let (_tmp, mut session, event_tx) = setup_session_with_tools(responses, true);
     session.prompt("call nonexistent".into(), &event_tx);
 
@@ -378,9 +330,7 @@ fn unknown_tool_returns_error_result() {
     let tool_result = messages
         .iter()
         .find_map(|m| match m {
-            AgentMessage::ToolResult {
-                content, is_error, ..
-            } => Some((content, *is_error)),
+            AgentMessage::ToolResult { content, is_error, .. } => Some((content, *is_error)),
             _ => None,
         })
         .unwrap();
@@ -416,10 +366,7 @@ fn provider_error_persisted_as_assistant_message() {
         .unwrap();
 
     assert!(assistant.stop_reason.is_error());
-    assert_eq!(
-        assistant.stop_reason.error_message().unwrap(),
-        "rate limit exceeded"
-    );
+    assert_eq!(assistant.stop_reason.error_message().unwrap(), "rate limit exceeded");
 }
 
 #[test]
@@ -429,14 +376,9 @@ fn error_does_not_trigger_tool_loop() {
     session.prompt("test".into(), &event_tx);
 
     let messages = session_messages(&session);
-    let assistant_count = messages
-        .iter()
-        .filter(|m| matches!(m, AgentMessage::Assistant(_)))
-        .count();
-    assert_eq!(
-        assistant_count, 1,
-        "error should produce exactly one assistant message"
-    );
+    let assistant_count =
+        messages.iter().filter(|m| matches!(m, AgentMessage::Assistant(_))).count();
+    assert_eq!(assistant_count, 1, "error should produce exactly one assistant message");
 }
 
 // ===========================================================================
@@ -447,12 +389,10 @@ fn error_does_not_trigger_tool_loop() {
 fn events_include_agent_start_and_end() {
     let (_tmp, _session, events) = collect_events(vec![simple_response("hi")]);
 
-    let has_start = events
-        .iter()
-        .any(|e| matches!(e, AgentSessionEvent::Agent(AgentEvent::AgentStart)));
-    let has_end = events
-        .iter()
-        .any(|e| matches!(e, AgentSessionEvent::Agent(AgentEvent::AgentEnd { .. })));
+    let has_start =
+        events.iter().any(|e| matches!(e, AgentSessionEvent::Agent(AgentEvent::AgentStart)));
+    let has_end =
+        events.iter().any(|e| matches!(e, AgentSessionEvent::Agent(AgentEvent::AgentEnd { .. })));
     assert!(has_start, "should emit AgentStart");
     assert!(has_end, "should emit AgentEnd");
 }
@@ -464,9 +404,9 @@ fn events_include_message_deltas() {
     let text_deltas: Vec<_> = events
         .iter()
         .filter_map(|e| match e {
-            AgentSessionEvent::Agent(AgentEvent::MessageUpdate {
-                delta: StreamDelta::Text(t),
-            }) => Some(t.as_str()),
+            AgentSessionEvent::Agent(AgentEvent::MessageUpdate { delta: StreamDelta::Text(t) }) => {
+                Some(t.as_str())
+            }
             _ => None,
         })
         .collect();
@@ -477,10 +417,8 @@ fn events_include_message_deltas() {
 
 #[test]
 fn events_include_tool_execution() {
-    let responses = vec![
-        tool_call_response("tc1", "echo", r#"{"text":"x"}"#),
-        simple_response("done"),
-    ];
+    let responses =
+        vec![tool_call_response("tc1", "echo", r#"{"text":"x"}"#), simple_response("done")];
     let (_tmp, _session, events) = collect_events_with_tools(responses, true);
 
     let has_tool_start = events.iter().any(|e| {
@@ -489,12 +427,9 @@ fn events_include_tool_execution() {
             AgentSessionEvent::Agent(AgentEvent::ToolExecutionStart { name, .. }) if name == "echo"
         )
     });
-    let has_tool_end = events.iter().any(|e| {
-        matches!(
-            e,
-            AgentSessionEvent::Agent(AgentEvent::ToolExecutionEnd { .. })
-        )
-    });
+    let has_tool_end = events
+        .iter()
+        .any(|e| matches!(e, AgentSessionEvent::Agent(AgentEvent::ToolExecutionEnd { .. })));
     assert!(has_tool_start, "should emit ToolExecutionStart");
     assert!(has_tool_end, "should emit ToolExecutionEnd");
 }
@@ -524,14 +459,8 @@ fn cost_accumulates_across_turns() {
     session.prompt("b".into(), &event_tx);
     let cost_after_2 = session.cost().total;
 
-    assert!(
-        cost_after_1 > 0.0,
-        "cost should be positive after first turn"
-    );
-    assert!(
-        cost_after_2 > cost_after_1,
-        "cost should increase after second turn"
-    );
+    assert!(cost_after_1 > 0.0, "cost should be positive after first turn");
+    assert!(cost_after_2 > cost_after_1, "cost should increase after second turn");
 }
 
 #[test]
@@ -643,12 +572,6 @@ fn system_prompt_token_count_recorded() {
         })
         .unwrap();
 
-    assert!(
-        sp.token_count > 0,
-        "system prompt token count should be > 0"
-    );
-    assert!(
-        !sp.prompt.is_empty(),
-        "system prompt text should be recorded"
-    );
+    assert!(sp.token_count > 0, "system prompt token count should be > 0");
+    assert!(!sp.prompt.is_empty(), "system prompt text should be recorded");
 }

@@ -21,14 +21,8 @@ pub fn serialize_conversation(messages: &[AgentMessage]) -> String {
                 out.push_str(&a.text_content());
                 out.push('\n');
             }
-            AgentMessage::ToolResult {
-                content, is_error, ..
-            } => {
-                out.push_str(if *is_error {
-                    "Tool Error: "
-                } else {
-                    "Tool Result: "
-                });
+            AgentMessage::ToolResult { content, is_error, .. } => {
+                out.push_str(if *is_error { "Tool Error: " } else { "Tool Result: " });
                 for item in content {
                     if let ContentItem::Text { text } = item {
                         if text.len() > 500 {
@@ -91,18 +85,17 @@ pub fn generate_summary(
 
 /// Stop-words filtered out when building a session title.
 const STOP_WORDS: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "it", "its", "be", "as", "was",
-    "are", "were", "been", "has", "have", "had", "do", "does", "did",
-    "so", "if", "then", "that", "this", "these", "those", "my", "your",
-    "me", "i", "we", "us", "our", "can", "could", "would", "should",
-    "will", "may", "might", "just", "also", "not", "no", "up", "out",
-    "how", "what", "when", "where", "which", "who", "why", "about",
-    "into", "than", "there", "here", "all", "some", "any", "please",
-    "help", "like", "using", "use", "used",
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
+    "from", "is", "it", "its", "be", "as", "was", "are", "were", "been", "has", "have", "had",
+    "do", "does", "did", "so", "if", "then", "that", "this", "these", "those", "my", "your", "me",
+    "i", "we", "us", "our", "can", "could", "would", "should", "will", "may", "might", "just",
+    "also", "not", "no", "up", "out", "how", "what", "when", "where", "which", "who", "why",
+    "about", "into", "than", "there", "here", "all", "some", "any", "please", "help", "like",
+    "using", "use", "used",
 ];
 
-/// Derive a short session title from the first user message without calling any model.
+/// Derive a short session title from the first user message without calling any
+/// model.
 ///
 /// Strategy: split on whitespace/punctuation, drop stop-words and short tokens,
 /// take the first 5 meaningful words, title-case each one.
@@ -144,11 +137,7 @@ pub fn generate_session_name(first_user_message: &str) -> String {
     if kept.is_empty() {
         // Absolute fallback: use the raw start of the message.
         let fallback = text.trim();
-        let end = fallback
-            .char_indices()
-            .nth(40)
-            .map(|(i, _)| i)
-            .unwrap_or(fallback.len());
+        let end = fallback.char_indices().nth(40).map(|(i, _)| i).unwrap_or(fallback.len());
         return fallback[..end].to_string();
     }
 

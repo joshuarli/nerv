@@ -10,10 +10,7 @@ pub struct Loader {
 
 impl Loader {
     pub fn new(label: impl Into<String>) -> Self {
-        Self {
-            frame: 0,
-            label: label.into(),
-        }
+        Self { frame: 0, label: label.into() }
     }
 
     pub fn set_label(&mut self, label: impl Into<String>) {

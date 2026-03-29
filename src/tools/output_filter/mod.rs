@@ -1,16 +1,16 @@
 /// Output post-processing pipeline for bash tool results.
 ///
-/// Applied in `transform_context` to bash ToolResults before they go to the LLM.
-/// Each filter is language/tool-specific and returns `Some(compressed)` when it
-/// recognises the output, or `None` to pass through to the next filter.
+/// Applied in `transform_context` to bash ToolResults before they go to the
+/// LLM. Each filter is language/tool-specific and returns `Some(compressed)`
+/// when it recognises the output, or `None` to pass through to the next filter.
 ///
 /// Pipeline order:
-///   1. ANSI stripping   — always runs, returns Cow::Borrowed when input is clean
+///   1. ANSI stripping   — always runs, returns Cow::Borrowed when input is
+///      clean
 ///   2. Deduplication    — collapse consecutive identical lines (×N notation),
-///                         returns Cow::Borrowed when nothing to collapse
+///      returns Cow::Borrowed when nothing to collapse
 ///   3. JSON schema      — large JSON blobs → key/type skeleton
 ///   4. Language filters — language-specific test runner compression
-
 pub mod ansi;
 pub mod dedup;
 pub mod go;
@@ -33,8 +33,9 @@ pub fn filter_bash_output<'a>(command: &str, text: &'a str) -> std::borrow::Cow<
     // Step 2: deduplicate consecutive identical lines (Cow::Borrowed when no run)
     let deduped = dedup::dedup_lines(&clean);
 
-    // Steps 3-4 produce new Strings; only enter the slow path if there's something to compress.
-    // We pass &deduped (a &str regardless of Cow variant) to avoid cloning.
+    // Steps 3-4 produce new Strings; only enter the slow path if there's something
+    // to compress. We pass &deduped (a &str regardless of Cow variant) to avoid
+    // cloning.
     let deduped_str: &str = &deduped;
 
     // Step 3: JSON schema extraction for large blobs
@@ -53,7 +54,9 @@ pub fn filter_bash_output<'a>(command: &str, text: &'a str) -> std::borrow::Cow<
     // Simplest correct approach: if deduped is Borrowed it still borrows from
     // `clean`, not `text` directly — so if clean is also Borrowed we can return
     // Borrowed from `text`.
-    if matches!(clean, std::borrow::Cow::Borrowed(_)) && matches!(deduped, std::borrow::Cow::Borrowed(_)) {
+    if matches!(clean, std::borrow::Cow::Borrowed(_))
+        && matches!(deduped, std::borrow::Cow::Borrowed(_))
+    {
         std::borrow::Cow::Borrowed(text)
     } else {
         std::borrow::Cow::Owned(deduped.into_owned())
@@ -64,15 +67,11 @@ pub fn filter_bash_output<'a>(command: &str, text: &'a str) -> std::borrow::Cow<
 fn apply_language_filter(command: &str, text: &str) -> Option<String> {
     let cmd = command.trim();
 
-
     // Rust / Cargo
     if cmd.contains("cargo test") {
         return rust::filter_cargo_test(text);
     }
-    if cmd.contains("cargo build")
-        || cmd.contains("cargo check")
-        || cmd.contains("cargo clippy")
-    {
+    if cmd.contains("cargo build") || cmd.contains("cargo check") || cmd.contains("cargo clippy") {
         return rust::filter_cargo_build(text);
     }
 
@@ -81,7 +80,8 @@ fn apply_language_filter(command: &str, text: &str) -> Option<String> {
         return go::filter_go_test(text);
     }
 
-    // Python — `"pytest"` and `"py.test"` already subsume `"python -m pytest"` variants
+    // Python — `"pytest"` and `"py.test"` already subsume `"python -m pytest"`
+    // variants
     if cmd.contains("pytest") || cmd.contains("py.test") {
         return python::filter_pytest(text);
     }
@@ -200,10 +200,12 @@ mod tests {
 
     #[test]
     fn heuristic_go_json_via_make() {
-        // go test -json output routed by first-line heuristic, not text.starts_with('{')
+        // go test -json output routed by first-line heuristic, not
+        // text.starts_with('{')
         let text = "{\"Action\":\"pass\",\"Test\":\"TestFoo\"}\n{\"Action\":\"pass\"}\n";
         let result = filter_bash_output("make test", text);
-        // filter_go_test returns None for all-pass, so output should pass through (not error)
+        // filter_go_test returns None for all-pass, so output should pass through (not
+        // error)
         let _ = result; // just confirm no panic / wrong routing
     }
 }

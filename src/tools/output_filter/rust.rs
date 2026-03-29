@@ -1,8 +1,10 @@
 /// Output filters for Rust / Cargo commands.
 ///
 /// Handles:
-/// - `cargo build` / `cargo check` / `cargo clippy` — success → one line; failure → errors only
-/// - `cargo test` — all pass → one line; partial/full failure → failing tests + error body
+/// - `cargo build` / `cargo check` / `cargo clippy` — success → one line;
+///   failure → errors only
+/// - `cargo test` — all pass → one line; partial/full failure → failing tests +
+///   error body
 
 /// Try to compress the output of a cargo build/check/clippy invocation.
 /// Returns Some(summary) if the output is recognisably a cargo build run.

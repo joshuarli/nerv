@@ -32,7 +32,8 @@ pub struct Cost {
 
 impl Cost {
     pub fn add_usage(&mut self, usage: &Usage, pricing: &ModelPricing) {
-        // usage.input includes cache_read + cache_write — subtract them to avoid double-counting.
+        // usage.input includes cache_read + cache_write — subtract them to avoid
+        // double-counting.
         let uncached = usage.input.saturating_sub(usage.cache_read + usage.cache_write);
         self.input += (pricing.input / 1_000_000.0) * uncached as f64;
         self.output += (pricing.output / 1_000_000.0) * usage.output as f64;
@@ -66,10 +67,7 @@ pub enum EffortLevel {
 #[serde(tag = "role")]
 pub enum AgentMessage {
     #[serde(rename = "user")]
-    User {
-        content: MessageContent,
-        timestamp: u64,
-    },
+    User { content: MessageContent, timestamp: u64 },
     #[serde(rename = "assistant")]
     Assistant(AssistantMessage),
     #[serde(rename = "toolResult")]
@@ -77,41 +75,25 @@ pub enum AgentMessage {
         tool_call_id: String,
         content: MessageContent,
         is_error: bool,
-        /// Rich display text for the TUI/HTML (e.g. unified diff). Not sent to the LLM.
+        /// Rich display text for the TUI/HTML (e.g. unified diff). Not sent to
+        /// the LLM.
         #[serde(skip_serializing_if = "Option::is_none")]
         display: Option<String>,
-        /// Tool-level metadata for transform_context (e.g. `{"filtered":true}` from bash).
-        /// Not sent to the LLM. Optional so old serialized sessions deserialize fine.
+        /// Tool-level metadata for transform_context (e.g. `{"filtered":true}`
+        /// from bash). Not sent to the LLM. Optional so old serialized
+        /// sessions deserialize fine.
         #[serde(skip_serializing_if = "Option::is_none")]
         details: Option<serde_json::Value>,
         timestamp: u64,
     },
     #[serde(rename = "custom")]
-    Custom {
-        custom_type: String,
-        content: MessageContent,
-        display: bool,
-        timestamp: u64,
-    },
+    Custom { custom_type: String, content: MessageContent, display: bool, timestamp: u64 },
     #[serde(rename = "bashExecution")]
-    BashExecution {
-        command: String,
-        output: String,
-        exit_code: Option<i32>,
-        timestamp: u64,
-    },
+    BashExecution { command: String, output: String, exit_code: Option<i32>, timestamp: u64 },
     #[serde(rename = "compactionSummary")]
-    CompactionSummary {
-        summary: String,
-        tokens_before: u32,
-        timestamp: u64,
-    },
+    CompactionSummary { summary: String, tokens_before: u32, timestamp: u64 },
     #[serde(rename = "branchSummary")]
-    BranchSummary {
-        summary: String,
-        from_id: String,
-        timestamp: u64,
-    },
+    BranchSummary { summary: String, from_id: String, timestamp: u64 },
 }
 
 impl AgentMessage {
@@ -170,10 +152,7 @@ impl AssistantMessage {
     }
 
     pub fn tool_calls(&self) -> Vec<&ContentBlock> {
-        self.content
-            .iter()
-            .filter(|b| matches!(b, ContentBlock::ToolCall { .. }))
-            .collect()
+        self.content.iter().filter(|b| matches!(b, ContentBlock::ToolCall { .. })).collect()
     }
 }
 
@@ -185,11 +164,7 @@ pub enum ContentBlock {
     #[serde(rename = "thinking")]
     Thinking { thinking: String },
     #[serde(rename = "toolCall")]
-    ToolCall {
-        id: String,
-        name: String,
-        arguments: serde_json::Value,
-    },
+    ToolCall { id: String, name: String, arguments: serde_json::Value },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

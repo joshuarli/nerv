@@ -1,5 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
 
 use super::config::read_jsonc;
 
@@ -96,9 +97,10 @@ pub fn recommended_defaults(model_path: &Path) -> LocalModel {
     } else {
         1024
     };
-    // On Apple Silicon, unified memory means no VRAM spill penalty from large ubatch.
-    // Match ubatch to batch for maximum Metal throughput. On memory-constrained systems,
-    // fall back to batch/2 to avoid stalling the scheduler.
+    // On Apple Silicon, unified memory means no VRAM spill penalty from large
+    // ubatch. Match ubatch to batch for maximum Metal throughput. On
+    // memory-constrained systems, fall back to batch/2 to avoid stalling the
+    // scheduler.
     let ubatch_size = if remaining_gb > 6.0 { batch_size } else { (batch_size / 2).max(256) };
 
     let extra_args = vec![
@@ -150,9 +152,7 @@ pub fn recommended_defaults(model_path: &Path) -> LocalModel {
 pub fn sysctl_mem_gb() -> f64 {
     #[cfg(target_os = "macos")]
     {
-        sysctl_u64("hw.memsize")
-            .map(|b| b as f64 / (1024.0 * 1024.0 * 1024.0))
-            .unwrap_or(16.0)
+        sysctl_u64("hw.memsize").map(|b| b as f64 / (1024.0 * 1024.0 * 1024.0)).unwrap_or(16.0)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -178,10 +178,7 @@ struct HardwareInfo {
 }
 
 fn detect_hardware() -> HardwareInfo {
-    HardwareInfo {
-        total_memory_gb: sysctl_mem_gb(),
-        physical_cores: sysctl_cores(),
-    }
+    HardwareInfo { total_memory_gb: sysctl_mem_gb(), physical_cores: sysctl_cores() }
 }
 
 #[cfg(target_os = "macos")]
@@ -242,9 +239,7 @@ fn linux_mem_gb() -> f64 {
 fn linux_cpu_cores() -> u32 {
     // nproc is logical cores, but that's the best we can do portably without
     // parsing /proc/cpuinfo for "core id" deduplication.
-    std::thread::available_parallelism()
-        .map(|n| n.get() as u32)
-        .unwrap_or(4)
+    std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(4)
 }
 
 /// Load models from ~/.nerv/models.json (JSONC).
@@ -295,15 +290,11 @@ pub fn download_gguf(hf_repo: &str, quant: &str, cache_dir: &Path) -> anyhow::Re
     // Find the GGUF filename matching the quant pattern
     let api_url = format!("https://huggingface.co/api/models/{}/tree/main", hf_repo);
     eprintln!("Fetching file list from {}", api_url);
-    let http_resp = agent.get(&api_url).call().map_err(|e| {
-        anyhow::anyhow!("GET {} failed: {}", api_url, e)
-    })?;
+    let http_resp =
+        agent.get(&api_url).call().map_err(|e| anyhow::anyhow!("GET {} failed: {}", api_url, e))?;
     let status = http_resp.status();
     if status != 200 {
-        let body = http_resp
-            .into_body()
-            .read_to_string()
-            .unwrap_or_default();
+        let body = http_resp.into_body().read_to_string().unwrap_or_default();
         let detail = serde_json::from_str::<serde_json::Value>(&body)
             .ok()
             .and_then(|v| v.get("error")?.as_str().map(String::from))
@@ -316,9 +307,10 @@ pub fn download_gguf(hf_repo: &str, quant: &str, cache_dir: &Path) -> anyhow::Re
             detail,
         );
     }
-    let resp: serde_json::Value = http_resp.into_body().read_json().map_err(|e| {
-        anyhow::anyhow!("GET {} returned non-JSON: {}", api_url, e)
-    })?;
+    let resp: serde_json::Value = http_resp
+        .into_body()
+        .read_json()
+        .map_err(|e| anyhow::anyhow!("GET {} returned non-JSON: {}", api_url, e))?;
 
     let files = resp.as_array().ok_or_else(|| {
         anyhow::anyhow!(
@@ -356,10 +348,7 @@ pub fn download_gguf(hf_repo: &str, quant: &str, cache_dir: &Path) -> anyhow::Re
         return Ok(local_path);
     }
 
-    let download_url = format!(
-        "https://huggingface.co/{}/resolve/main/{}",
-        hf_repo, gguf_file
-    );
+    let download_url = format!("https://huggingface.co/{}/resolve/main/{}", hf_repo, gguf_file);
 
     // Resume partial download if .part file exists
     let tmp_path = cache_dir.join(format!("{}.part", gguf_file));
@@ -368,11 +357,7 @@ pub fn download_gguf(hf_repo: &str, quant: &str, cache_dir: &Path) -> anyhow::Re
     let mut req = agent.get(&download_url);
     if existing_size > 0 {
         req = req.header("Range", &format!("bytes={}-", existing_size));
-        println!(
-            "Resuming {} from {:.0}MB...",
-            gguf_file,
-            existing_size as f64 / 1_048_576.0
-        );
+        println!("Resuming {} from {:.0}MB...", gguf_file, existing_size as f64 / 1_048_576.0);
     } else {
         println!("Downloading {}...", gguf_file);
     }
@@ -380,17 +365,12 @@ pub fn download_gguf(hf_repo: &str, quant: &str, cache_dir: &Path) -> anyhow::Re
     let resp = req.call()?;
 
     // Content-Length is the remaining bytes for range requests
-    let remaining = resp
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok()?.parse::<u64>().ok());
+    let remaining =
+        resp.headers().get("content-length").and_then(|v| v.to_str().ok()?.parse::<u64>().ok());
     let total = remaining.map(|r| r + existing_size);
 
     let mut body = resp.into_body();
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&tmp_path)?;
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&tmp_path)?;
     let mut downloaded = existing_size;
     let mut buf = vec![0u8; 256 * 1024];
     let mut last_print = std::time::Instant::now();

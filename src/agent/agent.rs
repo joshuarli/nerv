@@ -3,8 +3,8 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use super::convert::convert_to_llm;
-use super::transform::{prepare_context, transform_context};
 use super::provider::*;
+use super::transform::{prepare_context, transform_context};
 use super::types::*;
 
 pub type UpdateCallback = Arc<dyn Fn(String) + Send + Sync>;
@@ -30,7 +30,12 @@ pub trait AgentTool: Send + Sync {
     /// Execute the tool synchronously.
     /// `cancel` is the shared abort flag — long-running tools should poll it
     /// and return early (with an error result) when it fires.
-    fn execute(&self, input: serde_json::Value, update: UpdateCallback, cancel: &CancelFlag) -> ToolResult;
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        update: UpdateCallback,
+        cancel: &CancelFlag,
+    ) -> ToolResult;
 }
 
 #[derive(Debug, Clone)]
@@ -57,19 +62,21 @@ impl ToolResult {
 /// Callback that checks if a tool call is allowed. Returns true to proceed.
 pub type PermissionFn = Arc<dyn Fn(&str, &serde_json::Value) -> bool + Send + Sync>;
 
-/// Context gate — called before each API request with (estimated_tokens, context_window).
-/// Returns true to proceed, false to abort the turn. Used to implement circuit breakers
-/// when context grows unexpectedly.
+/// Context gate — called before each API request with (estimated_tokens,
+/// context_window). Returns true to proceed, false to abort the turn. Used to
+/// implement circuit breakers when context grows unexpectedly.
 pub type ContextGateFn = Arc<dyn Fn(ContextGateInfo) -> bool + Send + Sync>;
 
 /// Called after a tool executes successfully with (tool_name, arguments).
-/// Used to trigger side effects like updating the symbol index after file writes.
+/// Used to trigger side effects like updating the symbol index after file
+/// writes.
 pub type PostToolFn = Arc<dyn Fn(&str, &serde_json::Value) + Send + Sync>;
 
 /// Output gate — called after a bash tool executes but before its result enters
 /// `agent.state.messages`. Fires only when the filtered output exceeds
-/// OUTPUT_GATE_THRESHOLD_BYTES. Returns Allow to pass through or Deny to replace
-/// the result with a structured hint telling the model to be more targeted.
+/// OUTPUT_GATE_THRESHOLD_BYTES. Returns Allow to pass through or Deny to
+/// replace the result with a structured hint telling the model to be more
+/// targeted.
 pub type OutputGateFn = Arc<dyn Fn(OutputGateInfo) -> OutputGateDecision + Send + Sync>;
 
 /// Threshold above which the output gate fires (50 KB).
@@ -102,7 +109,8 @@ pub struct AgentState {
     pub messages: Vec<AgentMessage>,
     pub model: Option<Model>,
     pub thinking_level: ThinkingLevel,
-    /// When set, uses Anthropic's adaptive effort API instead of a fixed budget.
+    /// When set, uses Anthropic's adaptive effort API instead of a fixed
+    /// budget.
     pub effort_level: Option<EffortLevel>,
     pub system_prompt: String,
     pub tools: Vec<Arc<dyn AgentTool>>,
@@ -120,7 +128,8 @@ pub struct Agent {
     /// Shared cancel flag — set from main thread to interrupt streaming.
     pub cancel: CancelFlag,
     pub provider_registry: Arc<RwLock<ProviderRegistry>>,
-    /// Estimated token count from the previous API call (for circuit breaker delta).
+    /// Estimated token count from the previous API call (for circuit breaker
+    /// delta).
     prev_estimated_tokens: usize,
 }
 
@@ -155,9 +164,10 @@ impl Agent {
     }
 
     /// Run the agentic loop synchronously. Calls `on_event` for each event.
-    /// If `persist_fn` is provided, each new message is persisted to the session
-    /// DB as it's produced (per-iteration), so a mid-turn crash doesn't lose work.
-    /// Returns the new messages produced during this prompt.
+    /// If `persist_fn` is provided, each new message is persisted to the
+    /// session DB as it's produced (per-iteration), so a mid-turn crash
+    /// doesn't lose work. Returns the new messages produced during this
+    /// prompt.
     pub fn prompt(
         &mut self,
         prompt_messages: Vec<AgentMessage>,
@@ -181,9 +191,7 @@ impl Agent {
             if let Some(ref mut f) = persist_fn {
                 f(msg);
             }
-            on_event(AgentEvent::MessageStart {
-                message: msg.clone(),
-            });
+            on_event(AgentEvent::MessageStart { message: msg.clone() });
         }
 
         // Freeze all context decisions once before the tool loop — critical for
@@ -210,12 +218,7 @@ impl Agent {
                 .content
                 .iter()
                 .filter_map(|b| {
-                    if let ContentBlock::ToolCall {
-                        id,
-                        name,
-                        arguments,
-                    } = b
-                    {
+                    if let ContentBlock::ToolCall { id, name, arguments } = b {
                         Some((id.clone(), name.clone(), arguments.clone()))
                     } else {
                         None
@@ -256,31 +259,26 @@ impl Agent {
         new_messages
     }
 
-    fn stream_response(&mut self, on_event: &(dyn Fn(AgentEvent) + Sync), ctx: &super::transform::ContextConfig) -> AssistantMessage {
+    fn stream_response(
+        &mut self,
+        on_event: &(dyn Fn(AgentEvent) + Sync),
+        ctx: &super::transform::ContextConfig,
+    ) -> AssistantMessage {
         let model = match &self.state.model {
             Some(m) => m.clone(),
             None => {
                 let msg = AssistantMessage {
                     content: vec![],
-                    stop_reason: StopReason::Error {
-                        message: "no model configured".into(),
-                    },
+                    stop_reason: StopReason::Error { message: "no model configured".into() },
                     usage: None,
                     timestamp: now_millis(),
                 };
-                on_event(AgentEvent::MessageEnd {
-                    message: msg.clone(),
-                });
+                on_event(AgentEvent::MessageEnd { message: msg.clone() });
                 return msg;
             }
         };
 
-        let provider = match self
-            .provider_registry
-            .read()
-            .unwrap()
-            .get(&model.provider_name)
-        {
+        let provider = match self.provider_registry.read().unwrap().get(&model.provider_name) {
             Some(p) => p,
             None => {
                 let msg = AssistantMessage {
@@ -291,23 +289,24 @@ impl Agent {
                     usage: None,
                     timestamp: now_millis(),
                 };
-                on_event(AgentEvent::MessageEnd {
-                    message: msg.clone(),
-                });
+                on_event(AgentEvent::MessageEnd { message: msg.clone() });
                 return msg;
             }
         };
 
-        let transformed = transform_context(self.state.messages.clone(), model.context_window, Some(ctx.stale_cutoff));
-        let estimated_tokens: usize = transformed.iter().map(crate::compaction::estimate_tokens).sum();
+        let transformed = transform_context(
+            self.state.messages.clone(),
+            model.context_window,
+            Some(ctx.stale_cutoff),
+        );
+        let estimated_tokens: usize =
+            transformed.iter().map(crate::compaction::estimate_tokens).sum();
 
-        // Circuit breaker: if context grew by >10% since last call (and we're past 10k),
-        // ask user to confirm before sending a large request.
+        // Circuit breaker: if context grew by >10% since last call (and we're past
+        // 10k), ask user to confirm before sending a large request.
         if let Some(ref gate_fn) = self.state.context_gate_fn {
-            let tool_rounds = transformed
-                .iter()
-                .filter(|m| matches!(m, AgentMessage::Assistant(_)))
-                .count();
+            let tool_rounds =
+                transformed.iter().filter(|m| matches!(m, AgentMessage::Assistant(_))).count();
             let info = ContextGateInfo {
                 estimated_tokens,
                 prev_tokens: self.prev_estimated_tokens,
@@ -321,9 +320,7 @@ impl Agent {
                     usage: None,
                     timestamp: now_millis(),
                 };
-                on_event(AgentEvent::MessageEnd {
-                    message: msg.clone(),
-                });
+                on_event(AgentEvent::MessageEnd { message: msg.clone() });
                 return msg;
             }
         }
@@ -364,9 +361,10 @@ impl Agent {
             cache: CacheConfig::default(),
         };
 
-        // Input token count is NOT estimated locally — we wait for the API's authoritative
-        // value from the `message_start` SSE event. Local tiktoken estimates diverge from
-        // Claude's tokenizer and don't account for message framing / tool schema overhead.
+        // Input token count is NOT estimated locally — we wait for the API's
+        // authoritative value from the `message_start` SSE event. Local
+        // tiktoken estimates diverge from Claude's tokenizer and don't account
+        // for message framing / tool schema overhead.
 
         // Retry loop for transient API errors (overloaded / rate-limited).
         // Resets all accumulation state on each attempt so partial stream events
@@ -377,134 +375,119 @@ impl Agent {
 
         let mut attempt = 0u32;
         let (content_blocks, stop_reason, usage) = loop {
+            // Reset accumulators at the top so a failed partial stream is discarded
+            // cleanly.
+            let mut content_blocks: Vec<ContentBlock> = Vec::new();
+            let mut current_text = String::new();
+            let mut current_thinking = String::new();
+            let mut current_tool_id = String::new();
+            let mut current_tool_name = String::new();
+            let mut current_tool_args = String::new();
+            let mut stop_reason = StopReason::EndTurn;
+            let mut usage = Usage::default();
 
-        // Reset accumulators at the top so a failed partial stream is discarded cleanly.
-        let mut content_blocks: Vec<ContentBlock> = Vec::new();
-        let mut current_text = String::new();
-        let mut current_thinking = String::new();
-        let mut current_tool_id = String::new();
-        let mut current_tool_name = String::new();
-        let mut current_tool_args = String::new();
-        let mut stop_reason = StopReason::EndTurn;
-        let mut usage = Usage::default();
+            let result =
+                provider.stream_completion(&request, &self.cancel, &mut |event| match event {
+                    ProviderEvent::TextDelta(delta) => {
+                        current_text.push_str(&delta);
+                        on_event(AgentEvent::MessageUpdate { delta: StreamDelta::Text(delta) });
+                    }
+                    ProviderEvent::ThinkingDelta(delta) => {
+                        current_thinking.push_str(&delta);
+                        on_event(AgentEvent::MessageUpdate { delta: StreamDelta::Thinking(delta) });
+                    }
+                    ProviderEvent::ToolCallStart { id, name } => {
+                        if !current_text.is_empty() {
+                            content_blocks.push(ContentBlock::Text {
+                                text: std::mem::take(&mut current_text),
+                            });
+                        }
+                        if !current_thinking.is_empty() {
+                            content_blocks.push(ContentBlock::Thinking {
+                                thinking: std::mem::take(&mut current_thinking),
+                            });
+                        }
+                        current_tool_id.clone_from(&id);
+                        current_tool_name.clone_from(&name);
+                        current_tool_args.clear();
+                        on_event(AgentEvent::MessageUpdate {
+                            delta: StreamDelta::ToolCallArgsStart { id, name },
+                        });
+                    }
+                    ProviderEvent::ToolCallArgsDelta { id, delta } => {
+                        current_tool_args.push_str(&delta);
+                        on_event(AgentEvent::MessageUpdate {
+                            delta: StreamDelta::ToolCallArgsDelta { id, delta },
+                        });
+                    }
+                    ProviderEvent::ToolCallEnd { .. } => {
+                        // Only create a tool call block if we actually have a tool in progress
+                        if !current_tool_id.is_empty() {
+                            let arguments = serde_json::from_str(&current_tool_args)
+                                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                            content_blocks.push(ContentBlock::ToolCall {
+                                id: std::mem::take(&mut current_tool_id),
+                                name: std::mem::take(&mut current_tool_name),
+                                arguments,
+                            });
+                            current_tool_args.clear();
+                        }
+                    }
+                    ProviderEvent::UsageUpdate(u) => {
+                        usage = u.clone();
+                        on_event(AgentEvent::UsageUpdate { usage: u });
+                    }
+                    ProviderEvent::MessageStop { stop_reason: sr, usage: u } => {
+                        stop_reason = sr;
+                        usage = u;
+                    }
+                });
 
-        let result = provider.stream_completion(&request, &self.cancel, &mut |event| match event {
-            ProviderEvent::TextDelta(delta) => {
-                current_text.push_str(&delta);
-                on_event(AgentEvent::MessageUpdate {
-                    delta: StreamDelta::Text(delta),
-                });
-            }
-            ProviderEvent::ThinkingDelta(delta) => {
-                current_thinking.push_str(&delta);
-                on_event(AgentEvent::MessageUpdate {
-                    delta: StreamDelta::Thinking(delta),
-                });
-            }
-            ProviderEvent::ToolCallStart { id, name } => {
-                if !current_text.is_empty() {
-                    content_blocks.push(ContentBlock::Text {
-                        text: std::mem::take(&mut current_text),
-                    });
+            if let Err(e) = result {
+                // Retry on transient errors (overloaded / rate-limited) up to MAX_RETRIES
+                // times.
+                if e.is_retryable() && attempt < MAX_RETRIES {
+                    let wait_secs = if let crate::errors::ProviderError::RateLimited {
+                        retry_after_ms: Some(ms),
+                    } = &e
+                    {
+                        // Anthropic told us exactly how long to wait; honour it.
+                        (*ms + 999) / 1000
+                    } else {
+                        BACKOFF_SECS[attempt as usize]
+                    };
+                    attempt += 1;
+                    on_event(AgentEvent::Retrying { attempt, wait_secs, reason: e.to_string() });
+                    std::thread::sleep(Duration::from_secs(wait_secs));
+                    continue;
                 }
-                if !current_thinking.is_empty() {
-                    content_blocks.push(ContentBlock::Thinking {
-                        thinking: std::mem::take(&mut current_thinking),
-                    });
-                }
-                current_tool_id.clone_from(&id);
-                current_tool_name.clone_from(&name);
-                current_tool_args.clear();
-                on_event(AgentEvent::MessageUpdate {
-                    delta: StreamDelta::ToolCallArgsStart { id, name },
-                });
-            }
-            ProviderEvent::ToolCallArgsDelta { id, delta } => {
-                current_tool_args.push_str(&delta);
-                on_event(AgentEvent::MessageUpdate {
-                    delta: StreamDelta::ToolCallArgsDelta { id, delta },
-                });
-            }
-            ProviderEvent::ToolCallEnd { .. } => {
-                // Only create a tool call block if we actually have a tool in progress
-                if !current_tool_id.is_empty() {
-                    let arguments = serde_json::from_str(&current_tool_args)
-                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-                    content_blocks.push(ContentBlock::ToolCall {
-                        id: std::mem::take(&mut current_tool_id),
-                        name: std::mem::take(&mut current_tool_name),
-                        arguments,
-                    });
-                    current_tool_args.clear();
-                }
-            }
-            ProviderEvent::UsageUpdate(u) => {
-                usage = u.clone();
-                on_event(AgentEvent::UsageUpdate { usage: u });
-            }
-            ProviderEvent::MessageStop {
-                stop_reason: sr,
-                usage: u,
-            } => {
-                stop_reason = sr;
-                usage = u;
-            }
-        });
-
-        if let Err(e) = result {
-            // Retry on transient errors (overloaded / rate-limited) up to MAX_RETRIES times.
-            if e.is_retryable() && attempt < MAX_RETRIES {
-                let wait_secs = if let crate::errors::ProviderError::RateLimited {
-                    retry_after_ms: Some(ms),
-                } = &e
-                {
-                    // Anthropic told us exactly how long to wait; honour it.
-                    (*ms + 999) / 1000
-                } else {
-                    BACKOFF_SECS[attempt as usize]
+                let msg = AssistantMessage {
+                    content: vec![],
+                    stop_reason: StopReason::Error { message: e.to_string() },
+                    usage: None,
+                    timestamp: now_millis(),
                 };
-                attempt += 1;
-                on_event(AgentEvent::Retrying {
-                    attempt,
-                    wait_secs,
-                    reason: e.to_string(),
-                });
-                std::thread::sleep(Duration::from_secs(wait_secs));
-                continue;
+                on_event(AgentEvent::MessageEnd { message: msg.clone() });
+                return msg;
             }
-            let msg = AssistantMessage {
-                content: vec![],
-                stop_reason: StopReason::Error {
-                    message: e.to_string(),
-                },
-                usage: None,
-                timestamp: now_millis(),
-            };
-            on_event(AgentEvent::MessageEnd {
-                message: msg.clone(),
-            });
-            return msg;
-        }
 
-        if !current_thinking.is_empty() {
-            content_blocks.push(ContentBlock::Thinking {
-                thinking: current_thinking,
-            });
-        }
-        if !current_text.is_empty() {
-            content_blocks.push(ContentBlock::Text { text: current_text });
-        }
-        if !current_tool_id.is_empty() {
-            let arguments = serde_json::from_str(&current_tool_args)
-                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-            content_blocks.push(ContentBlock::ToolCall {
-                id: current_tool_id,
-                name: current_tool_name,
-                arguments,
-            });
-        }
+            if !current_thinking.is_empty() {
+                content_blocks.push(ContentBlock::Thinking { thinking: current_thinking });
+            }
+            if !current_text.is_empty() {
+                content_blocks.push(ContentBlock::Text { text: current_text });
+            }
+            if !current_tool_id.is_empty() {
+                let arguments = serde_json::from_str(&current_tool_args)
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                content_blocks.push(ContentBlock::ToolCall {
+                    id: current_tool_id,
+                    name: current_tool_name,
+                    arguments,
+                });
+            }
 
-        break (content_blocks, stop_reason, usage);
+            break (content_blocks, stop_reason, usage);
         }; // end retry loop
 
         let msg = AssistantMessage {
@@ -514,12 +497,8 @@ impl Agent {
             timestamp: now_millis(),
         };
 
-        self.state
-            .messages
-            .push(AgentMessage::Assistant(msg.clone()));
-        on_event(AgentEvent::MessageEnd {
-            message: msg.clone(),
-        });
+        self.state.messages.push(AgentMessage::Assistant(msg.clone()));
+        on_event(AgentEvent::MessageEnd { message: msg.clone() });
 
         msg
     }
@@ -561,12 +540,7 @@ impl Agent {
             args: args.clone(),
         });
 
-        let permitted = self
-            .state
-            .permission_fn
-            .as_ref()
-            .map(|f| f(name, args))
-            .unwrap_or(true);
+        let permitted = self.state.permission_fn.as_ref().map(|f| f(name, args)).unwrap_or(true);
 
         let mut result = if !permitted {
             ToolResult {
@@ -588,11 +562,7 @@ impl Agent {
                 },
             }
         } else {
-            ToolResult {
-                content: format!("Unknown tool: {}", name),
-                details: None,
-                is_error: true,
-            }
+            ToolResult { content: format!("Unknown tool: {}", name), details: None, is_error: true }
         };
 
         // Output gate: fires after bash executes (bash.rs has already applied
@@ -618,15 +588,9 @@ impl Agent {
                              - Pipe through grep/awk/sed to filter first: <cmd> | grep pattern\n\
                              - Redirect to a file and use the read tool with offset/limit\n\
                              - Use a more targeted command",
-                            line_count,
-                            estimated_tokens,
-                            command
+                            line_count, estimated_tokens, command
                         );
-                        result = ToolResult {
-                            content: hint,
-                            details: None,
-                            is_error: true,
-                        };
+                        result = ToolResult { content: hint, details: None, is_error: true };
                     }
                 }
             }
@@ -638,9 +602,10 @@ impl Agent {
             }
         }
 
-        let display = result.details.as_ref().and_then(|d| {
-            d.get("display").and_then(|v| v.as_str()).map(|s| s.to_string())
-        });
+        let display = result
+            .details
+            .as_ref()
+            .and_then(|d| d.get("display").and_then(|v| v.as_str()).map(|s| s.to_string()));
 
         on_event(AgentEvent::ToolExecutionEnd {
             id: id.clone(),
@@ -653,9 +618,7 @@ impl Agent {
 
         AgentMessage::ToolResult {
             tool_call_id: id.clone(),
-            content: vec![ContentItem::Text {
-                text: result.content,
-            }],
+            content: vec![ContentItem::Text { text: result.content }],
             is_error: result.is_error,
             display,
             // Carry tool details (e.g. filtered:true from bash) into the message

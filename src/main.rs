@@ -5,11 +5,11 @@ use std::time::Duration;
 
 use nerv::agent::EffortLevel;
 use nerv::core::*;
-use nerv::{nerv_dir};
 use nerv::interactive::event_loop::InteractiveMode;
 use nerv::interactive::footer::FooterComponent;
 use nerv::interactive::layout::AppLayout;
 use nerv::interactive::statusbar::StatusBar;
+use nerv::nerv_dir;
 use nerv::tui::components::editor::Editor;
 use nerv::tui::*;
 
@@ -22,7 +22,8 @@ macro_rules! render_frame {
     }};
 }
 
-/// Global cancel flag for print mode — SIGINT sets this instead of killing the process.
+/// Global cancel flag for print mode — SIGINT sets this instead of killing the
+/// process.
 static PRINT_CANCEL: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
 extern "C" fn handle_sigint_print(_: libc::c_int) {
@@ -30,7 +31,6 @@ extern "C" fn handle_sigint_print(_: libc::c_int) {
         cancel.store(true, Ordering::Relaxed);
     }
 }
-
 
 enum Cmd {
     /// Interactive TUI session (default)
@@ -57,9 +57,13 @@ enum Cmd {
         max_turns: u32,
         verbose: bool,
     },
-    /// Open session picker (no id) or load a specific session, then drop into TUI
-    Resume { id: Option<String> },
-    /// Pure-chat mode: no tools, no project context, plain conversational assistant
+    /// Open session picker (no id) or load a specific session, then drop into
+    /// TUI
+    Resume {
+        id: Option<String>,
+    },
+    /// Pure-chat mode: no tools, no project context, plain conversational
+    /// assistant
     Talk {
         model: Option<String>,
         log_level: Option<String>,
@@ -69,12 +73,22 @@ enum Cmd {
     },
     /// One-shot subcommands
     Models,
-    Export { id: String },
-    Add { rest: Vec<String> },
-    Load { rest: Vec<String> },
+    Export {
+        id: String,
+    },
+    Add {
+        rest: Vec<String>,
+    },
+    Load {
+        rest: Vec<String>,
+    },
     Unload,
-    Codemap { rest: Vec<String> },
-    Symbols { rest: Vec<String> },
+    Codemap {
+        rest: Vec<String>,
+    },
+    Symbols {
+        rest: Vec<String>,
+    },
     Version,
 }
 
@@ -132,7 +146,14 @@ fn parse_args() -> Cmd {
         Ok(Some(arg)) => arg,
         Ok(None) => {
             // No args — plain interactive mode.
-            return Cmd::Interactive { model: None, resume: ResumeOpt::None, log_level: None, prompt: None, thinking: false, effort: None };
+            return Cmd::Interactive {
+                model: None,
+                resume: ResumeOpt::None,
+                log_level: None,
+                prompt: None,
+                thinking: false,
+                effort: None,
+            };
         }
         Err(e) => {
             eprintln!("error: {e}. Try: nerv --help");
@@ -148,16 +169,28 @@ fn parse_args() -> Cmd {
         }
         Long("version") => return Cmd::Version,
         Long("model") => {
-            model = Some(parser.value().unwrap_or_else(|_| {
-                eprintln!("--model requires a value");
-                std::process::exit(1);
-            }).string().unwrap());
+            model = Some(
+                parser
+                    .value()
+                    .unwrap_or_else(|_| {
+                        eprintln!("--model requires a value");
+                        std::process::exit(1);
+                    })
+                    .string()
+                    .unwrap(),
+            );
         }
         Long("log-level") => {
-            log_level = Some(parser.value().unwrap_or_else(|_| {
-                eprintln!("--log-level requires a value");
-                std::process::exit(1);
-            }).string().unwrap());
+            log_level = Some(
+                parser
+                    .value()
+                    .unwrap_or_else(|_| {
+                        eprintln!("--log-level requires a value");
+                        std::process::exit(1);
+                    })
+                    .string()
+                    .unwrap(),
+            );
         }
         // ── subcommands ──────────────────────────────────────────────────────
         Value(v) if v == "talk" => {
@@ -186,29 +219,53 @@ fn parse_args() -> Cmd {
                         std::process::exit(0);
                     }
                     Ok(Some(Long("model"))) => {
-                        talk_model = Some(parser.value().unwrap_or_else(|_| {
-                            eprintln!("--model requires a value");
-                            std::process::exit(1);
-                        }).string().unwrap());
+                        talk_model = Some(
+                            parser
+                                .value()
+                                .unwrap_or_else(|_| {
+                                    eprintln!("--model requires a value");
+                                    std::process::exit(1);
+                                })
+                                .string()
+                                .unwrap(),
+                        );
                     }
                     Ok(Some(Long("log-level"))) => {
-                        talk_log = Some(parser.value().unwrap_or_else(|_| {
-                            eprintln!("--log-level requires a value");
-                            std::process::exit(1);
-                        }).string().unwrap());
+                        talk_log = Some(
+                            parser
+                                .value()
+                                .unwrap_or_else(|_| {
+                                    eprintln!("--log-level requires a value");
+                                    std::process::exit(1);
+                                })
+                                .string()
+                                .unwrap(),
+                        );
                     }
                     Ok(Some(Long("prompt"))) => {
-                        talk_prompt = Some(parser.value().unwrap_or_else(|_| {
-                            eprintln!("--prompt requires a value");
-                            std::process::exit(1);
-                        }).string().unwrap());
+                        talk_prompt = Some(
+                            parser
+                                .value()
+                                .unwrap_or_else(|_| {
+                                    eprintln!("--prompt requires a value");
+                                    std::process::exit(1);
+                                })
+                                .string()
+                                .unwrap(),
+                        );
                     }
                     Ok(Some(Long("thinking"))) => talk_thinking = true,
                     Ok(Some(Long("effort"))) => {
-                        talk_effort = Some(parse_effort_level(&parser.value().unwrap_or_else(|_| {
-                            eprintln!("--effort requires a value");
-                            std::process::exit(1);
-                        }).string().unwrap()));
+                        talk_effort = Some(parse_effort_level(
+                            &parser
+                                .value()
+                                .unwrap_or_else(|_| {
+                                    eprintln!("--effort requires a value");
+                                    std::process::exit(1);
+                                })
+                                .string()
+                                .unwrap(),
+                        ));
                     }
                     Ok(Some(arg)) => {
                         eprintln!("nerv talk: unexpected argument. Try: nerv talk --help");
@@ -221,7 +278,13 @@ fn parse_args() -> Cmd {
                     }
                 }
             }
-            return Cmd::Talk { model: talk_model, log_level: talk_log, prompt: talk_prompt, thinking: talk_thinking, effort: talk_effort };
+            return Cmd::Talk {
+                model: talk_model,
+                log_level: talk_log,
+                prompt: talk_prompt,
+                thinking: talk_thinking,
+                effort: talk_effort,
+            };
         }
         Value(v) if v == "resume" => {
             // resume [-h] [id]
@@ -235,7 +298,9 @@ fn parse_args() -> Cmd {
                     println!("  id   Session id (or prefix) to resume directly");
                     std::process::exit(0);
                 }
-                Ok(Some(Value(id))) => return Cmd::Resume { id: Some(id.string().unwrap()) },
+                Ok(Some(Value(id))) => {
+                    return Cmd::Resume { id: Some(id.string().unwrap()) };
+                }
                 Ok(None) => return Cmd::Resume { id: None },
                 Ok(Some(arg)) => {
                     eprintln!("nerv resume: unexpected argument '{}'", arg.unexpected());
@@ -258,7 +323,9 @@ fn parse_args() -> Cmd {
                     Ok(Some(Short('h') | Long("help"))) => {
                         println!("Usage: nerv print [options]");
                         println!();
-                        println!("Headless mode: read prompt from stdin, run agent, output JSON to stdout.");
+                        println!(
+                            "Headless mode: read prompt from stdin, run agent, output JSON to stdout."
+                        );
                         println!();
                         println!("Options:");
                         println!("  --model <name>      Model to use (e.g. opus, sonnet)");
@@ -268,16 +335,26 @@ fn parse_args() -> Cmd {
                         std::process::exit(0);
                     }
                     Ok(Some(Long("model"))) => {
-                        p_model = Some(parser.value().unwrap_or_else(|_| {
-                            eprintln!("--model requires a value");
-                            std::process::exit(1);
-                        }).string().unwrap());
+                        p_model = Some(
+                            parser
+                                .value()
+                                .unwrap_or_else(|_| {
+                                    eprintln!("--model requires a value");
+                                    std::process::exit(1);
+                                })
+                                .string()
+                                .unwrap(),
+                        );
                     }
                     Ok(Some(Long("max-turns"))) => {
-                        let s = parser.value().unwrap_or_else(|_| {
-                            eprintln!("--max-turns requires a value");
-                            std::process::exit(1);
-                        }).string().unwrap();
+                        let s = parser
+                            .value()
+                            .unwrap_or_else(|_| {
+                                eprintln!("--max-turns requires a value");
+                                std::process::exit(1);
+                            })
+                            .string()
+                            .unwrap();
                         max_turns = s.parse().unwrap_or_else(|_| {
                             eprintln!("--max-turns must be a number");
                             std::process::exit(1);
@@ -298,7 +375,8 @@ fn parse_args() -> Cmd {
             return Cmd::Print { model: p_model, max_turns, verbose };
         }
         Value(v) if v == "wt" => {
-            // wt [-h] <branch> [--model M] [--log-level L] [--prompt P] [--thinking] [--effort E]
+            // wt [-h] <branch> [--model M] [--log-level L] [--prompt P] [--thinking]
+            // [--effort E]
             let mut wt_model: Option<String> = None;
             let mut wt_log: Option<String> = None;
             let mut wt_prompt: Option<String> = None;
@@ -311,8 +389,12 @@ fn parse_args() -> Cmd {
                     Ok(Some(Short('h') | Long("help"))) => {
                         println!("Usage: nerv wt <branch> [options]");
                         println!();
-                        println!("Start an interactive session in a fresh git worktree on <branch>.");
-                        println!("The worktree is created under ~/.nerv/worktrees/ and checked out");
+                        println!(
+                            "Start an interactive session in a fresh git worktree on <branch>."
+                        );
+                        println!(
+                            "The worktree is created under ~/.nerv/worktrees/ and checked out"
+                        );
                         println!("to a new branch. Merged and cleaned up when the session ends.");
                         println!();
                         println!("Arguments:");
@@ -328,29 +410,53 @@ fn parse_args() -> Cmd {
                         std::process::exit(0);
                     }
                     Ok(Some(Long("model"))) => {
-                        wt_model = Some(parser.value().unwrap_or_else(|_| {
-                            eprintln!("--model requires a value");
-                            std::process::exit(1);
-                        }).string().unwrap());
+                        wt_model = Some(
+                            parser
+                                .value()
+                                .unwrap_or_else(|_| {
+                                    eprintln!("--model requires a value");
+                                    std::process::exit(1);
+                                })
+                                .string()
+                                .unwrap(),
+                        );
                     }
                     Ok(Some(Long("log-level"))) => {
-                        wt_log = Some(parser.value().unwrap_or_else(|_| {
-                            eprintln!("--log-level requires a value");
-                            std::process::exit(1);
-                        }).string().unwrap());
+                        wt_log = Some(
+                            parser
+                                .value()
+                                .unwrap_or_else(|_| {
+                                    eprintln!("--log-level requires a value");
+                                    std::process::exit(1);
+                                })
+                                .string()
+                                .unwrap(),
+                        );
                     }
                     Ok(Some(Long("prompt"))) => {
-                        wt_prompt = Some(parser.value().unwrap_or_else(|_| {
-                            eprintln!("--prompt requires a value");
-                            std::process::exit(1);
-                        }).string().unwrap());
+                        wt_prompt = Some(
+                            parser
+                                .value()
+                                .unwrap_or_else(|_| {
+                                    eprintln!("--prompt requires a value");
+                                    std::process::exit(1);
+                                })
+                                .string()
+                                .unwrap(),
+                        );
                     }
                     Ok(Some(Long("thinking"))) => wt_thinking = true,
                     Ok(Some(Long("effort"))) => {
-                        wt_effort = Some(parse_effort_level(&parser.value().unwrap_or_else(|_| {
-                            eprintln!("--effort requires a value");
-                            std::process::exit(1);
-                        }).string().unwrap()));
+                        wt_effort = Some(parse_effort_level(
+                            &parser
+                                .value()
+                                .unwrap_or_else(|_| {
+                                    eprintln!("--effort requires a value");
+                                    std::process::exit(1);
+                                })
+                                .string()
+                                .unwrap(),
+                        ));
                     }
                     Ok(Some(Value(v))) if branch.is_none() => {
                         branch = Some(v.string().unwrap());
@@ -370,7 +476,14 @@ fn parse_args() -> Cmd {
                 eprintln!("nerv wt: branch name required. Try: nerv wt --help");
                 std::process::exit(1);
             });
-            return Cmd::Wt { branch, model: wt_model, log_level: wt_log, prompt: wt_prompt, thinking: wt_thinking, effort: wt_effort };
+            return Cmd::Wt {
+                branch,
+                model: wt_model,
+                log_level: wt_log,
+                prompt: wt_prompt,
+                thinking: wt_thinking,
+                effort: wt_effort,
+            };
         }
         Value(v) if v == "models" => {
             if matches!(parser.next(), Ok(Some(Short('h') | Long("help")))) {
@@ -381,21 +494,21 @@ fn parse_args() -> Cmd {
             }
             return Cmd::Models;
         }
-        Value(v) if v == "export" => {
-            match parser.next() {
-                Ok(Some(Short('h') | Long("help"))) => {
-                    println!("Usage: nerv export <session-id>");
-                    println!();
-                    println!("Export a session to HTML and JSONL in ~/.nerv/exports/.");
-                    std::process::exit(0);
-                }
-                Ok(Some(Value(id))) => return Cmd::Export { id: id.string().unwrap() },
-                _ => {
-                    eprintln!("Usage: nerv export <session-id>");
-                    std::process::exit(1);
-                }
+        Value(v) if v == "export" => match parser.next() {
+            Ok(Some(Short('h') | Long("help"))) => {
+                println!("Usage: nerv export <session-id>");
+                println!();
+                println!("Export a session to HTML and JSONL in ~/.nerv/exports/.");
+                std::process::exit(0);
             }
-        }
+            Ok(Some(Value(id))) => {
+                return Cmd::Export { id: id.string().unwrap() };
+            }
+            _ => {
+                eprintln!("Usage: nerv export <session-id>");
+                std::process::exit(1);
+            }
+        },
         Value(v) if v == "add" => {
             if matches!(parser.clone().next(), Ok(Some(Short('h') | Long("help")))) {
                 println!("Usage: nerv add <hf-repo> <quant>");
@@ -430,7 +543,9 @@ fn parse_args() -> Cmd {
         }
         Value(v) if v == "codemap" => {
             if matches!(parser.clone().next(), Ok(Some(Short('h') | Long("help")))) {
-                println!("Usage: nerv codemap <query> [path] [--kind <kind>] [--depth full|signatures]");
+                println!(
+                    "Usage: nerv codemap <query> [path] [--kind <kind>] [--depth full|signatures]"
+                );
                 println!();
                 println!("Show symbol implementations matching a query.");
                 println!();
@@ -465,7 +580,8 @@ fn parse_args() -> Cmd {
         }
     }
 
-    // Remaining args for interactive mode (--model / --log-level / --prompt / --thinking / --effort may follow).
+    // Remaining args for interactive mode (--model / --log-level / --prompt /
+    // --thinking / --effort may follow).
     let mut prompt: Option<String> = None;
     let mut thinking = false;
     let mut effort: Option<EffortLevel> = None;
@@ -473,29 +589,53 @@ fn parse_args() -> Cmd {
         match parser.next() {
             Ok(None) => break,
             Ok(Some(Long("model"))) => {
-                model = Some(parser.value().unwrap_or_else(|_| {
-                    eprintln!("--model requires a value");
-                    std::process::exit(1);
-                }).string().unwrap());
+                model = Some(
+                    parser
+                        .value()
+                        .unwrap_or_else(|_| {
+                            eprintln!("--model requires a value");
+                            std::process::exit(1);
+                        })
+                        .string()
+                        .unwrap(),
+                );
             }
             Ok(Some(Long("log-level"))) => {
-                log_level = Some(parser.value().unwrap_or_else(|_| {
-                    eprintln!("--log-level requires a value");
-                    std::process::exit(1);
-                }).string().unwrap());
+                log_level = Some(
+                    parser
+                        .value()
+                        .unwrap_or_else(|_| {
+                            eprintln!("--log-level requires a value");
+                            std::process::exit(1);
+                        })
+                        .string()
+                        .unwrap(),
+                );
             }
             Ok(Some(Long("prompt"))) => {
-                prompt = Some(parser.value().unwrap_or_else(|_| {
-                    eprintln!("--prompt requires a value");
-                    std::process::exit(1);
-                }).string().unwrap());
+                prompt = Some(
+                    parser
+                        .value()
+                        .unwrap_or_else(|_| {
+                            eprintln!("--prompt requires a value");
+                            std::process::exit(1);
+                        })
+                        .string()
+                        .unwrap(),
+                );
             }
             Ok(Some(Long("thinking"))) => thinking = true,
             Ok(Some(Long("effort"))) => {
-                effort = Some(parse_effort_level(&parser.value().unwrap_or_else(|_| {
-                    eprintln!("--effort requires a value");
-                    std::process::exit(1);
-                }).string().unwrap()));
+                effort = Some(parse_effort_level(
+                    &parser
+                        .value()
+                        .unwrap_or_else(|_| {
+                            eprintln!("--effort requires a value");
+                            std::process::exit(1);
+                        })
+                        .string()
+                        .unwrap(),
+                ));
             }
             Ok(Some(Short('h') | Long("help"))) => {
                 print_top_help();
@@ -523,10 +663,10 @@ fn parse_args() -> Cmd {
 /// Parse an --effort flag value; exits on unrecognised input.
 fn parse_effort_level(s: &str) -> EffortLevel {
     match s {
-        "low"    => EffortLevel::Low,
+        "low" => EffortLevel::Low,
         "medium" => EffortLevel::Medium,
-        "high"   => EffortLevel::High,
-        "max"    => EffortLevel::Max,
+        "high" => EffortLevel::High,
+        "max" => EffortLevel::Max,
         other => {
             eprintln!("--effort: unknown level '{other}'. Choose: low, medium, high, max");
             std::process::exit(1);
@@ -563,7 +703,8 @@ enum RepoGateResult {
 /// Check whether the current directory is a known git repository.
 ///
 /// - Not a git repo  →  print prompt, read single keypress: [e]xit / [t]alk
-/// - Git repo, never seen before  →  print prompt, read single keypress: [c]ontinue / [t]alk
+/// - Git repo, never seen before  →  print prompt, read single keypress:
+///   [c]ontinue / [t]alk
 /// - Git repo, already in the DB  →  return Continue immediately
 ///
 /// Uses raw terminal I/O directly so we don't need to spin up the full TUI.
@@ -605,7 +746,9 @@ fn repo_gate(cwd: &std::path::Path, nerv_dir: &std::path::Path) -> RepoGateResul
     let prompt = if is_no_repo {
         format!("repository not found: {dir}\r\n  \x1b[2m[e]\x1b[0mexit  \x1b[2m[t]\x1b[0mtalk\r\n")
     } else {
-        format!("previously unknown repository: {dir}\r\n  \x1b[2m[c]\x1b[0mcontinue  \x1b[2m[t]\x1b[0mtalk\r\n")
+        format!(
+            "previously unknown repository: {dir}\r\n  \x1b[2m[c]\x1b[0mcontinue  \x1b[2m[t]\x1b[0mtalk\r\n"
+        )
     };
 
     // Enter raw mode, write prompt, read one byte, restore.
@@ -711,20 +854,32 @@ fn main() {
     // ── TUI startup ─────────────────────────────────────────────────────────
 
     // Re-destructure for the TUI-launching variants.
-    let (opt_model, resume_opt, log_level_opt, wt_opt, mut talk_mode, opt_prompt, opt_thinking, opt_effort) = match cmd {
-        Cmd::Interactive { model, resume, log_level, prompt, thinking, effort } =>
-            (model, resume, log_level, None, false, prompt, thinking, effort),
-        Cmd::Wt { branch, model, log_level, prompt, thinking, effort } =>
-            (model, ResumeOpt::None, log_level, Some(branch), false, prompt, thinking, effort),
+    let (
+        opt_model,
+        resume_opt,
+        log_level_opt,
+        wt_opt,
+        mut talk_mode,
+        opt_prompt,
+        opt_thinking,
+        opt_effort,
+    ) = match cmd {
+        Cmd::Interactive { model, resume, log_level, prompt, thinking, effort } => {
+            (model, resume, log_level, None, false, prompt, thinking, effort)
+        }
+        Cmd::Wt { branch, model, log_level, prompt, thinking, effort } => {
+            (model, ResumeOpt::None, log_level, Some(branch), false, prompt, thinking, effort)
+        }
         Cmd::Resume { id } => {
             let resume = match id {
                 Some(id) => ResumeOpt::Session(id),
-                None    => ResumeOpt::Picker,
+                None => ResumeOpt::Picker,
             };
             (None, resume, None, None, false, None, false, None)
         }
-        Cmd::Talk { model, log_level, prompt, thinking, effort } =>
-            (model, ResumeOpt::None, log_level, None, true, prompt, thinking, effort),
+        Cmd::Talk { model, log_level, prompt, thinking, effort } => {
+            (model, ResumeOpt::None, log_level, None, true, prompt, thinking, effort)
+        }
         _ => unreachable!(),
     };
 
@@ -786,11 +941,7 @@ fn main() {
     let b = nerv::bootstrap::bootstrap(
         &cwd,
         &nerv_dir,
-        nerv::bootstrap::BootstrapOptions {
-            memory: true,
-            permissions: true,
-            talk_mode,
-        },
+        nerv::bootstrap::BootstrapOptions { memory: true, permissions: true, talk_mode },
     );
     let config = b.config;
     let model_registry = b.model_registry;
@@ -807,23 +958,12 @@ fn main() {
             (cf.path.display().to_string(), tokens)
         })
         .collect();
-    let system_prompt_tokens = b
-        .resources
-        .system_prompt
-        .as_ref()
-        .map(|sp| nerv::compaction::count_tokens(sp));
-    let memory_tokens = b
-        .resources
-        .memory
-        .as_ref()
-        .map(|m| nerv::compaction::count_tokens(m))
-        .filter(|&t| t > 0);
-    let append_prompt_tokens: Vec<usize> = b
-        .resources
-        .append_prompts
-        .iter()
-        .map(|ap| nerv::compaction::count_tokens(ap))
-        .collect();
+    let system_prompt_tokens =
+        b.resources.system_prompt.as_ref().map(|sp| nerv::compaction::count_tokens(sp));
+    let memory_tokens =
+        b.resources.memory.as_ref().map(|m| nerv::compaction::count_tokens(m)).filter(|&t| t > 0);
+    let append_prompt_tokens: Vec<usize> =
+        b.resources.append_prompts.iter().map(|ap| nerv::compaction::count_tokens(ap)).collect();
     let base_prompt_tokens =
         nerv::compaction::count_tokens(nerv::core::system_prompt::DEFAULT_SYSTEM_PROMPT);
     let tools_tokens = {
@@ -857,9 +997,11 @@ fn main() {
     // Clone compact_threshold_arc so the main thread can write it directly for
     // immediate effect without waiting for SetCompactThreshold through cmd_tx.
     let compact_threshold_arc = session.compact_threshold_pct.clone();
-    // Clone the provider_registry Arc so the main thread can make /btw overlay calls.
+    // Clone the provider_registry Arc so the main thread can make /btw overlay
+    // calls.
     let provider_registry = session.agent.provider_registry.clone();
-    // cancel_flag was cloned from session.agent.cancel in bootstrap — same Arc, no re-clone needed.
+    // cancel_flag was cloned from session.agent.cancel in bootstrap — same Arc, no
+    // re-clone needed.
 
     // Session thread
     let evt_tx = event_tx.clone();
@@ -885,9 +1027,10 @@ fn main() {
 
     let dim = nerv::interactive::theme::DIM;
     if !talk_mode {
-        let load = |chat: &mut nerv::interactive::chat_writer::ChatWriter, name: &str, tok: usize| {
-            chat.push_styled(dim, &format!("› Loading: {} ({} tok)", name, tok));
-        };
+        let load =
+            |chat: &mut nerv::interactive::chat_writer::ChatWriter, name: &str, tok: usize| {
+                chat.push_styled(dim, &format!("› Loading: {} ({} tok)", name, tok));
+            };
         load(&mut layout.chat, "base prompt", base_prompt_tokens);
         load(&mut layout.chat, "tools", tools_tokens);
         for (path, tokens) in &loaded_files {
@@ -951,9 +1094,7 @@ fn main() {
         compact_threshold_arc,
     );
 
-    layout
-        .editor
-        .set_completions(interactive.slash_completions());
+    layout.editor.set_completions(interactive.slash_completions());
 
     // Set default model on the agent via command
     if let Some(m) = model_registry.default_model(&config) {
@@ -984,9 +1125,7 @@ fn main() {
     // Handle resume subcommand / flag
     match resume_opt {
         ResumeOpt::Session(id) => {
-            let _ = interactive
-                .cmd_tx()
-                .send(SessionCommand::LoadSession { id });
+            let _ = interactive.cmd_tx().send(SessionCommand::LoadSession { id });
         }
         ResumeOpt::Picker => {
             let _ = interactive.cmd_tx().send(SessionCommand::ListSessions {
@@ -999,14 +1138,13 @@ fn main() {
 
     // Apply --thinking / --effort flags
     if opt_thinking {
-        let _ = interactive.cmd_tx().try_send(SessionCommand::SetThinkingLevel {
-            level: nerv::agent::ThinkingLevel::On,
-        });
+        let _ = interactive
+            .cmd_tx()
+            .try_send(SessionCommand::SetThinkingLevel { level: nerv::agent::ThinkingLevel::On });
     }
     if let Some(effort) = opt_effort {
-        let _ = interactive.cmd_tx().try_send(SessionCommand::SetEffortLevel {
-            level: Some(effort),
-        });
+        let _ =
+            interactive.cmd_tx().try_send(SessionCommand::SetEffortLevel { level: Some(effort) });
     }
 
     // Apply --prompt: send as the initial user message once the TUI is up
@@ -1023,23 +1161,21 @@ fn main() {
             .name("nerv-provider-health".into())
             .stack_size(64 * 1024)
             .spawn(move || {
-            let agent = ureq::Agent::config_builder()
-                .timeout_global(Some(std::time::Duration::from_secs(2)))
-                .build()
-                .new_agent();
-            loop {
-                let online = agent.get(&url).call().is_ok();
-                let _ = tx.send(AgentSessionEvent::ProviderHealth {
-                    provider: name.clone(),
-                    online,
-                });
-                if online {
-                    break;
+                let agent = ureq::Agent::config_builder()
+                    .timeout_global(Some(std::time::Duration::from_secs(2)))
+                    .build()
+                    .new_agent();
+                loop {
+                    let online = agent.get(&url).call().is_ok();
+                    let _ = tx
+                        .send(AgentSessionEvent::ProviderHealth { provider: name.clone(), online });
+                    if online {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_secs(3));
                 }
-                std::thread::sleep(Duration::from_secs(3));
-            }
-        })
-        .expect("failed to spawn provider health thread");
+            })
+            .expect("failed to spawn provider health thread");
     }
 
     // Stdin reader thread — uses poll() so it can be paused for $EDITOR
@@ -1050,36 +1186,32 @@ fn main() {
         .name("nerv-stdin".into())
         .stack_size(64 * 1024)
         .spawn(move || {
-        use std::io::Read;
-        let mut buf = [0u8; 1024];
-        let mut pfd = libc::pollfd {
-            fd: libc::STDIN_FILENO,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        loop {
-            // When paused, spin-wait with a sleep instead of reading stdin
-            if stdin_paused2.load(std::sync::atomic::Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                continue;
-            }
-            // Poll with 100ms timeout so we can check the pause flag
-            let ready = unsafe { libc::poll(&mut pfd, 1, 100) };
-            if ready <= 0 {
-                continue; // timeout or error — recheck flags
-            }
-            match std::io::stdin().read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if stdin_tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
+            use std::io::Read;
+            let mut buf = [0u8; 1024];
+            let mut pfd = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
+            loop {
+                // When paused, spin-wait with a sleep instead of reading stdin
+                if stdin_paused2.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    continue;
                 }
-                Err(_) => break,
+                // Poll with 100ms timeout so we can check the pause flag
+                let ready = unsafe { libc::poll(&mut pfd, 1, 100) };
+                if ready <= 0 {
+                    continue; // timeout or error — recheck flags
+                }
+                match std::io::stdin().read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if stdin_tx.send(buf[..n].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
-        }
-    })
-    .expect("failed to spawn stdin reader thread");
+        })
+        .expect("failed to spawn stdin reader thread");
 
     // Register signals
     let sigint_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1103,7 +1235,8 @@ fn main() {
             cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
             interactive.handle_abort();
             layout.statusbar.cancel_streaming();
-            tui.request_render(false); render_frame!(tui, layout);
+            tui.request_render(false);
+            render_frame!(tui, layout);
         }
 
         if should_quit {
@@ -1429,8 +1562,8 @@ fn launch_picker(
     layout: &mut AppLayout,
     stdin_paused: &Arc<std::sync::atomic::AtomicBool>,
 ) {
-    use nerv::interactive::fullscreen_picker::run_fullscreen_picker;
     use nerv::interactive::event_loop::PickerRequest;
+    use nerv::interactive::fullscreen_picker::run_fullscreen_picker;
     use nerv::interactive::tree_selector::TreeSelection;
 
     // Pause the stdin reader so the picker owns stdin bytes exclusively.
@@ -1445,7 +1578,8 @@ fn launch_picker(
         return;
     }
 
-    // /btw inline panel: spawn background agent, attach panel to layout, return immediately.
+    // /btw inline panel: spawn background agent, attach panel to layout, return
+    // immediately.
     if let PickerRequest::BtwOverlay { messages, system_prompt, tools, model, note } = req {
         let panel = nerv::interactive::btw_panel::spawn_btw(
             messages,
@@ -1480,32 +1614,30 @@ fn launch_picker(
             let mut picker = nerv::interactive::session_picker::SessionPicker::new(
                 sessions, search_fn, repo_root,
             );
-            run_fullscreen_picker(&mut picker)
-                .map(PickResult::Session)
-                .unwrap_or(PickResult::None)
+            run_fullscreen_picker(&mut picker).map(PickResult::Session).unwrap_or(PickResult::None)
         }
         PickerRequest::TreeSelector { tree, current_leaf } => {
-            let mut selector = nerv::interactive::tree_selector::TreeSelector::new(
-                tree, current_leaf,
-            );
+            let mut selector =
+                nerv::interactive::tree_selector::TreeSelector::new(tree, current_leaf);
             if run_fullscreen_picker(&mut selector).is_some() {
-                selector.selected_node()
-                    .map(PickResult::Tree)
-                    .unwrap_or(PickResult::None)
+                selector.selected_node().map(PickResult::Tree).unwrap_or(PickResult::None)
             } else {
                 PickResult::None
             }
         }
         PickerRequest::ModelPicker => {
-            let models = interactive.model_registry().available_models()
-                .into_iter().cloned().collect::<Vec<_>>();
+            let models = interactive
+                .model_registry()
+                .available_models()
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>();
             let current = interactive.model_name().to_owned();
             let mut picker = nerv::interactive::model_picker::ModelPicker::new(models, current);
-            run_fullscreen_picker(&mut picker)
-                .map(PickResult::Model)
-                .unwrap_or(PickResult::None)
+            run_fullscreen_picker(&mut picker).map(PickResult::Model).unwrap_or(PickResult::None)
         }
-        // BtwOverlay and ToggleHud are handled above with early returns; these arms are unreachable.
+        // BtwOverlay and ToggleHud are handled above with early returns; these arms are
+        // unreachable.
         PickerRequest::BtwOverlay { .. } => PickResult::None,
         PickerRequest::ToggleHud => PickResult::None,
     };
@@ -1551,11 +1683,8 @@ fn launch_picker(
 }
 
 fn push_status(layout: &mut AppLayout, msg: &str, is_error: bool) {
-    let style = if is_error {
-        nerv::interactive::theme::ERROR
-    } else {
-        nerv::interactive::theme::MUTED
-    };
+    let style =
+        if is_error { nerv::interactive::theme::ERROR } else { nerv::interactive::theme::MUTED };
     layout.chat.push_styled(style, msg);
 }
 
@@ -1572,19 +1701,21 @@ fn list_all_models() {
         return;
     }
 
-    // Collect unique providers with a registered Arc<dyn Provider> and healthcheck each.
-    // This is intentionally blocking — `nerv models` / `nerv --list-models` is a CLI command.
+    // Collect unique providers with a registered Arc<dyn Provider> and healthcheck
+    // each. This is intentionally blocking — `nerv models` / `nerv
+    // --list-models` is a CLI command.
     use std::collections::HashMap;
     let mut provider_health: HashMap<String, bool> = HashMap::new();
     for m in &all {
         if provider_health.contains_key(&m.provider_name) {
             continue;
         }
-        let online = if let Some(p) = registry.provider_registry.read().unwrap().get(&m.provider_name) {
-            p.healthcheck()
-        } else {
-            false // provider not registered (no auth)
-        };
+        let online =
+            if let Some(p) = registry.provider_registry.read().unwrap().get(&m.provider_name) {
+                p.healthcheck()
+            } else {
+                false // provider not registered (no auth)
+            };
         provider_health.insert(m.provider_name.clone(), online);
     }
 
@@ -1607,10 +1738,7 @@ fn list_all_models() {
         } else {
             format!("{}○{}", theme::FOOTER_DIM, theme::RESET)
         };
-        println!(
-            "    {} {:<30} ctx:{}  {}",
-            marker, m.id, m.context_window, m.name
-        );
+        println!("    {} {:<30} ctx:{}  {}", marker, m.id, m.context_window, m.name);
     }
     println!();
 }
@@ -1679,11 +1807,7 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
                     model.alias = alias.clone();
                     model.hf_repo = Some(hf_repo.to_string());
 
-                    println!(
-                        "Hardware: {:.0}GB RAM, {} cores",
-                        sysctl_mem_gb(),
-                        sysctl_cores(),
-                    );
+                    println!("Hardware: {:.0}GB RAM, {} cores", sysctl_mem_gb(), sysctl_cores(),);
                     println!(
                         "Defaults: ctx:{} gpu:{} batch:{} threads:{}",
                         model.context_length,
@@ -1740,11 +1864,7 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
                 let mut input = String::new();
                 let _ = std::io::stdin().read_line(&mut input);
                 let idx: usize = input.trim().parse().unwrap_or(0);
-                if idx >= 1 && idx <= models.len() {
-                    Some(models[idx - 1].clone())
-                } else {
-                    None
-                }
+                if idx >= 1 && idx <= models.len() { Some(models[idx - 1].clone()) } else { None }
             };
 
             let Some(model) = model else {
@@ -1798,16 +1918,24 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
             let jsonl_path = exports_dir.join(format!("{}.jsonl", session_id));
             match nerv::export::export_session_html(session_id, &html_path, nerv_dir) {
                 Ok(path) => println!("Exported to {}", path),
-                Err(e) => { eprintln!("HTML export failed: {}", e); std::process::exit(1); }
+                Err(e) => {
+                    eprintln!("HTML export failed: {}", e);
+                    std::process::exit(1);
+                }
             }
             match nerv::export::export_session_jsonl(session_id, &jsonl_path, nerv_dir) {
                 Ok(path) => println!("Exported to {}", path),
-                Err(e) => { eprintln!("JSONL export failed: {}", e); std::process::exit(1); }
+                Err(e) => {
+                    eprintln!("JSONL export failed: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
         "codemap" => {
             if args.is_empty() {
-                eprintln!("Usage: nerv codemap <query> [path] [--kind <kind>] [--depth full|signatures]");
+                eprintln!(
+                    "Usage: nerv codemap <query> [path] [--kind <kind>] [--depth full|signatures]"
+                );
                 std::process::exit(1);
             }
             let query = &args[0];
@@ -1820,14 +1948,25 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
             let mut i = 1;
             while i < args.len() {
                 match args[i].as_str() {
-                    "--kind" => { kind_str = args.get(i + 1).map(|s| s.as_str()); i += 2; }
-                    "--file" => { file_str = args.get(i + 1).map(|s| s.as_str()); i += 2; }
-                    "--depth" => { depth_str = args.get(i + 1).map(|s| s.as_str()); i += 2; }
+                    "--kind" => {
+                        kind_str = args.get(i + 1).map(|s| s.as_str());
+                        i += 2;
+                    }
+                    "--file" => {
+                        file_str = args.get(i + 1).map(|s| s.as_str());
+                        i += 2;
+                    }
+                    "--depth" => {
+                        depth_str = args.get(i + 1).map(|s| s.as_str());
+                        i += 2;
+                    }
                     s if !s.starts_with('-') && file_str.is_none() => {
                         file_str = Some(s);
                         i += 1;
                     }
-                    _ => { i += 1; }
+                    _ => {
+                        i += 1;
+                    }
                 }
             }
 
@@ -1835,9 +1974,8 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
             let depth = depth_str
                 .map(nerv::index::codemap::parse_depth)
                 .unwrap_or(nerv::index::codemap::Depth::Full);
-            let file_path = file_str.map(|f| {
-                if f.starts_with('/') { PathBuf::from(f) } else { cwd.join(f) }
-            });
+            let file_path =
+                file_str.map(|f| if f.starts_with('/') { PathBuf::from(f) } else { cwd.join(f) });
 
             let mut index = nerv::index::SymbolIndex::new();
             index.force_index_dir(&cwd);
@@ -1864,21 +2002,31 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
             let mut i = 1;
             while i < args.len() {
                 match args[i].as_str() {
-                    "--kind" => { kind_str = args.get(i + 1).map(|s| s.as_str()); i += 2; }
-                    "--file" => { file_str = args.get(i + 1).map(|s| s.as_str()); i += 2; }
-                    "--refs" => { want_refs = true; i += 1; }
+                    "--kind" => {
+                        kind_str = args.get(i + 1).map(|s| s.as_str());
+                        i += 2;
+                    }
+                    "--file" => {
+                        file_str = args.get(i + 1).map(|s| s.as_str());
+                        i += 2;
+                    }
+                    "--refs" => {
+                        want_refs = true;
+                        i += 1;
+                    }
                     s if !s.starts_with('-') && file_str.is_none() => {
                         file_str = Some(s);
                         i += 1;
                     }
-                    _ => { i += 1; }
+                    _ => {
+                        i += 1;
+                    }
                 }
             }
 
             let kind = kind_str.and_then(nerv::index::codemap::parse_kind);
-            let file_path = file_str.map(|f| {
-                if f.starts_with('/') { PathBuf::from(f) } else { cwd.join(f) }
-            });
+            let file_path =
+                file_str.map(|f| if f.starts_with('/') { PathBuf::from(f) } else { cwd.join(f) });
 
             let mut index = nerv::index::SymbolIndex::new();
             index.force_index_dir(&cwd);
@@ -1889,12 +2037,15 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
             } else {
                 for sym in &results {
                     let rel = sym.file.strip_prefix(&cwd).unwrap_or(&sym.file).display();
-                    let parent_suffix = sym.parent.as_ref()
-                        .map(|p| format!("  ({})", p))
-                        .unwrap_or_default();
+                    let parent_suffix =
+                        sym.parent.as_ref().map(|p| format!("  ({})", p)).unwrap_or_default();
                     println!(
                         "  {}:{:<4}  {} {}{}",
-                        rel, sym.line, sym.kind.label(), sym.signature, parent_suffix,
+                        rel,
+                        sym.line,
+                        sym.kind.label(),
+                        sym.signature,
+                        parent_suffix,
                     );
                 }
                 println!("\n{} definitions", results.len());
@@ -1902,7 +2053,13 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
 
             if want_refs {
                 let output = std::process::Command::new("rg")
-                    .args(["--no-heading", "--line-number", "--color=never", "--word-regexp", query])
+                    .args([
+                        "--no-heading",
+                        "--line-number",
+                        "--color=never",
+                        "--word-regexp",
+                        query,
+                    ])
                     .current_dir(&cwd)
                     .output();
                 if let Ok(o) = output {
@@ -1978,11 +2135,7 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
     let b = nerv::bootstrap::bootstrap(
         &cwd,
         &nerv_dir,
-        nerv::bootstrap::BootstrapOptions {
-            memory: false,
-            permissions: false,
-            talk_mode: false,
-        },
+        nerv::bootstrap::BootstrapOptions { memory: false, permissions: false, talk_mode: false },
     );
     for warning in &b.config_warnings {
         eprintln!("warning: {}", warning);
@@ -2011,10 +2164,16 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
     let guidelines = b.session.tool_registry.prompt_guidelines();
     let model_id = model.as_ref().map(|m| m.id.as_str());
     agent.state.system_prompt = nerv::core::system_prompt::build_system_prompt_for_model(
-        &cwd, &b.resources, &tool_names, &snippets, &guidelines, model_id,
+        &cwd,
+        &b.resources,
+        &tool_names,
+        &snippets,
+        &guidelines,
+        model_id,
     );
 
-    // Collect metrics via the event callback (Mutex for Sync — no contention in practice)
+    // Collect metrics via the event callback (Mutex for Sync — no contention in
+    // practice)
     use std::sync::Mutex;
 
     struct Metrics {
@@ -2058,93 +2217,101 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
 
     // Graceful SIGINT: set cancel flag instead of dying, so JSON output flushes.
     PRINT_CANCEL.set(cancel.clone()).ok();
-    unsafe { libc::signal(libc::SIGINT, handle_sigint_print as *const () as libc::sighandler_t); }
+    unsafe {
+        libc::signal(libc::SIGINT, handle_sigint_print as *const () as libc::sighandler_t);
+    }
 
-    let new_messages = agent.prompt(vec![user_msg], &|event| {
-        use nerv::agent::types::{AgentEvent, StreamDelta};
-        let mut m = metrics.lock().unwrap();
-        match &event {
-            AgentEvent::TurnStart => {
-                m.turns += 1;
-                if m.turns > max_turns {
-                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-                }
-                if m.verbose {
-                    eprintln!("\n── turn {} {}", m.turns, "─".repeat(40));
-                }
-            }
-            AgentEvent::MessageUpdate { delta } if m.verbose => {
-                if let StreamDelta::Text(s) = delta {
-                    m.in_text = true;
-                    eprint!("{}", s);
-                }
-            }
-            AgentEvent::ToolExecutionStart { name, args, .. } => {
-                if m.in_text {
-                    eprintln!();
-                    m.in_text = false;
-                }
-                if m.verbose {
-                    let brief = format_args_brief(args);
-                    if brief.is_empty() {
-                        eprint!("  {}() ... ", name);
-                    } else {
-                        eprint!("  {}({}) ... ", name, brief);
+    let new_messages = agent.prompt(
+        vec![user_msg],
+        &|event| {
+            use nerv::agent::types::{AgentEvent, StreamDelta};
+            let mut m = metrics.lock().unwrap();
+            match &event {
+                AgentEvent::TurnStart => {
+                    m.turns += 1;
+                    if m.turns > max_turns {
+                        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
-                } else {
-                    eprint!("  turn {} › {} ... ", m.turns, name);
-                }
-                m.current_tool = Some((name.clone(), std::time::Instant::now()));
-            }
-            AgentEvent::ToolExecutionEnd { result, .. } => {
-                if let Some((name, start)) = m.current_tool.take() {
-                    let ms = start.elapsed().as_millis();
-                    let status = if result.is_error { "err" } else { "ok" };
                     if m.verbose {
-                        let summary = result.display.as_ref().map(|s| s.as_str()).unwrap_or_else(|| {
-                            result.content.lines().next().unwrap_or("")
-                        });
-                        if summary.is_empty() || summary.len() > 120 {
-                            eprintln!("{} ({}ms)", status, ms);
+                        eprintln!("\n── turn {} {}", m.turns, "─".repeat(40));
+                    }
+                }
+                AgentEvent::MessageUpdate { delta } if m.verbose => {
+                    if let StreamDelta::Text(s) = delta {
+                        m.in_text = true;
+                        eprint!("{}", s);
+                    }
+                }
+                AgentEvent::ToolExecutionStart { name, args, .. } => {
+                    if m.in_text {
+                        eprintln!();
+                        m.in_text = false;
+                    }
+                    if m.verbose {
+                        let brief = format_args_brief(args);
+                        if brief.is_empty() {
+                            eprint!("  {}() ... ", name);
                         } else {
-                            eprintln!("{} ({}ms) — {}", status, ms, summary);
+                            eprint!("  {}({}) ... ", name, brief);
                         }
                     } else {
-                        eprintln!("{} ({}ms)", status, ms);
+                        eprint!("  turn {} › {} ... ", m.turns, name);
                     }
-                    m.tool_calls.push(serde_json::json!({
-                        "name": name,
-                        "duration_ms": ms as u64,
-                        "is_error": result.is_error,
-                    }));
+                    m.current_tool = Some((name.clone(), std::time::Instant::now()));
                 }
-            }
-            AgentEvent::MessageEnd { message } => {
-                if m.in_text {
-                    eprintln!();
-                    m.in_text = false;
+                AgentEvent::ToolExecutionEnd { result, .. } => {
+                    if let Some((name, start)) = m.current_tool.take() {
+                        let ms = start.elapsed().as_millis();
+                        let status = if result.is_error { "err" } else { "ok" };
+                        if m.verbose {
+                            let summary = result
+                                .display
+                                .as_ref()
+                                .map(|s| s.as_str())
+                                .unwrap_or_else(|| result.content.lines().next().unwrap_or(""));
+                            if summary.is_empty() || summary.len() > 120 {
+                                eprintln!("{} ({}ms)", status, ms);
+                            } else {
+                                eprintln!("{} ({}ms) — {}", status, ms, summary);
+                            }
+                        } else {
+                            eprintln!("{} ({}ms)", status, ms);
+                        }
+                        m.tool_calls.push(serde_json::json!({
+                            "name": name,
+                            "duration_ms": ms as u64,
+                            "is_error": result.is_error,
+                        }));
+                    }
                 }
-                if let Some(ref usage) = message.usage {
-                    if usage.input > m.tokens_in {
-                        m.tokens_in = usage.input;
+                AgentEvent::MessageEnd { message } => {
+                    if m.in_text {
+                        eprintln!();
+                        m.in_text = false;
                     }
-                    m.tokens_out += usage.output;
-                    if usage.cache_read > m.tokens_cache_read {
-                        m.tokens_cache_read = usage.cache_read;
+                    if let Some(ref usage) = message.usage {
+                        if usage.input > m.tokens_in {
+                            m.tokens_in = usage.input;
+                        }
+                        m.tokens_out += usage.output;
+                        if usage.cache_read > m.tokens_cache_read {
+                            m.tokens_cache_read = usage.cache_read;
+                        }
+                        if let Some(ref model) = model_ref {
+                            m.cost.add_usage(usage, &model.pricing);
+                        }
+                        m.last_usage = Some(usage.clone());
+                        m.usages.push(usage.clone());
                     }
-                    if let Some(ref model) = model_ref {
-                        m.cost.add_usage(usage, &model.pricing);
-                    }
-                    m.last_usage = Some(usage.clone());
-                    m.usages.push(usage.clone());
                 }
+                AgentEvent::Retrying { attempt, wait_secs, reason } if m.verbose => {
+                    eprintln!("  retry {} ({}s): {}", attempt, wait_secs, reason);
+                }
+                _ => {}
             }
-            AgentEvent::Retrying { attempt, wait_secs, reason } if m.verbose => {
-                eprintln!("  retry {} ({}s): {}", attempt, wait_secs, reason);
-            }
-            _ => {}
-        }
-    }, None);
+        },
+        None,
+    );
 
     let wall_time = start.elapsed();
     let m = metrics.into_inner().unwrap();
@@ -2209,9 +2376,7 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
                 }
                 Some(entry)
             }
-            nerv::agent::types::AgentMessage::ToolResult {
-                content, is_error, ..
-            } => {
+            nerv::agent::types::AgentMessage::ToolResult { content, is_error, .. } => {
                 let text: String = content
                     .iter()
                     .filter_map(|c| match c {
@@ -2222,7 +2387,11 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
                     .join("");
                 // Truncate long tool results in the trace
                 let text = if text.len() > 500 {
-                    format!("{}...[truncated {}b]", &text[..text.floor_char_boundary(500)], text.len())
+                    format!(
+                        "{}...[truncated {}b]",
+                        &text[..text.floor_char_boundary(500)],
+                        text.len()
+                    )
                 } else {
                     text
                 };

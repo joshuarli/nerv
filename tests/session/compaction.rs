@@ -2,7 +2,8 @@ use nerv::agent::types::*;
 use nerv::compaction::*;
 use nerv::session::types::*;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers
+// ───────────────────────────────────────────────────────────────────
 
 fn user_entry(text: &str, id: &str, parent: Option<&str>) -> SessionEntry {
     SessionEntry::Message(MessageEntry {
@@ -26,11 +27,7 @@ fn assistant_entry(text: &str, id: &str, parent: &str) -> SessionEntry {
         message: AgentMessage::Assistant(AssistantMessage {
             content: vec![ContentBlock::Text { text: text.into() }],
             stop_reason: StopReason::EndTurn,
-            usage: Some(Usage {
-                input: 100,
-                output: 50,
-                ..Default::default()
-            }),
+            usage: Some(Usage { input: 100, output: 50, ..Default::default() }),
             timestamp: now_millis(),
         }),
     })
@@ -53,8 +50,9 @@ fn tool_result_entry(text: &str, id: &str, parent: &str) -> SessionEntry {
     })
 }
 
-/// Build a linear chain of alternating user/assistant entries with predictable ids.
-/// Each entry is padded to ~`tokens_each` tokens so token-budget tests are precise.
+/// Build a linear chain of alternating user/assistant entries with predictable
+/// ids. Each entry is padded to ~`tokens_each` tokens so token-budget tests are
+/// precise.
 fn linear_chain(count: usize, tokens_each: usize) -> Vec<SessionEntry> {
     let word_count = tokens_each.saturating_sub(4); // subtract overhead
     let text = "word ".repeat(word_count);
@@ -74,7 +72,8 @@ fn linear_chain(count: usize, tokens_each: usize) -> Vec<SessionEntry> {
     entries
 }
 
-// ── Token counting ────────────────────────────────────────────────────────────
+// ── Token counting
+// ────────────────────────────────────────────────────────────
 
 #[test]
 fn count_tokens_returns_reasonable_values() {
@@ -91,20 +90,16 @@ fn count_tokens_returns_reasonable_values() {
 
 #[test]
 fn estimate_tokens_includes_role_overhead() {
-    let msg = AgentMessage::User {
-        content: vec![ContentItem::Text { text: "Hi".into() }],
-        timestamp: 0,
-    };
+    let msg =
+        AgentMessage::User { content: vec![ContentItem::Text { text: "Hi".into() }], timestamp: 0 };
     // "Hi" ≈ 1 token + 4 overhead
     assert!(estimate_tokens(&msg) >= 4);
 }
 
 #[test]
 fn estimate_tokens_grows_with_content() {
-    let short = AgentMessage::User {
-        content: vec![ContentItem::Text { text: "hi".into() }],
-        timestamp: 0,
-    };
+    let short =
+        AgentMessage::User { content: vec![ContentItem::Text { text: "hi".into() }], timestamp: 0 };
     let long = AgentMessage::User {
         content: vec![ContentItem::Text { text: "word ".repeat(200) }],
         timestamp: 0,
@@ -112,7 +107,8 @@ fn estimate_tokens_grows_with_content() {
     assert!(estimate_tokens(&long) > estimate_tokens(&short) * 10);
 }
 
-// ── should_compact ────────────────────────────────────────────────────────────
+// ── should_compact
+// ────────────────────────────────────────────────────────────
 
 #[test]
 fn should_compact_triggers_at_threshold() {
@@ -232,7 +228,7 @@ fn cut_point_assistant_boundary_detects_split_turn() {
     // of a turn), is_split_turn should be true and turn_start_index set.
     let entries = vec![
         user_entry(&"x".repeat(400), "e0", None), // huge — will be cut
-        assistant_entry("response", "e1", "e0"),   // cut may land here
+        assistant_entry("response", "e1", "e0"),  // cut may land here
     ];
 
     let cut = find_cut_point(&entries, 0, entries.len(), 30, 0);
@@ -247,8 +243,8 @@ fn cut_point_assistant_boundary_detects_split_turn() {
 
 #[test]
 fn verbatim_window_zero_gives_no_verbatim_region() {
-    // With verbatim_window_tokens=0, verbatim_start_index == first_kept_entry_index:
-    // the entire kept range is summarized.
+    // With verbatim_window_tokens=0, verbatim_start_index ==
+    // first_kept_entry_index: the entire kept range is summarized.
     let entries = linear_chain(10, 50);
     let cut = find_cut_point(&entries, 0, entries.len(), 300, 0);
     assert_eq!(
@@ -286,8 +282,8 @@ fn verbatim_window_splits_kept_range() {
 
 #[test]
 fn verbatim_window_larger_than_budget_falls_back_to_no_verbatim() {
-    // When verbatim_window_tokens >= keep_recent_tokens, treat as "no verbatim window"
-    // (summarize everything), which is the same as verbatim_window=0.
+    // When verbatim_window_tokens >= keep_recent_tokens, treat as "no verbatim
+    // window" (summarize everything), which is the same as verbatim_window=0.
     let entries = linear_chain(10, 50);
     let cut_no_verbatim = find_cut_point(&entries, 0, entries.len(), 300, 0);
     let cut_over_budget = find_cut_point(&entries, 0, entries.len(), 300, 999_999);
@@ -376,7 +372,8 @@ fn cut_point_respects_start_parameter() {
     );
 }
 
-// ── CompactionSettings defaults ───────────────────────────────────────────────
+// ── CompactionSettings defaults
+// ───────────────────────────────────────────────
 
 #[test]
 fn default_settings_have_verbatim_window() {

@@ -111,9 +111,7 @@ pub fn visible_width(s: &str) -> u16 {
 
 /// Width of a text segment (no ANSI) measured by grapheme clusters.
 fn grapheme_width(s: &str) -> u16 {
-    s.graphemes(true)
-        .map(|g| UnicodeWidthStr::width(g) as u16)
-        .sum()
+    s.graphemes(true).map(|g| UnicodeWidthStr::width(g) as u16).sum()
 }
 
 /// Truncate to at most `max_width` visible columns, preserving ANSI escapes.

@@ -8,7 +8,8 @@ pub struct Skill {
     pub content: String,
 }
 
-/// Load skills from a directory. Each .md file with YAML frontmatter is a skill.
+/// Load skills from a directory. Each .md file with YAML frontmatter is a
+/// skill.
 pub fn load_skills(dir: &Path) -> Vec<Skill> {
     let mut skills = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -21,11 +22,7 @@ pub fn load_skills(dir: &Path) -> Vec<Skill> {
             continue;
         }
         if let Some(skill) = load_skill(&path) {
-            crate::log::info(&format!(
-                "loaded skill: {} ({})",
-                skill.name,
-                path.display()
-            ));
+            crate::log::info(&format!("loaded skill: {} ({})", skill.name, path.display()));
             skills.push(skill);
         }
     }
@@ -38,20 +35,14 @@ fn load_skill(path: &Path) -> Option<Skill> {
     let content = std::fs::read_to_string(path).ok()?;
     let (frontmatter, body) = parse_frontmatter(&content);
 
-    let name = frontmatter.get("name").cloned().or_else(|| {
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-    })?;
+    let name = frontmatter
+        .get("name")
+        .cloned()
+        .or_else(|| path.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string()))?;
 
     let description = frontmatter.get("description").cloned().unwrap_or_default();
 
-    Some(Skill {
-        name,
-        description,
-        file_path: path.to_path_buf(),
-        content: body.to_string(),
-    })
+    Some(Skill { name, description, file_path: path.to_path_buf(), content: body.to_string() })
 }
 
 /// Format skills for inclusion in the system prompt.
@@ -73,7 +64,8 @@ pub fn format_skills_for_prompt(skills: &[Skill]) -> String {
     lines.join("\n")
 }
 
-/// Simple YAML frontmatter parser. Returns (key-value map, body after frontmatter).
+/// Simple YAML frontmatter parser. Returns (key-value map, body after
+/// frontmatter).
 fn parse_frontmatter(content: &str) -> (std::collections::HashMap<String, String>, &str) {
     let mut map = std::collections::HashMap::new();
 
@@ -102,11 +94,7 @@ fn parse_frontmatter(content: &str) -> (std::collections::HashMap<String, String
         if let Some((key, value)) = line.split_once(':') {
             map.insert(
                 key.trim().to_string(),
-                value
-                    .trim()
-                    .trim_matches('"')
-                    .trim_matches('\'')
-                    .to_string(),
+                value.trim().trim_matches('"').trim_matches('\'').to_string(),
             );
         }
     }

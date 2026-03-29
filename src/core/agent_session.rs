@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crossbeam_channel::Sender;
 
@@ -12,7 +12,7 @@ use super::tool_registry::ToolRegistry;
 use crate::agent::agent::Agent;
 use crate::agent::provider::Provider;
 use crate::agent::types::*;
-use crate::compaction::summarize::{generate_summary, generate_session_name};
+use crate::compaction::summarize::{generate_session_name, generate_summary};
 use crate::compaction::{self, CompactionResult, CompactionSettings};
 use crate::core::config::NervConfig;
 use crate::session::SessionManager;
@@ -33,7 +33,8 @@ pub enum AgentSessionEvent {
     AutoCompactionEnd {
         summary: Option<String>,
         will_retry: bool,
-        /// Post-compaction messages (for UI rebuild). Empty when compaction failed/skipped.
+        /// Post-compaction messages (for UI rebuild). Empty when compaction
+        /// failed/skipped.
         messages: Vec<AgentMessage>,
     },
     RetryStart {
@@ -79,11 +80,13 @@ pub enum AgentSessionEvent {
         cost_usd: f64,
         /// Total input tokens sent across all API calls (restored from DB).
         total_input: u64,
-        /// Total output tokens received across all API calls (restored from DB).
+        /// Total output tokens received across all API calls (restored from
+        /// DB).
         total_output: u64,
         /// Number of API calls made in this session (restored from DB).
         api_calls: u32,
-        /// All user-typed prompts ever submitted in this session (for up-arrow recall).
+        /// All user-typed prompts ever submitted in this session (for up-arrow
+        /// recall).
         input_history: Vec<String>,
     },
     /// A worktree was created (via /wt). UI should update cwd display.
@@ -118,15 +121,17 @@ pub enum AgentSessionEvent {
         reason: String,
         response_tx: crossbeam_channel::Sender<bool>,
     },
-    /// Context gate — agent blocks until user confirms or denies the large request.
+    /// Context gate — agent blocks until user confirms or denies the large
+    /// request.
     ContextGateRequest {
         estimated_tokens: usize,
         prev_tokens: usize,
         context_window: u32,
         response_tx: crossbeam_channel::Sender<bool>,
     },
-    /// Output gate — bash result exceeded OUTPUT_GATE_THRESHOLD_BYTES after filtering.
-    /// Agent blocks until user allows or denies adding the result to context.
+    /// Output gate — bash result exceeded OUTPUT_GATE_THRESHOLD_BYTES after
+    /// filtering. Agent blocks until user allows or denies adding the
+    /// result to context.
     OutputGateRequest {
         command: String,
         line_count: usize,
@@ -136,34 +141,66 @@ pub enum AgentSessionEvent {
 }
 
 pub enum SessionCommand {
-    Prompt { text: String },
+    Prompt {
+        text: String,
+    },
     Abort,
     NewSession,
-    LoadSession { id: String },
-    SetModel { provider: String, model_id: String },
-    SetThinkingLevel { level: ThinkingLevel },
-    SetEffortLevel { level: Option<EffortLevel> },
-    Compact { custom_instructions: Option<String> },
-    SetCompactThreshold { pct: u8 },
-    SetAutoCompact { enabled: bool },
+    LoadSession {
+        id: String,
+    },
+    SetModel {
+        provider: String,
+        model_id: String,
+    },
+    SetThinkingLevel {
+        level: ThinkingLevel,
+    },
+    SetEffortLevel {
+        level: Option<EffortLevel>,
+    },
+    Compact {
+        custom_instructions: Option<String>,
+    },
+    SetCompactThreshold {
+        pct: u8,
+    },
+    SetAutoCompact {
+        enabled: bool,
+    },
     Export,
-    Login { provider: String },
-    Logout { provider: String },
-    ListSessions { repo_root: Option<String>, repo_id: Option<String> },
+    Login {
+        provider: String,
+    },
+    Logout {
+        provider: String,
+    },
+    ListSessions {
+        repo_root: Option<String>,
+        repo_id: Option<String>,
+    },
     GetTree,
     SwitchBranch {
         entry_id: String,
-        /// If true, set leaf to the *parent* of entry_id instead (user message re-submission).
+        /// If true, set leaf to the *parent* of entry_id instead (user message
+        /// re-submission).
         use_parent: bool,
         /// If true, reset leaf to None (root user message selected).
         reset_leaf: bool,
     },
-    CreateWorktree { branch_name: String, nerv_dir: PathBuf },
+    CreateWorktree {
+        branch_name: String,
+        nerv_dir: PathBuf,
+    },
     MergeWorktree,
-    SetPlanMode { enabled: bool },
+    SetPlanMode {
+        enabled: bool,
+    },
     ForkSession,
     /// Persist the full input history for the current session.
-    SaveInputHistory { history: Vec<String> },
+    SaveInputHistory {
+        history: Vec<String>,
+    },
 }
 
 pub struct AgentSession {
@@ -171,8 +208,9 @@ pub struct AgentSession {
     pub session_manager: SessionManager,
     pub tool_registry: ToolRegistry,
     compaction_settings: CompactionSettings,
-    /// Compact threshold as integer percent (0-100). Shared with the main thread
-    /// so `/compact at N` takes effect immediately without going through cmd_tx.
+    /// Compact threshold as integer percent (0-100). Shared with the main
+    /// thread so `/compact at N` takes effect immediately without going
+    /// through cmd_tx.
     pub compact_threshold_pct: Arc<AtomicU32>,
     model_registry: Arc<ModelRegistry>,
     resources: LoadedResources,
@@ -183,8 +221,9 @@ pub struct AgentSession {
     /// Cache of accepted permissions: (tool, args_json) keyed by args hash
     /// Shared arc for use in permission_fn closure
     permission_cache: Arc<std::sync::Mutex<HashSet<String>>>,
-    /// Directories the user has granted full access to via the "allow dir" prompt response.
-    /// Shared with the main thread so new entries can be pushed from the UI.
+    /// Directories the user has granted full access to via the "allow dir"
+    /// prompt response. Shared with the main thread so new entries can be
+    /// pushed from the UI.
     pub allowed_dirs: Arc<std::sync::Mutex<Vec<PathBuf>>>,
     /// Worktree path tied to this session (set via --wt or /wt).
     worktree: Option<PathBuf>,
@@ -192,9 +231,11 @@ pub struct AgentSession {
     plan_mode: bool,
     /// Talk mode: no tools, no project context, pure conversational assistant.
     pub talk_mode: bool,
-    /// True once the session has been given an auto-generated name, to avoid re-naming.
+    /// True once the session has been given an auto-generated name, to avoid
+    /// re-naming.
     session_named: bool,
-    /// Whether automatic threshold-based compaction is enabled for this session.
+    /// Whether automatic threshold-based compaction is enabled for this
+    /// session.
     pub auto_compact: bool,
     /// Set by the UsageUpdate callback when mid-stream compaction triggers.
     /// Checked after prompt() returns to decide whether to compact + retry.
@@ -236,8 +277,7 @@ impl AgentSession {
     pub fn set_plan_mode(&mut self, enabled: bool, event_tx: &Sender<AgentSessionEvent>) {
         self.plan_mode = enabled;
         if enabled {
-            self.tool_registry
-                .set_active(&["read", "bash", "grep", "find", "ls", "memory"]);
+            self.tool_registry.set_active(&["read", "bash", "grep", "find", "ls", "memory"]);
         } else {
             self.tool_registry.set_active(&[]);
         }
@@ -256,9 +296,7 @@ impl AgentSession {
     pub fn prompt(&mut self, text: String, event_tx: &Sender<AgentSessionEvent>) {
         // Lazily create session on first prompt (not on startup)
         if !self.session_manager.has_session() {
-            let _ = self
-                .session_manager
-                .new_session(&self.cwd, self.worktree.as_deref());
+            let _ = self.session_manager.new_session(&self.cwd, self.worktree.as_deref());
             let _ = event_tx.send(AgentSessionEvent::SessionStarted {
                 id: self.session_manager.session_id().to_string(),
                 name: None,
@@ -275,16 +313,15 @@ impl AgentSession {
         // Record system prompt in session for reproducibility
         let prompt_tokens = crate::compaction::count_tokens(&self.agent.state.system_prompt) as u32;
         let _ =
-            self.session_manager
-                .append_entry(crate::session::types::SessionEntry::SystemPrompt(
-                    crate::session::types::SystemPromptEntry {
-                        id: crate::session::types::gen_entry_id(),
-                        parent_id: self.session_manager.leaf_id().map(|s| s.to_string()),
-                        timestamp: crate::session::types::now_iso(),
-                        prompt: self.agent.state.system_prompt.clone(),
-                        token_count: prompt_tokens,
-                    },
-                ));
+            self.session_manager.append_entry(crate::session::types::SessionEntry::SystemPrompt(
+                crate::session::types::SystemPromptEntry {
+                    id: crate::session::types::gen_entry_id(),
+                    parent_id: self.session_manager.leaf_id().map(|s| s.to_string()),
+                    timestamp: crate::session::types::now_iso(),
+                    prompt: self.agent.state.system_prompt.clone(),
+                    token_count: prompt_tokens,
+                },
+            ));
 
         self.prepare_callbacks(event_tx);
 
@@ -314,9 +351,7 @@ impl AgentSession {
                     // Temporarily disable auto-compact for the retry to avoid
                     // infinite loops if compaction didn't shrink enough.
                     let retry_msg = AgentMessage::User {
-                        content: vec![ContentItem::Text {
-                            text: text.to_string(),
-                        }],
+                        content: vec![ContentItem::Text { text: text.to_string() }],
                         timestamp: now_millis(),
                     };
                     self.prepare_system_prompt();
@@ -368,8 +403,8 @@ impl AgentSession {
             let cache = self.permission_cache.clone();
             let allowed_dirs = self.allowed_dirs.clone();
 
-            self.agent.state.permission_fn = Some(std::sync::Arc::new(
-                move |tool: &str, args: &serde_json::Value| {
+            self.agent.state.permission_fn =
+                Some(std::sync::Arc::new(move |tool: &str, args: &serde_json::Value| {
                     let args_json = serde_json::to_string(args).unwrap_or_default();
                     let key = format!("{}:{}", tool, args_json);
                     if cache.lock().unwrap().contains(&key) {
@@ -414,16 +449,16 @@ impl AgentSession {
                             approved
                         }
                     }
-                },
-            ));
+                }));
         }
 
-        // Output gate: fires after bash executes when filtered output exceeds threshold.
-        // Agent thread blocks on the channel waiting for a y/n from the TUI.
+        // Output gate: fires after bash executes when filtered output exceeds
+        // threshold. Agent thread blocks on the channel waiting for a y/n from
+        // the TUI.
         {
             let output_tx = event_tx.clone();
-            self.agent.state.output_gate_fn = Some(std::sync::Arc::new(
-                move |info: crate::agent::agent::OutputGateInfo| {
+            self.agent.state.output_gate_fn =
+                Some(std::sync::Arc::new(move |info: crate::agent::agent::OutputGateInfo| {
                     let (resp_tx, resp_rx) = crossbeam_channel::bounded(1);
                     let _ = output_tx.send(AgentSessionEvent::OutputGateRequest {
                         command: info.command.clone(),
@@ -436,14 +471,13 @@ impl AgentSession {
                     } else {
                         crate::agent::agent::OutputGateDecision::Deny
                     }
-                },
-            ));
+                }));
         }
 
         // Context gate (circuit breaker for context growth)
         let gate_tx = event_tx.clone();
-        self.agent.state.context_gate_fn = Some(std::sync::Arc::new(
-            move |info: crate::agent::agent::ContextGateInfo| {
+        self.agent.state.context_gate_fn =
+            Some(std::sync::Arc::new(move |info: crate::agent::agent::ContextGateInfo| {
                 if info.tool_rounds < 4 || info.prev_tokens == 0 {
                     return true;
                 }
@@ -463,13 +497,12 @@ impl AgentSession {
                     response_tx: resp_tx,
                 });
                 resp_rx.recv().unwrap_or(false)
-            },
-        ));
+            }));
     }
 
     /// Handle overflow compaction and session naming after a completed prompt.
-    /// Threshold-based auto-compaction is handled mid-stream (in run_agent_prompt's
-    /// on_event callback), not here.
+    /// Threshold-based auto-compaction is handled mid-stream (in
+    /// run_agent_prompt's on_event callback), not here.
     fn post_turn(
         &mut self,
         new_messages: Vec<AgentMessage>,
@@ -495,9 +528,7 @@ impl AgentSession {
                     });
 
                     let retry_msg = AgentMessage::User {
-                        content: vec![ContentItem::Text {
-                            text: user_text.to_string(),
-                        }],
+                        content: vec![ContentItem::Text { text: user_text.to_string() }],
                         timestamp: now_millis(),
                     };
                     self.prepare_system_prompt();
@@ -549,8 +580,7 @@ impl AgentSession {
         }
 
         // Reload memory in case it was updated by a tool call
-        self.resources.memory =
-            std::fs::read_to_string(crate::nerv_dir().join("memory.md")).ok();
+        self.resources.memory = std::fs::read_to_string(crate::nerv_dir().join("memory.md")).ok();
 
         self.agent.state.tools = self.tool_registry.active_tools();
         let tool_names: Vec<&str> = self.agent.state.tools.iter().map(|t| t.name()).collect();
@@ -619,12 +649,7 @@ impl AgentSession {
             ..
         } = *self;
 
-        let context_window = agent
-            .state
-            .model
-            .as_ref()
-            .map(|m| m.context_window)
-            .unwrap_or(0);
+        let context_window = agent.state.model.as_ref().map(|m| m.context_window).unwrap_or(0);
         let model_pricing = agent.state.model.as_ref().map(|m| m.pricing.clone());
 
         let mut last_input = 0u32;
@@ -667,8 +692,9 @@ impl AgentSession {
             }
         };
 
-        let new_messages =
-            agent.prompt(prompt_messages, &|event: AgentEvent| {
+        let new_messages = agent.prompt(
+            prompt_messages,
+            &|event: AgentEvent| {
                 // Check for mid-stream auto-compaction on every UsageUpdate.
                 // UsageUpdate fires at message_start with the authoritative input
                 // token count — that's when we learn the context size for this call.
@@ -677,22 +703,24 @@ impl AgentSession {
                         // Re-read the shared atomic so `/compact at N` takes effect
                         // even while a stream is in progress.
                         let live_pct = compact_threshold_pct.load(Ordering::Relaxed);
-                        let pct = if live_pct > 0 {
-                            live_pct as f64 / 100.0
-                        } else {
-                            threshold_pct
-                        };
-                        let context_tokens = (usage.input + usage.output + usage.cache_read) as usize;
+                        let pct =
+                            if live_pct > 0 { live_pct as f64 / 100.0 } else { threshold_pct };
+                        let context_tokens =
+                            (usage.input + usage.output + usage.cache_read) as usize;
                         let threshold = (context_window as f64 * pct) as usize;
                         if context_tokens > threshold {
-                            crate::log::info("mid-stream auto-compact triggered — cancelling stream");
+                            crate::log::info(
+                                "mid-stream auto-compact triggered — cancelling stream",
+                            );
                             compaction_triggered.store(true, Ordering::Relaxed);
                             cancel_flag.store(true, Ordering::Relaxed);
                         }
                     }
                 }
                 let _ = tx.send(AgentSessionEvent::Agent(event));
-            }, Some(&mut persist));
+            },
+            Some(&mut persist),
+        );
 
         *last_input_tokens = last_input;
 
@@ -701,10 +729,8 @@ impl AgentSession {
             && let StopReason::Error { ref message } = last.stop_reason
             && !last.stop_reason.is_context_overflow()
         {
-            let _ = event_tx.send(AgentSessionEvent::Status {
-                message: message.clone(),
-                is_error: true,
-            });
+            let _ = event_tx
+                .send(AgentSessionEvent::Status { message: message.clone(), is_error: true });
         }
 
         // Fire onResponseComplete for successful, non-error turns.
@@ -770,22 +796,21 @@ impl AgentSession {
         Some((provider, model.id.clone()))
     }
 
-    /// Run compaction. Returns `Ok(Some(result))` on success, `Ok(None)` when there is
-    /// nothing to compact (context too small / no messages before the cut point), and
-    /// `Err(msg)` when compaction cannot proceed (no suitable provider, summarization
-    /// API call failed, etc.).
+    /// Run compaction. Returns `Ok(Some(result))` on success, `Ok(None)` when
+    /// there is nothing to compact (context too small / no messages before
+    /// the cut point), and `Err(msg)` when compaction cannot proceed (no
+    /// suitable provider, summarization API call failed, etc.).
     pub fn run_compaction(
         &mut self,
         _custom_instructions: Option<String>,
     ) -> Result<Option<CompactionResult>, String> {
         let config = NervConfig::load(crate::nerv_dir());
         let (provider, model_id) =
-            self.resolve_utility_provider(config.compaction_model.as_deref())
-                .ok_or_else(|| {
-                    "No provider available for compaction. \
+            self.resolve_utility_provider(config.compaction_model.as_deref()).ok_or_else(|| {
+                "No provider available for compaction. \
                      Set compaction_model in ~/.nerv/config.json or log in to Anthropic (/login)."
-                        .to_string()
-                })?;
+                    .to_string()
+            })?;
 
         // Operate only on the current branch (root → leaf), not the whole tree.
         // Using entries() would compact entries from sibling branches too.
@@ -796,11 +821,13 @@ impl AgentSession {
 
         // The kept window is split into two parts for cache efficiency:
         //   [first_kept_entry_index .. verbatim_start_index)  → summarized by LLM
-        //   [verbatim_start_index .. end)                      → kept verbatim in the DB
+        //   [verbatim_start_index .. end)                      → kept verbatim in the
+        // DB
         //
         // The verbatim window covers the newest turns of the pre-compaction context,
         // which were already cache-read (Rc) hits. Preserving them byte-for-byte means
-        // they remain Rc on the very next API call — only the new summary is cache-cold.
+        // they remain Rc on the very next API call — only the new summary is
+        // cache-cold.
         let cut = compaction::find_cut_point(
             &branch,
             0,
@@ -808,8 +835,9 @@ impl AgentSession {
             self.compaction_settings.keep_recent_tokens,
             self.compaction_settings.verbatim_window_tokens,
         );
-        // first_kept_entry_id is the deletion boundary: the session DB removes everything
-        // before this entry and inserts the compaction summary in its place.
+        // first_kept_entry_id is the deletion boundary: the session DB removes
+        // everything before this entry and inserts the compaction summary in
+        // its place.
         let first_kept_id = branch[cut.first_kept_entry_index].id().to_string();
 
         // Summarize only the entries before verbatim_start_index. The verbatim window
@@ -830,10 +858,8 @@ impl AgentSession {
             return Ok(None);
         }
 
-        let tokens_before = to_summarize
-            .iter()
-            .map(compaction::estimate_tokens)
-            .sum::<usize>() as u32;
+        let tokens_before =
+            to_summarize.iter().map(compaction::estimate_tokens).sum::<usize>() as u32;
 
         match generate_summary(&to_summarize, None, provider, &model_id) {
             Ok(summary) => {
@@ -871,9 +897,7 @@ impl AgentSession {
         if let Some(model) = self.model_registry.get_model(provider, model_id) {
             self.agent.state.model = Some(model.clone());
             let _ = self.session_manager.append_model_change(provider, model_id);
-            let _ = event_tx.send(AgentSessionEvent::ModelChanged {
-                model: model.clone(),
-            });
+            let _ = event_tx.send(AgentSessionEvent::ModelChanged { model: model.clone() });
             // Persist as session-level override
             self.session_manager.update_session_config(|cfg| {
                 cfg.default_model = Some(model_id.to_string());
@@ -918,20 +942,16 @@ impl AgentSession {
 
                 // Restore thinking level
                 self.agent.state.thinking_level = ctx.thinking_level;
-                let _ = event_tx.send(AgentSessionEvent::ThinkingLevelChanged {
-                    level: ctx.thinking_level,
-                });
+                let _ = event_tx
+                    .send(AgentSessionEvent::ThinkingLevelChanged { level: ctx.thinking_level });
 
                 // Restore model — try model_registry first, fall back to custom provider config
                 if let Some((provider, model_id)) = ctx.model {
-                    if self
-                        .model_registry
-                        .get_model(&provider, &model_id)
-                        .is_some()
-                    {
+                    if self.model_registry.get_model(&provider, &model_id).is_some() {
                         self.set_model(&provider, &model_id, event_tx);
                     } else {
-                        // Model not in registry — check if it's a custom provider we can re-register
+                        // Model not in registry — check if it's a custom provider we can
+                        // re-register
                         let config = crate::core::config::NervConfig::load(crate::nerv_dir());
                         if let Some(pcfg) =
                             config.custom_providers.iter().find(|p| p.name == provider)
@@ -941,11 +961,7 @@ impl AgentSession {
                                 pcfg.base_url.clone(),
                                 pcfg.api_key.clone(),
                             ));
-                            self.agent
-                                .provider_registry
-                                .write()
-                                .unwrap()
-                                .register(&provider, p);
+                            self.agent.provider_registry.write().unwrap().register(&provider, p);
                             // Create the model directly
                             let model = Model {
                                 id: model_id.clone(),
@@ -1010,15 +1026,14 @@ impl AgentSession {
                 let scfg = ctx.session_config;
                 if let Some(effort) = scfg.default_effort_level {
                     self.agent.state.effort_level = Some(effort);
-                    let _ = event_tx.send(AgentSessionEvent::EffortLevelChanged {
-                        level: Some(effort),
-                    });
+                    let _ = event_tx
+                        .send(AgentSessionEvent::EffortLevelChanged { level: Some(effort) });
                 }
                 if let Some(enabled) = scfg.auto_compact {
                     self.auto_compact = enabled;
                 }
-                // Don't re-name sessions that were already named (or have a preview we could use).
-                // We consider any loaded session as already handled.
+                // Don't re-name sessions that were already named (or have a preview we could
+                // use). We consider any loaded session as already handled.
                 self.session_named = true;
             }
             Err(e) => {
@@ -1031,8 +1046,9 @@ impl AgentSession {
         }
     }
 
-    /// Apply a saved compact threshold from the session DB (if any) to compaction_settings.
-    /// Returns the loaded percentage (0–100) if one was saved, so the caller can notify the UI.
+    /// Apply a saved compact threshold from the session DB (if any) to
+    /// compaction_settings. Returns the loaded percentage (0–100) if one
+    /// was saved, so the caller can notify the UI.
     fn apply_saved_compact_threshold(&mut self) -> Option<u8> {
         let pct = self.session_manager.get_compact_threshold()?;
         self.compaction_settings.threshold_pct = pct.clamp(0.01, 1.0);
@@ -1040,20 +1056,22 @@ impl AgentSession {
         Some((pct * 100.0).round() as u8)
     }
 
-    /// Check if a tool call with given arguments has been previously accepted in this session.
-    /// Args should be serialized to JSON for consistent hashing.
+    /// Check if a tool call with given arguments has been previously accepted
+    /// in this session. Args should be serialized to JSON for consistent
+    /// hashing.
     pub fn is_permission_cached(&self, tool: &str, args_json: &str) -> bool {
         let key = format!("{}:{}", tool, args_json);
         self.permission_cache.lock().unwrap().contains(&key)
     }
 
-    /// Record a permission accept in the session. Writes to DB and updates in-memory cache.
+    /// Record a permission accept in the session. Writes to DB and updates
+    /// in-memory cache.
     pub fn accept_permission(&mut self, tool: &str, args_json: &str) {
         let key = format!("{}:{}", tool, args_json);
         self.permission_cache.lock().unwrap().insert(key);
 
         // Write to session database
-        use crate::session::types::{gen_entry_id, now_iso, PermissionAcceptEntry, SessionEntry};
+        use crate::session::types::{PermissionAcceptEntry, SessionEntry, gen_entry_id, now_iso};
         let entry = PermissionAcceptEntry {
             id: gen_entry_id(),
             parent_id: self.session_manager.leaf_id().map(|s| s.to_string()),
@@ -1065,7 +1083,8 @@ impl AgentSession {
     }
 
     /// Load permission accepts from session history into the cache.
-    /// Called after session is loaded to populate the cache with all previously accepted permissions.
+    /// Called after session is loaded to populate the cache with all previously
+    /// accepted permissions.
     pub fn load_permission_cache(&mut self) {
         use crate::session::types::SessionEntry;
         let entries = self.session_manager.current_branch_entries();
@@ -1078,7 +1097,8 @@ impl AgentSession {
         }
     }
 
-    /// Disable automatic session naming (used in tests to prevent mock provider consumption).
+    /// Disable automatic session naming (used in tests to prevent mock provider
+    /// consumption).
     pub fn disable_session_naming(&mut self) {
         self.session_named = true;
     }
@@ -1117,7 +1137,8 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
 
                     // Register the provider (OAuth uses Bearer auth)
                     let nerv_config = super::config::NervConfig::load(nerv_dir);
-                    let extra_headers: Vec<(String, String)> = nerv_config.effective_headers("anthropic");
+                    let extra_headers: Vec<(String, String)> =
+                        nerv_config.effective_headers("anthropic");
                     let provider = std::sync::Arc::new(
                         crate::agent::AnthropicProvider::new_oauth(api_key)
                             .with_headers(extra_headers),
@@ -1153,13 +1174,8 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
 
                     // Show available models from this provider
                     let mut msg = String::from("Logged in to Anthropic.\n\nAvailable models:");
-                    let current_id = session
-                        .agent
-                        .state
-                        .model
-                        .as_ref()
-                        .map(|m| m.id.as_str())
-                        .unwrap_or("");
+                    let current_id =
+                        session.agent.state.model.as_ref().map(|m| m.id.as_str()).unwrap_or("");
                     for m in session.model_registry.all_models() {
                         if m.provider_name == "anthropic" {
                             let marker = if m.id == current_id { " *" } else { "" };
@@ -1167,10 +1183,8 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
                         }
                     }
                     msg.push_str("\n\n/model <name> — switch model (e.g. /model opus)");
-                    let _ = event_tx.send(AgentSessionEvent::Status {
-                        message: msg,
-                        is_error: false,
-                    });
+                    let _ =
+                        event_tx.send(AgentSessionEvent::Status { message: msg, is_error: false });
                 }
                 Err(e) => {
                     let _ = event_tx.send(AgentSessionEvent::Status {
@@ -1196,7 +1210,8 @@ fn last_assistant(messages: &[AgentMessage]) -> Option<&AssistantMessage> {
     })
 }
 
-/// The session task — runs in a dedicated thread, processes commands sequentially.
+/// The session task — runs in a dedicated thread, processes commands
+/// sequentially.
 pub fn session_task(
     cmd_rx: crossbeam_channel::Receiver<SessionCommand>,
     event_tx: Sender<AgentSessionEvent>,
@@ -1207,9 +1222,8 @@ pub fn session_task(
             SessionCommand::Prompt { text } => session.prompt(text, &event_tx),
             SessionCommand::Abort => session.abort(),
             SessionCommand::NewSession => {
-                let _ = session
-                    .session_manager
-                    .new_session(&session.cwd, session.worktree.as_deref());
+                let _ =
+                    session.session_manager.new_session(&session.cwd, session.worktree.as_deref());
                 session.agent.state.messages.clear();
                 session.session_cost = Cost::default();
                 session.session_named = false;
@@ -1244,30 +1258,26 @@ pub fn session_task(
             SessionCommand::SetPlanMode { enabled } => {
                 session.set_plan_mode(enabled, &event_tx);
             }
-            SessionCommand::ForkSession => {
-                match session.session_manager.fork_session() {
-                    Ok(new_id) => {
-                        let short = new_id
-                            .char_indices()
-                            .nth(8)
-                            .map_or(new_id.as_str(), |(i, _)| &new_id[..i]);
-                        let _ = event_tx.send(AgentSessionEvent::SessionStarted {
-                            id: new_id.clone(),
-                            name: session.session_manager.name(),
-                        });
-                        let _ = event_tx.send(AgentSessionEvent::Status {
-                            message: format!("Forked to new session {short}."),
-                            is_error: false,
-                        });
-                    }
-                    Err(e) => {
-                        let _ = event_tx.send(AgentSessionEvent::Status {
-                            message: format!("Fork failed: {e}"),
-                            is_error: true,
-                        });
-                    }
+            SessionCommand::ForkSession => match session.session_manager.fork_session() {
+                Ok(new_id) => {
+                    let short =
+                        new_id.char_indices().nth(8).map_or(new_id.as_str(), |(i, _)| &new_id[..i]);
+                    let _ = event_tx.send(AgentSessionEvent::SessionStarted {
+                        id: new_id.clone(),
+                        name: session.session_manager.name(),
+                    });
+                    let _ = event_tx.send(AgentSessionEvent::Status {
+                        message: format!("Forked to new session {short}."),
+                        is_error: false,
+                    });
                 }
-            }
+                Err(e) => {
+                    let _ = event_tx.send(AgentSessionEvent::Status {
+                        message: format!("Fork failed: {e}"),
+                        is_error: true,
+                    });
+                }
+            },
             SessionCommand::SaveInputHistory { history } => {
                 session.session_manager.save_input_history(&history);
             }
@@ -1293,9 +1303,7 @@ pub fn session_task(
                     is_error: false,
                 });
             }
-            SessionCommand::Compact {
-                custom_instructions,
-            } => {
+            SessionCommand::Compact { custom_instructions } => {
                 let _ = event_tx.send(AgentSessionEvent::AutoCompactionStart {
                     reason: CompactionReason::Manual,
                 });
@@ -1325,10 +1333,8 @@ pub fn session_task(
                             will_retry: false,
                             messages: vec![],
                         });
-                        let _ = event_tx.send(AgentSessionEvent::Status {
-                            message: e,
-                            is_error: true,
-                        });
+                        let _ =
+                            event_tx.send(AgentSessionEvent::Status { message: e, is_error: true });
                     }
                 }
             }
@@ -1376,12 +1382,7 @@ pub fn session_task(
                 auth.remove(&provider);
 
                 // Unregister the provider so available_models() stops showing it.
-                session
-                    .agent
-                    .provider_registry
-                    .write()
-                    .unwrap()
-                    .unregister(&provider);
+                session.agent.provider_registry.write().unwrap().unregister(&provider);
 
                 let _ = event_tx.send(AgentSessionEvent::Status {
                     message: format!("Logged out from {}.", provider),
@@ -1409,7 +1410,9 @@ pub fn session_task(
                     session.session_manager.reset_leaf();
                 } else if use_parent {
                     // Find the parent of entry_id and branch to it
-                    let parent = session.session_manager.entries()
+                    let parent = session
+                        .session_manager
+                        .entries()
                         .iter()
                         .find(|e| e.id() == entry_id)
                         .and_then(|e| e.parent_id())
@@ -1432,9 +1435,8 @@ pub fn session_task(
                 let input_history = ctx.input_history;
                 session.agent.state.messages = ctx.messages;
                 session.agent.state.thinking_level = ctx.thinking_level;
-                let _ = event_tx.send(AgentSessionEvent::ThinkingLevelChanged {
-                    level: ctx.thinking_level,
-                });
+                let _ = event_tx
+                    .send(AgentSessionEvent::ThinkingLevelChanged { level: ctx.thinking_level });
                 if let Some((provider, model_id)) = ctx.model {
                     session.set_model(&provider, &model_id, &event_tx);
                 }
@@ -1447,11 +1449,9 @@ pub fn session_task(
                     input_history,
                 });
             }
-            SessionCommand::CreateWorktree {
-                branch_name,
-                nerv_dir,
-            } => {
-                // Allow if no session, or session exists but has no entries yet (e.g. after /new)
+            SessionCommand::CreateWorktree { branch_name, nerv_dir } => {
+                // Allow if no session, or session exists but has no entries yet (e.g. after
+                // /new)
                 if session.session_manager.entry_count() > 0 {
                     let _ = event_tx.send(AgentSessionEvent::Status {
                         message: "/wt only works before the first prompt. Use /new first.".into(),
@@ -1471,23 +1471,15 @@ pub fn session_task(
                 };
                 // Generate session ID prefix for branch naming
                 let prefix = &crate::session::types::gen_session_id()[..8];
-                match crate::worktree::create_worktree(
-                    &repo_root,
-                    &nerv_dir,
-                    &branch_name,
-                    prefix,
-                ) {
+                match crate::worktree::create_worktree(&repo_root, &nerv_dir, &branch_name, prefix)
+                {
                     Ok(wt_path) => {
                         session.set_worktree(wt_path.clone());
                         // Update existing session's DB record if one was already created
                         if session.session_manager.has_session() {
-                            session
-                                .session_manager
-                                .update_worktree(&wt_path, &wt_path);
+                            session.session_manager.update_worktree(&wt_path, &wt_path);
                         }
-                        let _ = event_tx.send(AgentSessionEvent::WorktreeCreated {
-                            path: wt_path,
-                        });
+                        let _ = event_tx.send(AgentSessionEvent::WorktreeCreated { path: wt_path });
                     }
                     Err(e) => {
                         let _ = event_tx.send(AgentSessionEvent::Status {

@@ -1,7 +1,8 @@
+use std::sync::Arc;
+
 use nerv::agent::agent::{AgentTool, UpdateCallback};
 use nerv::agent::provider::{CancelFlag, new_cancel_flag};
 use nerv::tools::MemoryTool;
-use std::sync::Arc;
 use tempfile::TempDir;
 
 fn setup() -> (TempDir, MemoryTool) {

@@ -10,7 +10,8 @@ use crate::agent::{AnthropicProvider, OpenAICompatProvider};
 pub struct ModelRegistry {
     built_in: Vec<Model>,
     custom: Vec<Model>,
-    /// Shared with the Agent so login/logout are reflected immediately in available_models().
+    /// Shared with the Agent so login/logout are reflected immediately in
+    /// available_models().
     pub provider_registry: Arc<RwLock<ProviderRegistry>>,
 }
 
@@ -26,7 +27,8 @@ impl ModelRegistry {
     pub fn new(config: &NervConfig, auth: &mut AuthStorage, nerv_dir: &std::path::Path) -> Self {
         let mut registry = ProviderRegistry::new();
 
-        // Always include built-in models; available_models() filters by registered providers
+        // Always include built-in models; available_models() filters by registered
+        // providers
         let built_in = builtin_anthropic_models();
 
         // Register Anthropic provider if auth is available
@@ -55,10 +57,7 @@ impl ModelRegistry {
             for model_cfg in &provider_cfg.models {
                 custom.push(Model {
                     id: model_cfg.id.clone(),
-                    name: model_cfg
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| model_cfg.id.clone()),
+                    name: model_cfg.name.clone().unwrap_or_else(|| model_cfg.id.clone()),
                     provider_name: provider_cfg.name.clone(),
                     context_window: model_cfg.context_window.unwrap_or(128_000),
                     max_output_tokens: 32_000,
@@ -76,12 +75,12 @@ impl ModelRegistry {
         }
 
         // Register local GGUF models from ~/.nerv/models.json.
-        // Each model gets its own synthetic OpenAI-compat provider pointing at its port.
+        // Each model gets its own synthetic OpenAI-compat provider pointing at its
+        // port.
         for local in load_models(nerv_dir) {
             let provider_name = format!("local/{}", local.alias);
             let base_url = format!("http://127.0.0.1:{}/v1", local.port);
-            let provider =
-                OpenAICompatProvider::new(provider_name.clone(), base_url, None);
+            let provider = OpenAICompatProvider::new(provider_name.clone(), base_url, None);
             registry.register(&provider_name, Arc::new(provider));
             custom.push(Model {
                 id: local.alias.clone(),
@@ -96,11 +95,7 @@ impl ModelRegistry {
             });
         }
 
-        Self {
-            built_in,
-            custom,
-            provider_registry: Arc::new(RwLock::new(registry)),
-        }
+        Self { built_in, custom, provider_registry: Arc::new(RwLock::new(registry)) }
     }
 
     pub fn all_models(&self) -> Vec<&Model> {
@@ -109,19 +104,15 @@ impl ModelRegistry {
 
     pub fn available_models(&self) -> Vec<&Model> {
         let reg = self.provider_registry.read().unwrap();
-        self.all_models()
-            .into_iter()
-            .filter(|m| reg.get(&m.provider_name).is_some())
-            .collect()
+        self.all_models().into_iter().filter(|m| reg.get(&m.provider_name).is_some()).collect()
     }
 
     pub fn get_model(&self, provider: &str, id: &str) -> Option<&Model> {
-        self.all_models()
-            .into_iter()
-            .find(|m| m.provider_name == provider && m.id == id)
+        self.all_models().into_iter().find(|m| m.provider_name == provider && m.id == id)
     }
 
-    /// Find a model by partial/fuzzy match. Checks id, name, and common aliases.
+    /// Find a model by partial/fuzzy match. Checks id, name, and common
+    /// aliases.
     pub fn find_model(&self, query: &str) -> Option<&Model> {
         let q = query.to_lowercase();
         let models = self.all_models();
@@ -161,18 +152,12 @@ impl ModelRegistry {
     ) -> anyhow::Result<()> {
         let provider =
             OpenAICompatProvider::new(cfg.name.clone(), cfg.base_url.clone(), cfg.api_key.clone());
-        self.provider_registry
-            .write()
-            .unwrap()
-            .register(&cfg.name, Arc::new(provider));
+        self.provider_registry.write().unwrap().register(&cfg.name, Arc::new(provider));
 
         for model_cfg in &cfg.models {
             self.custom.push(Model {
                 id: model_cfg.id.clone(),
-                name: model_cfg
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| model_cfg.id.clone()),
+                name: model_cfg.name.clone().unwrap_or_else(|| model_cfg.id.clone()),
                 provider_name: cfg.name.clone(),
                 context_window: model_cfg.context_window.unwrap_or(128_000),
                 max_output_tokens: 32_000,
@@ -219,12 +204,7 @@ fn builtin_anthropic_models() -> Vec<Model> {
             reasoning: true,
             supports_adaptive_thinking: true,
             supports_xhigh: false,
-            pricing: ModelPricing {
-                input: 3.0,
-                output: 15.0,
-                cache_read: 0.3,
-                cache_write: 3.75,
-            },
+            pricing: ModelPricing { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 },
         },
         Model {
             id: "claude-haiku-4-5".into(),
@@ -235,23 +215,13 @@ fn builtin_anthropic_models() -> Vec<Model> {
             reasoning: false,
             supports_adaptive_thinking: false,
             supports_xhigh: false,
-            pricing: ModelPricing {
-                input: 0.80,
-                output: 4.0,
-                cache_read: 0.08,
-                cache_write: 1.0,
-            },
+            pricing: ModelPricing { input: 0.80, output: 4.0, cache_read: 0.08, cache_write: 1.0 },
         },
     ]
 }
 
 impl ModelPricing {
     fn default_custom() -> Self {
-        Self {
-            input: 0.0,
-            output: 0.0,
-            cache_read: 0.0,
-            cache_write: 0.0,
-        }
+        Self { input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0 }
     }
 }

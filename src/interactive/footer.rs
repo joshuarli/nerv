@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::agent::types::*;
 use crate::interactive::theme;
@@ -40,18 +40,15 @@ pub(crate) fn sample_rss_kb() -> u64 {
             #[allow(deprecated)]
             let task = libc::mach_task_self();
             let mut info: MachTaskBasicInfo = mem::zeroed();
-            let mut count = (mem::size_of::<MachTaskBasicInfo>() / mem::size_of::<integer_t>()) as natural_t;
+            let mut count =
+                (mem::size_of::<MachTaskBasicInfo>() / mem::size_of::<integer_t>()) as natural_t;
             let kr = task_info(
                 task,
                 MACH_TASK_BASIC_INFO,
                 &mut info as *mut MachTaskBasicInfo as *mut integer_t,
                 &mut count,
             );
-            if kr == 0 {
-                info.resident_size / 1024
-            } else {
-                0
-            }
+            if kr == 0 { info.resident_size / 1024 } else { 0 }
         }
     }
 
@@ -61,9 +58,8 @@ pub(crate) fn sample_rss_kb() -> u64 {
         if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
             for line in s.lines() {
                 if let Some(rest) = line.strip_prefix("VmRSS:") {
-                    let kb: u64 = rest.split_whitespace().next()
-                        .and_then(|n| n.parse().ok())
-                        .unwrap_or(0);
+                    let kb: u64 =
+                        rest.split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(0);
                     return kb;
                 }
             }
@@ -77,8 +73,8 @@ pub(crate) fn sample_rss_kb() -> u64 {
     }
 }
 
-/// Sample total CPU time consumed by this process (user + system) in microseconds.
-/// Returns 0 on unsupported platforms or failure.
+/// Sample total CPU time consumed by this process (user + system) in
+/// microseconds. Returns 0 on unsupported platforms or failure.
 pub(crate) fn sample_cpu_time_us() -> u64 {
     #[cfg(target_os = "macos")]
     {
@@ -112,7 +108,8 @@ pub(crate) fn sample_cpu_time_us() -> u64 {
             #[allow(deprecated)]
             let task = libc::mach_task_self();
             let mut info: MachTaskBasicInfo = mem::zeroed();
-            let mut count = (mem::size_of::<MachTaskBasicInfo>() / mem::size_of::<integer_t>()) as natural_t;
+            let mut count =
+                (mem::size_of::<MachTaskBasicInfo>() / mem::size_of::<integer_t>()) as natural_t;
             let kr = task_info(
                 task,
                 MACH_TASK_BASIC_INFO,
@@ -121,7 +118,7 @@ pub(crate) fn sample_cpu_time_us() -> u64 {
             );
             if kr == 0 {
                 let user_us = info.user_time[0] as u64 * 1_000_000 + info.user_time[1] as u64;
-                let sys_us  = info.system_time[0] as u64 * 1_000_000 + info.system_time[1] as u64;
+                let sys_us = info.system_time[0] as u64 * 1_000_000 + info.system_time[1] as u64;
                 user_us + sys_us
             } else {
                 0
@@ -171,9 +168,11 @@ pub struct FooterComponent {
     plan_mode: bool,
     /// Auto-compact threshold (0–100). Default 50.
     compact_threshold_pct: u8,
-    /// When true, the hexagon bar animates as a loading sweep instead of showing fill.
+    /// When true, the hexagon bar animates as a loading sweep instead of
+    /// showing fill.
     compacting: bool,
-    /// Animation frame counter for the compaction sweep (incremented on each tick).
+    /// Animation frame counter for the compaction sweep (incremented on each
+    /// tick).
     compact_tick: u8,
     /// Total input/output tokens sent across all API calls in this session.
     total_input: u64,
@@ -185,14 +184,16 @@ pub struct FooterComponent {
     api_calls: u32,
     /// nervHud: whether the HUD line is currently shown.
     hud_enabled: bool,
-    /// nervHud: stop flag shared with background poller threads; set to `true` to kill them.
+    /// nervHud: stop flag shared with background poller threads; set to `true`
+    /// to kill them.
     stop_hud: Arc<AtomicBool>,
     /// nervHud: current process RSS in KiB, written by a background thread.
     rss_kb: Arc<AtomicU64>,
-    /// nervHud: recent %CPU (f32 bits stored in u32), written by background thread.
+    /// nervHud: recent %CPU (f32 bits stored in u32), written by background
+    /// thread.
     cpu_pct: Arc<AtomicU32>,
-    /// Cached line count from the last render() call — used by AppLayout to compute
-    /// the fixed bottom line count without re-rendering.
+    /// Cached line count from the last render() call — used by AppLayout to
+    /// compute the fixed bottom line count without re-rendering.
     cached_line_count: std::cell::Cell<usize>,
 }
 
@@ -268,8 +269,8 @@ impl FooterComponent {
         self.cached_line_count.get()
     }
 
-    /// Toggle the nervHud line on or off. Starts/stops background poller threads.
-    /// Returns the new enabled state.
+    /// Toggle the nervHud line on or off. Starts/stops background poller
+    /// threads. Returns the new enabled state.
     pub fn toggle_hud(&mut self) -> bool {
         if self.hud_enabled {
             // Signal the existing threads to exit.
@@ -291,10 +292,14 @@ impl FooterComponent {
         let stop = self.stop_hud.clone();
         std::thread::Builder::new()
             .name("nerv-hud".into())
-            .spawn(move || loop {
-                if stop.load(Ordering::Relaxed) { break; }
-                rss_cell.store(sample_rss_kb(), Ordering::Relaxed);
-                std::thread::sleep(std::time::Duration::from_millis(500));
+            .spawn(move || {
+                loop {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    rss_cell.store(sample_rss_kb(), Ordering::Relaxed);
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
             })
             .ok();
 
@@ -308,14 +313,16 @@ impl FooterComponent {
                 let mut prev_wall = std::time::Instant::now();
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(500));
-                    if stop.load(Ordering::Relaxed) { break; }
-                    let cur_us   = sample_cpu_time_us();
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let cur_us = sample_cpu_time_us();
                     let cur_wall = std::time::Instant::now();
-                    let cpu_delta  = cur_us.saturating_sub(prev_us) as f64;
+                    let cpu_delta = cur_us.saturating_sub(prev_us) as f64;
                     let wall_delta = cur_wall.duration_since(prev_wall).as_micros() as f64;
                     let pct = if wall_delta > 0.0 { (cpu_delta / wall_delta) * 100.0 } else { 0.0 };
                     cpu_cell.store((pct as f32).to_bits(), Ordering::Relaxed);
-                    prev_us   = cur_us;
+                    prev_us = cur_us;
                     prev_wall = cur_wall;
                 }
             })
@@ -361,7 +368,8 @@ impl FooterComponent {
         }
     }
 
-    /// Advance the compaction animation frame. Called every ~100ms from the main tick.
+    /// Advance the compaction animation frame. Called every ~100ms from the
+    /// main tick.
     pub fn tick(&mut self) {
         if self.compacting {
             self.compact_tick = self.compact_tick.wrapping_add(1);
@@ -413,8 +421,9 @@ impl FooterComponent {
         self.api_calls += 1;
     }
 
-    /// Restore all accumulated session stats (cost + token counts + API call count)
-    /// after a reset_context() call — used on SessionLoaded and post-compaction.
+    /// Restore all accumulated session stats (cost + token counts + API call
+    /// count) after a reset_context() call — used on SessionLoaded and
+    /// post-compaction.
     pub fn restore_stats(
         &mut self,
         cost_usd: f64,
@@ -429,14 +438,10 @@ impl FooterComponent {
         self.api_calls = api_calls;
     }
 
-    /// Snapshot all accumulated stats for preservation across a reset_context() call.
+    /// Snapshot all accumulated stats for preservation across a reset_context()
+    /// call.
     pub fn snapshot_stats(&self) -> (f64, u64, u64, u32) {
-        (
-            self.cost_input + self.cost_output,
-            self.total_input,
-            self.total_output,
-            self.api_calls,
-        )
+        (self.cost_input + self.cost_output, self.total_input, self.total_output, self.api_calls)
     }
 
     pub fn add_cost(&mut self, usage: &Usage, pricing: &ModelPricing) {
@@ -474,7 +479,8 @@ impl Component for FooterComponent {
             String::new()
         };
 
-        // Show thinking on/off, and effort level if set (effort shown regardless of thinking state).
+        // Show thinking on/off, and effort level if set (effort shown regardless of
+        // thinking state).
         let effort_suffix = if let Some(effort) = self.effort_level {
             let name = match effort {
                 EffortLevel::Low => "low",
@@ -569,10 +575,7 @@ impl Component for FooterComponent {
         let line2_lines = right_align(&session_label, &model, w);
 
         // Line 4 (below hex bar): token counter (left) + cost / api_info (right)
-        let compact_tag = format!(
-            " {}(compact @ {}%){}",
-            dim, self.compact_threshold_pct, r,
-        );
+        let compact_tag = format!(" {}(compact @ {}%){}", dim, self.compact_threshold_pct, r,);
         let counter = format!(
             "{}{}/{}{}{}",
             ctx_color,
@@ -584,10 +587,20 @@ impl Component for FooterComponent {
         let cache_stats = {
             let mut parts = String::new();
             if self.total_cache_read > 0 {
-                parts.push_str(&format!(" {}Rc{}{}", dim, fmt_tokens_u64(self.total_cache_read), r));
+                parts.push_str(&format!(
+                    " {}Rc{}{}",
+                    dim,
+                    fmt_tokens_u64(self.total_cache_read),
+                    r
+                ));
             }
             if self.total_cache_write > 0 {
-                parts.push_str(&format!(" {}Wc{}{}", dim, fmt_tokens_u64(self.total_cache_write), r));
+                parts.push_str(&format!(
+                    " {}Wc{}{}",
+                    dim,
+                    fmt_tokens_u64(self.total_cache_write),
+                    r
+                ));
             }
             parts
         };
@@ -629,11 +642,8 @@ impl Component for FooterComponent {
         };
 
         // Line 5: centered cost + api call breakdown (always shown)
-        let cost_line = if cost.is_empty() {
-            api_info.clone()
-        } else {
-            format!("{} {}", cost, api_info)
-        };
+        let cost_line =
+            if cost.is_empty() { api_info.clone() } else { format!("{} {}", cost, api_info) };
         let line5_lines = if visible_width(&cost_line) as usize <= w {
             let pad = w.saturating_sub(visible_width(&cost_line) as usize) / 2;
             vec![format!("{}{}", " ".repeat(pad), cost_line)]
@@ -658,13 +668,8 @@ impl Component for FooterComponent {
                 format!("{} KB", rss)
             };
             let cpu = f32::from_bits(self.cpu_pct.load(Ordering::Relaxed));
-            let hud_line = format!(
-                "{}nervHud  rss {}  cpu {:.1}%{}",
-                theme::HUD_PINK,
-                rss_str,
-                cpu,
-                r,
-            );
+            let hud_line =
+                format!("{}nervHud  rss {}  cpu {:.1}%{}", theme::HUD_PINK, rss_str, cpu, r,);
             lines.extend(wrap_text_with_ansi(&hud_line, width));
         }
 

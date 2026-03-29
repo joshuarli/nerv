@@ -1,6 +1,8 @@
-use crate::agent::types::EffortLevel;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
+use crate::agent::types::EffortLevel;
 /// Parse JSONC (JSON with `//` line comments). Strips comments before parsing.
 pub fn read_jsonc<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     let text = std::fs::read_to_string(path).ok()?;
@@ -19,11 +21,13 @@ pub struct NervConfig {
     /// Accepts any model id recognised by the model registry (fuzzy match).
     /// Defaults to "claude-haiku-4-5" on the anthropic provider when unset.
     pub compaction_model: Option<String>,
-    /// Extra HTTP headers per provider, e.g. {"anthropic": {"user-agent": "claude-cli/1.0.0"}}
+    /// Extra HTTP headers per provider, e.g. {"anthropic": {"user-agent":
+    /// "claude-cli/1.0.0"}}
     #[serde(default)]
     pub headers: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
     /// Notification hooks fired on specific events.
-    /// Matchers: "onPermissionDenied", "onCompactionDone", "onResponseComplete".
+    /// Matchers: "onPermissionDenied", "onCompactionDone",
+    /// "onResponseComplete".
     #[serde(default)]
     pub notifications: Vec<super::notifications::NotificationRule>,
 }
@@ -45,9 +49,11 @@ pub struct CustomModelConfig {
 }
 
 /// Built-in default headers for each provider, applied before user overrides.
-fn builtin_default_headers() -> std::collections::HashMap<String, std::collections::HashMap<String, String>> {
+fn builtin_default_headers()
+-> std::collections::HashMap<String, std::collections::HashMap<String, String>> {
     let mut anthropic = std::collections::HashMap::new();
-    anthropic.insert("anthropic-beta".to_string(), "claude-code-20250219,oauth-2025-04-20".to_string());
+    anthropic
+        .insert("anthropic-beta".to_string(), "claude-code-20250219,oauth-2025-04-20".to_string());
     anthropic.insert("user-agent".to_string(), "claude-cli/1.0.0".to_string());
     anthropic.insert("x-app".to_string(), "cli".to_string());
     let mut map = std::collections::HashMap::new();
@@ -71,13 +77,12 @@ impl Default for NervConfig {
 }
 
 impl NervConfig {
-    /// Returns effective headers for a provider: built-in defaults overridden by user config.
+    /// Returns effective headers for a provider: built-in defaults overridden
+    /// by user config.
     pub fn effective_headers(&self, provider: &str) -> Vec<(String, String)> {
         let defaults = builtin_default_headers();
-        let mut merged: std::collections::HashMap<String, String> = defaults
-            .get(provider)
-            .cloned()
-            .unwrap_or_default();
+        let mut merged: std::collections::HashMap<String, String> =
+            defaults.get(provider).cloned().unwrap_or_default();
         if let Some(user) = self.headers.get(provider) {
             merged.extend(user.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
@@ -102,13 +107,10 @@ impl NervConfig {
         // absent from the file, then re-save so the file is always complete.
         let existing: Self = read_jsonc(&path).unwrap_or_default();
 
-        if let (Ok(mut merged), Ok(user)) = (
-            serde_json::to_value(Self::default()),
-            serde_json::to_value(&existing),
-        ) {
-            if let (Some(merged_obj), Some(user_obj)) =
-                (merged.as_object_mut(), user.as_object())
-            {
+        if let (Ok(mut merged), Ok(user)) =
+            (serde_json::to_value(Self::default()), serde_json::to_value(&existing))
+        {
+            if let (Some(merged_obj), Some(user_obj)) = (merged.as_object_mut(), user.as_object()) {
                 // Overwrite each default key with the user's value.
                 for (k, v) in user_obj {
                     merged_obj.insert(k.clone(), v.clone());
@@ -132,15 +134,13 @@ impl NervConfig {
     }
 
     /// Return a list of human-readable warnings for model fields that reference
-    /// a model id not present in the registry. Call after building the registry.
+    /// a model id not present in the registry. Call after building the
+    /// registry.
     pub fn validate_model_ids(&self, known_ids: &[&str]) -> Vec<String> {
         let mut warnings = Vec::new();
         let check = |field: &str, id: &str| -> Option<String> {
             if !known_ids.iter().any(|k| k.contains(id) || id.contains(k) || *k == id) {
-                Some(format!(
-                    "config: {} = {:?} does not match any known model id",
-                    field, id
-                ))
+                Some(format!("config: {} = {:?} does not match any known model id", field, id))
             } else {
                 None
             }

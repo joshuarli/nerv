@@ -5,22 +5,27 @@ use crate::session::types::SessionEntry;
 
 pub struct CompactionSettings {
     pub enabled: bool,
-    /// Fraction of the model's context window at which auto-compact triggers (0.0–1.0).
+    /// Fraction of the model's context window at which auto-compact triggers
+    /// (0.0–1.0).
     pub threshold_pct: f64,
-    /// Total token budget for the post-compaction context (summary + verbatim window).
+    /// Total token budget for the post-compaction context (summary + verbatim
+    /// window).
     pub keep_recent_tokens: usize,
-    /// How many tokens of the kept window to preserve verbatim rather than summarize.
+    /// How many tokens of the kept window to preserve verbatim rather than
+    /// summarize.
     ///
-    /// When compaction fires, the kept window (newest `keep_recent_tokens` of history)
-    /// is split into two parts:
-    ///   - oldest part  → passed to the summarizer, replaced by a compact summary
+    /// When compaction fires, the kept window (newest `keep_recent_tokens` of
+    /// history) is split into two parts:
+    ///   - oldest part  → passed to the summarizer, replaced by a compact
+    ///     summary
     ///   - newest part  → kept verbatim in the DB (this is the verbatim window)
     ///
-    /// The verbatim window saves summarizer cost (fewer tokens sent to Haiku) and
-    /// accelerates cache recovery: the first post-compaction API call is cache-cold
-    /// regardless, but the cache breakpoint on the summary (bp3) means the summary is
-    /// Rc from the second call onward. The verbatim messages, being byte-identical to
-    /// what was sent pre-compaction, form a stable suffix that helps the prefix match
+    /// The verbatim window saves summarizer cost (fewer tokens sent to Haiku)
+    /// and accelerates cache recovery: the first post-compaction API call
+    /// is cache-cold regardless, but the cache breakpoint on the summary
+    /// (bp3) means the summary is Rc from the second call onward. The
+    /// verbatim messages, being byte-identical to what was sent
+    /// pre-compaction, form a stable suffix that helps the prefix match
     /// on subsequent calls. Set to 0 to summarize the entire kept range.
     pub verbatim_window_tokens: usize,
 }
@@ -37,7 +42,8 @@ impl Default for CompactionSettings {
 }
 
 /// Estimate token count using the chars/4 heuristic.
-/// Approximate but fast — the authoritative count always comes from the API usage response.
+/// Approximate but fast — the authoritative count always comes from the API
+/// usage response.
 pub fn count_tokens(text: &str) -> usize {
     (text.chars().count() + 3) / 4
 }
@@ -54,9 +60,7 @@ pub fn estimate_tokens(msg: &AgentMessage) -> usize {
                 match block {
                     ContentBlock::Text { text } => tokens += count_tokens(text),
                     ContentBlock::Thinking { thinking } => tokens += count_tokens(thinking),
-                    ContentBlock::ToolCall {
-                        name, arguments, ..
-                    } => {
+                    ContentBlock::ToolCall { name, arguments, .. } => {
                         tokens += count_tokens(name) + count_tokens(&arguments.to_string()) + 10;
                     }
                 }
@@ -65,9 +69,9 @@ pub fn estimate_tokens(msg: &AgentMessage) -> usize {
         }
         AgentMessage::ToolResult { content, .. } => content_tokens(content) + 4,
         AgentMessage::Custom { content, .. } => content_tokens(content) + 4,
-        AgentMessage::BashExecution {
-            command, output, ..
-        } => count_tokens(command) + count_tokens(output) + 4,
+        AgentMessage::BashExecution { command, output, .. } => {
+            count_tokens(command) + count_tokens(output) + 4
+        }
         AgentMessage::CompactionSummary { summary, .. } => count_tokens(summary) + 4,
         AgentMessage::BranchSummary { summary, .. } => count_tokens(summary) + 4,
     }
@@ -112,13 +116,15 @@ pub struct CompactionResult {
 /// [verbatim_start_index .. end)         → kept verbatim (cache-warm after compaction)
 /// ```
 ///
-/// When `verbatim_window_tokens == 0`, `verbatim_start_index == first_kept_entry_index`
-/// and the entire kept range is summarized (no verbatim window).
+/// When `verbatim_window_tokens == 0`, `verbatim_start_index ==
+/// first_kept_entry_index` and the entire kept range is summarized (no verbatim
+/// window).
 pub struct CutPointResult {
     /// First entry index to keep in the DB (deletion boundary).
     pub first_kept_entry_index: usize,
-    /// First entry of the verbatim window. Everything between here and `end` is left
-    /// byte-for-byte in the DB so it remains a cache-read hit post-compaction.
+    /// First entry of the verbatim window. Everything between here and `end` is
+    /// left byte-for-byte in the DB so it remains a cache-read hit
+    /// post-compaction.
     pub verbatim_start_index: usize,
     /// Index of user message that starts the turn being split, or None.
     pub turn_start_index: Option<usize>,
@@ -158,17 +164,11 @@ fn find_valid_cut_points(entries: &[SessionEntry], start: usize, end: usize) -> 
 fn find_turn_start(entries: &[SessionEntry], entry_index: usize, start: usize) -> Option<usize> {
     for i in (start..=entry_index).rev() {
         if let SessionEntry::Message(me) = &entries[i]
-            && matches!(
-                me.message,
-                AgentMessage::User { .. } | AgentMessage::BashExecution { .. }
-            )
+            && matches!(me.message, AgentMessage::User { .. } | AgentMessage::BashExecution { .. })
         {
             return Some(i);
         }
-        if matches!(
-            entries[i],
-            SessionEntry::BranchSummary(_) | SessionEntry::CustomMessage(_)
-        ) {
+        if matches!(entries[i], SessionEntry::BranchSummary(_) | SessionEntry::CustomMessage(_)) {
             return Some(i);
         }
     }
@@ -245,41 +245,41 @@ pub fn find_cut_point(
         &entries[cut_index],
         SessionEntry::Message(me) if matches!(me.message, AgentMessage::User { .. })
     );
-    let turn_start = if is_user_message {
-        None
-    } else {
-        find_turn_start(entries, cut_index, start)
-    };
+    let turn_start =
+        if is_user_message { None } else { find_turn_start(entries, cut_index, start) };
 
     // Find the verbatim_start_index: the boundary within the kept window between
     // "summarize this" and "keep this verbatim". Walk backwards from the end of the
-    // kept window, accumulating token counts, until we've claimed verbatim_window_tokens
-    // worth of entries. Everything older than that boundary is handed to the summarizer.
+    // kept window, accumulating token counts, until we've claimed
+    // verbatim_window_tokens worth of entries. Everything older than that
+    // boundary is handed to the summarizer.
     //
-    // Why: the entries in the verbatim window were cache-read (Rc) hits in the requests
-    // that preceded compaction. Keeping them byte-identical in the DB means they stay Rc
-    // on the first post-compaction API call. Only the new summary prefix is cache-cold.
-    let verbatim_start_index = if verbatim_window_tokens == 0 || verbatim_window_tokens >= keep_recent_tokens {
-        // No verbatim window — summarize the entire kept range.
-        cut_index
-    } else {
-        let mut verbatim_accum = 0usize;
-        let mut vs_idx = end; // fallback: keep everything verbatim
-        for i in (cut_index..end).rev() {
-            let Some(msg) = entry_message(&entries[i]) else {
-                continue;
-            };
-            verbatim_accum += estimate_tokens(msg);
-            if verbatim_accum >= verbatim_window_tokens {
-                // Find the nearest valid cut point at or after i
-                let vcp = cut_points.iter().find(|&&cp| cp >= i).copied().unwrap_or(cut_index);
-                vs_idx = vcp;
-                break;
+    // Why: the entries in the verbatim window were cache-read (Rc) hits in the
+    // requests that preceded compaction. Keeping them byte-identical in the DB
+    // means they stay Rc on the first post-compaction API call. Only the new
+    // summary prefix is cache-cold.
+    let verbatim_start_index =
+        if verbatim_window_tokens == 0 || verbatim_window_tokens >= keep_recent_tokens {
+            // No verbatim window — summarize the entire kept range.
+            cut_index
+        } else {
+            let mut verbatim_accum = 0usize;
+            let mut vs_idx = end; // fallback: keep everything verbatim
+            for i in (cut_index..end).rev() {
+                let Some(msg) = entry_message(&entries[i]) else {
+                    continue;
+                };
+                verbatim_accum += estimate_tokens(msg);
+                if verbatim_accum >= verbatim_window_tokens {
+                    // Find the nearest valid cut point at or after i
+                    let vcp = cut_points.iter().find(|&&cp| cp >= i).copied().unwrap_or(cut_index);
+                    vs_idx = vcp;
+                    break;
+                }
             }
-        }
-        // Clamp: verbatim_start must be >= first_kept_entry_index
-        vs_idx.max(cut_index)
-    };
+            // Clamp: verbatim_start must be >= first_kept_entry_index
+            vs_idx.max(cut_index)
+        };
 
     CutPointResult {
         first_kept_entry_index: cut_index,

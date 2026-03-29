@@ -15,9 +15,7 @@ impl Default for FileMutationQueue {
 
 impl FileMutationQueue {
     pub fn new() -> Self {
-        Self {
-            locks: Mutex::new(HashMap::new()),
-        }
+        Self { locks: Mutex::new(HashMap::new()) }
     }
 
     /// Execute `f` while holding the per-file lock.
@@ -27,10 +25,7 @@ impl FileMutationQueue {
     {
         let lock = {
             let mut locks = self.locks.lock().unwrap();
-            locks
-                .entry(path.to_path_buf())
-                .or_insert_with(|| Arc::new(Mutex::new(())))
-                .clone()
+            locks.entry(path.to_path_buf()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
         };
         let _guard = lock.lock().unwrap();
         f()

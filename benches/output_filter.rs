@@ -4,17 +4,19 @@
 ///   cargo bench --bench output_filter
 ///
 /// The benchmarks cover:
-///   - `strip_ansi`    — fast path (clean input, Borrowed) vs slow path (ANSI codes)
-///   - `dedup_lines`   — fast path (no dedup needed, Borrowed) vs slow path (run present)
+///   - `strip_ansi`    — fast path (clean input, Borrowed) vs slow path (ANSI
+///     codes)
+///   - `dedup_lines`   — fast path (no dedup needed, Borrowed) vs slow path
+///     (run present)
 ///   - `filter_bash_output` — end-to-end pipeline for each language filter
 ///
 /// The corpus strings are representative of real-world outputs: sizes and
 /// content patterns match what agents typically produce.
-
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use nerv::tools::output_filter::{ansi, dedup, filter_bash_output};
 
-// ── corpus helpers ────────────────────────────────────────────────────────────
+// ── corpus helpers
+// ────────────────────────────────────────────────────────────
 
 fn cargo_build_success() -> &'static str {
     "   Compiling serde v1.0.0\n   Compiling serde_derive v1.0.0\n   Compiling nerv v0.1.6\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.21s\n"

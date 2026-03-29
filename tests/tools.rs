@@ -28,7 +28,8 @@ fn read_tool_returns_numbered_lines() {
     std::fs::write(&file, "line1\nline2\nline3\n").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"path": "test.txt"}), noop_update(), &noop_cancel());
+    let result =
+        tool.execute(serde_json::json!({"path": "test.txt"}), noop_update(), &noop_cancel());
 
     assert!(!result.is_error);
     assert!(result.content.contains("line1"));
@@ -61,15 +62,15 @@ fn read_tool_offset_and_limit() {
 fn read_tool_nonexistent_file() {
     let tmp = TempDir::new().unwrap();
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(
-        serde_json::json!({"path": "nonexistent.txt"}),
-        noop_update(),
-        &noop_cancel(),
-    );
+    let result =
+        tool.execute(serde_json::json!({"path": "nonexistent.txt"}), noop_update(), &noop_cancel());
 
     assert!(result.is_error);
-    assert!(result.content.contains("not found") || result.content.contains("Error"),
-        "expected error message, got: {}", result.content);
+    assert!(
+        result.content.contains("not found") || result.content.contains("Error"),
+        "expected error message, got: {}",
+        result.content
+    );
 }
 
 #[test]
@@ -408,11 +409,8 @@ fn edit_multi_adjacent_edits() {
 fn edit_multi_multiline_replacements() {
     let tmp = TempDir::new().unwrap();
     let file = tmp.path().join("test.rs");
-    std::fs::write(
-        &file,
-        "fn foo() {\n    old_body_1();\n}\n\nfn bar() {\n    old_body_2();\n}\n",
-    )
-    .unwrap();
+    std::fs::write(&file, "fn foo() {\n    old_body_1();\n}\n\nfn bar() {\n    old_body_2();\n}\n")
+        .unwrap();
 
     let mq = Arc::new(FileMutationQueue::new());
     let tool = EditTool::new(tmp.path().to_path_buf(), mq);
@@ -628,7 +626,8 @@ fn edit_multi_deletion_and_insertion() {
 fn bash_tool_runs_command() {
     let tmp = TempDir::new().unwrap();
     let tool = BashTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"command": "echo hello"}), noop_update(), &noop_cancel());
+    let result =
+        tool.execute(serde_json::json!({"command": "echo hello"}), noop_update(), &noop_cancel());
 
     assert!(!result.is_error, "bash failed: {}", result.content);
     assert!(result.content.contains("hello"));
@@ -638,7 +637,8 @@ fn bash_tool_runs_command() {
 fn bash_tool_reports_nonzero_exit() {
     let tmp = TempDir::new().unwrap();
     let tool = BashTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"command": "exit 42"}), noop_update(), &noop_cancel());
+    let result =
+        tool.execute(serde_json::json!({"command": "exit 42"}), noop_update(), &noop_cancel());
 
     assert!(result.is_error);
     assert!(result.content.contains("42"));
@@ -960,7 +960,8 @@ fn read_empty_file() {
     std::fs::write(tmp.path().join("empty.txt"), "").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"path": "empty.txt"}), noop_update(), &noop_cancel());
+    let result =
+        tool.execute(serde_json::json!({"path": "empty.txt"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.is_empty() || result.content.trim().is_empty());
 }
@@ -981,7 +982,8 @@ fn read_unicode() {
     std::fs::write(tmp.path().join("uni.txt"), "héllo 世界\nñ\n").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"path": "uni.txt"}), noop_update(), &noop_cancel());
+    let result =
+        tool.execute(serde_json::json!({"path": "uni.txt"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("héllo"));
     assert!(result.content.contains("世界"));
@@ -1026,7 +1028,8 @@ fn read_output_token_efficiency() {
     std::fs::write(tmp.path().join("code.rs"), lines.join("\n")).unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"path": "code.rs"}), noop_update(), &noop_cancel());
+    let result =
+        tool.execute(serde_json::json!({"path": "code.rs"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
 
     let tokens = approx_tokens(&result);
@@ -1035,7 +1038,8 @@ fn read_output_token_efficiency() {
     assert!(
         tokens < source_tokens * 2,
         "read output too bloated: {} tokens for {} source tokens",
-        tokens, source_tokens,
+        tokens,
+        source_tokens,
     );
 }
 
@@ -1096,10 +1100,7 @@ fn write_deeply_nested_path() {
         &noop_cancel(),
     );
     assert!(!result.is_error);
-    assert_eq!(
-        std::fs::read_to_string(tmp.path().join("a/b/c/d/e.txt")).unwrap(),
-        "deep"
-    );
+    assert_eq!(std::fs::read_to_string(tmp.path().join("a/b/c/d/e.txt")).unwrap(), "deep");
 }
 
 #[test]
@@ -1191,7 +1192,8 @@ fn diff_output_is_compact() {
     assert!(
         diff_lines < 15,
         "diff too verbose for single-line change: {} lines\n{}",
-        diff_lines, diff,
+        diff_lines,
+        diff,
     );
 }
 
@@ -1224,11 +1226,13 @@ fn edit_single_output_token_efficiency() {
     assert!(!result.is_error, "{}", result.content);
 
     let tokens = approx_tokens(&result);
-    // A single-line edit in a 200-line file: header + compact diff with 3 lines context
+    // A single-line edit in a 200-line file: header + compact diff with 3 lines
+    // context
     assert!(
         tokens < 80,
         "edit output too bloated for single-line change: {} tokens\n{}",
-        tokens, result.content,
+        tokens,
+        result.content,
     );
 }
 
@@ -1255,22 +1259,13 @@ fn edit_multi_output_token_efficiency() {
 
     let tokens = approx_tokens(&result);
     // Two small edits far apart — should produce 2 hunks, <120 tokens
-    assert!(
-        tokens < 120,
-        "multi-edit output too bloated: {} tokens\n{}",
-        tokens, result.content,
-    );
+    assert!(tokens < 120, "multi-edit output too bloated: {} tokens\n{}", tokens, result.content,);
 }
-
 
 #[test]
 fn edit_content_includes_diff() {
     let tmp = TempDir::new().unwrap();
-    std::fs::write(
-        tmp.path().join("test.rs"),
-        "fn main() {\n    println!(\"old\");\n}\n",
-    )
-    .unwrap();
+    std::fs::write(tmp.path().join("test.rs"), "fn main() {\n    println!(\"old\");\n}\n").unwrap();
 
     let mq = Arc::new(FileMutationQueue::new());
     let tool = EditTool::new(tmp.path().to_path_buf(), mq);
@@ -1315,31 +1310,22 @@ fn edit_content_diff_is_compact() {
 
     assert!(!result.is_error);
     // Should NOT contain the full 100-line file — just a compact diff
-    assert!(
-        !result.content.contains("line 1\n"),
-        "content should not include full file"
-    );
-    assert!(
-        result.content.contains("FIFTY"),
-        "content should include the changed text"
-    );
+    assert!(!result.content.contains("line 1\n"), "content should not include full file");
+    assert!(result.content.contains("FIFTY"), "content should include the changed text");
     // Should be compact: header + a few context lines + change
     let line_count = result.content.lines().count();
     assert!(
         line_count < 20,
         "compact diff should be <20 lines, got {}:\n{}",
-        line_count, result.content,
+        line_count,
+        result.content,
     );
 }
 
 #[test]
 fn edit_multi_content_includes_diff() {
     let tmp = TempDir::new().unwrap();
-    std::fs::write(
-        tmp.path().join("multi.rs"),
-        "let a = 1;\nlet b = 2;\nlet c = 3;\n",
-    )
-    .unwrap();
+    std::fs::write(tmp.path().join("multi.rs"), "let a = 1;\nlet b = 2;\nlet c = 3;\n").unwrap();
 
     let mq = Arc::new(FileMutationQueue::new());
     let tool = EditTool::new(tmp.path().to_path_buf(), mq);
@@ -1405,7 +1391,8 @@ fn symbols_tool_finds_definitions() {
     let tool = SymbolsTool::new(tmp.path().to_path_buf());
 
     // Search by type name
-    let result = tool.execute(serde_json::json!({"query": "Config"}), noop_update(), &noop_cancel());
+    let result =
+        tool.execute(serde_json::json!({"query": "Config"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("struct"), "should find struct: {}", result.content);
 
@@ -1419,11 +1406,7 @@ fn symbols_tool_finds_definitions() {
 #[test]
 fn symbols_tool_kind_filter() {
     let tmp = TempDir::new().unwrap();
-    std::fs::write(
-        tmp.path().join("lib.rs"),
-        "fn foo() {}\nstruct Foo;\n",
-    )
-    .unwrap();
+    std::fs::write(tmp.path().join("lib.rs"), "fn foo() {}\nstruct Foo;\n").unwrap();
 
     let tool = SymbolsTool::new(tmp.path().to_path_buf());
     let result = tool.execute(
@@ -1433,7 +1416,11 @@ fn symbols_tool_kind_filter() {
     );
     assert!(!result.is_error);
     assert!(result.content.contains("fn foo"), "{}", result.content);
-    assert!(!result.content.contains("struct Foo"), "struct should be filtered out: {}", result.content);
+    assert!(
+        !result.content.contains("struct Foo"),
+        "struct should be filtered out: {}",
+        result.content
+    );
 }
 
 #[test]
@@ -1442,11 +1429,11 @@ fn symbols_tool_no_results() {
     std::fs::write(tmp.path().join("lib.rs"), "fn hello() {}\n").unwrap();
 
     let tool = SymbolsTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(serde_json::json!({"query": "nonexistent"}), noop_update(), &noop_cancel());
+    let result =
+        tool.execute(serde_json::json!({"query": "nonexistent"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("No definitions found"), "{}", result.content);
 }
-
 
 fn codemap_tool(tmp: &TempDir) -> CodemapTool {
     use std::sync::Mutex;
@@ -1457,10 +1444,8 @@ fn codemap_tool(tmp: &TempDir) -> CodemapTool {
 #[test]
 fn codemap_tool_full_depth() {
     let tmp = TempDir::new().unwrap();
-    std::fs::write(
-        tmp.path().join("lib.rs"),
-        "fn hello() {\n    println!(\"world\");\n}\n",
-    ).unwrap();
+    std::fs::write(tmp.path().join("lib.rs"), "fn hello() {\n    println!(\"world\");\n}\n")
+        .unwrap();
 
     let tool = codemap_tool(&tmp);
     let result = tool.execute(
@@ -1476,10 +1461,8 @@ fn codemap_tool_full_depth() {
 #[test]
 fn codemap_tool_signatures_depth() {
     let tmp = TempDir::new().unwrap();
-    std::fs::write(
-        tmp.path().join("lib.rs"),
-        "fn hello() {\n    println!(\"world\");\n}\n",
-    ).unwrap();
+    std::fs::write(tmp.path().join("lib.rs"), "fn hello() {\n    println!(\"world\");\n}\n")
+        .unwrap();
 
     let tool = codemap_tool(&tmp);
     let result = tool.execute(
@@ -1498,11 +1481,8 @@ fn codemap_tool_no_results() {
     std::fs::write(tmp.path().join("lib.rs"), "fn hello() {}\n").unwrap();
 
     let tool = codemap_tool(&tmp);
-    let result = tool.execute(
-        serde_json::json!({"query": "nonexistent"}),
-        noop_update(),
-        &noop_cancel(),
-    );
+    let result =
+        tool.execute(serde_json::json!({"query": "nonexistent"}), noop_update(), &noop_cancel());
     assert!(!result.is_error);
     // Non-empty query with definitions in scope → redirect message
     assert!(result.content.contains("No symbols matching"), "{}", result.content);
@@ -1511,10 +1491,7 @@ fn codemap_tool_no_results() {
 #[test]
 fn codemap_tool_kind_filter() {
     let tmp = TempDir::new().unwrap();
-    std::fs::write(
-        tmp.path().join("lib.rs"),
-        "struct Foo;\nfn bar() {}\n",
-    ).unwrap();
+    std::fs::write(tmp.path().join("lib.rs"), "struct Foo;\nfn bar() {}\n").unwrap();
 
     let tool = codemap_tool(&tmp);
     let result = tool.execute(

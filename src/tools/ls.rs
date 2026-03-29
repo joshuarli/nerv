@@ -20,11 +20,7 @@ impl LsTool {
                 return home.join(rest.trim_start_matches('/'));
             }
         }
-        if path.starts_with('/') {
-            PathBuf::from(path)
-        } else {
-            self.cwd.join(path)
-        }
+        if path.starts_with('/') { PathBuf::from(path) } else { self.cwd.join(path) }
     }
 }
 
@@ -42,7 +38,14 @@ fn render_tree(root: &Path, depth: usize, out: &mut String, entry_count: &mut us
     render_dir(root, "", 0, depth, out, entry_count);
 }
 
-fn render_dir(dir: &Path, prefix: &str, current_depth: usize, max_depth: usize, out: &mut String, entry_count: &mut usize) {
+fn render_dir(
+    dir: &Path,
+    prefix: &str,
+    current_depth: usize,
+    max_depth: usize,
+    out: &mut String,
+    entry_count: &mut usize,
+) {
     if current_depth >= max_depth || *entry_count >= MAX_ENTRIES {
         return;
     }
@@ -65,9 +68,7 @@ fn render_dir(dir: &Path, prefix: &str, current_depth: usize, max_depth: usize, 
     // Dirs first, then files; alphabetical within each group
     entries.sort_by(|a, b| {
         b.0.cmp(&a.0).then_with(|| {
-            a.1.file_name()
-                .unwrap_or(OsStr::new(""))
-                .cmp(b.1.file_name().unwrap_or(OsStr::new("")))
+            a.1.file_name().unwrap_or(OsStr::new("")).cmp(b.1.file_name().unwrap_or(OsStr::new("")))
         })
     });
 
@@ -94,9 +95,11 @@ fn render_dir(dir: &Path, prefix: &str, current_depth: usize, max_depth: usize, 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
     use tempfile::TempDir;
+
+    use super::*;
 
     fn tree(dir: &Path) -> String {
         tree_depth(dir, DEFAULT_DEPTH)
@@ -143,8 +146,9 @@ mod tests {
     fn test_depth_limit() {
         let tmp = setup();
         let out = tree(tmp.path());
-        // tools/ is depth-1, read.rs inside it is depth-2 — should NOT appear (DEFAULT_DEPTH=2 means
-        // we recurse into depth-1 dirs but not depth-2 dirs)
+        // tools/ is depth-1, read.rs inside it is depth-2 — should NOT appear
+        // (DEFAULT_DEPTH=2 means we recurse into depth-1 dirs but not depth-2
+        // dirs)
         assert!(!out.contains("read.rs"), "depth-2 file contents should be hidden");
     }
 
@@ -199,7 +203,8 @@ mod tests {
         let tool = LsTool::new(std::env::current_dir().unwrap());
         let cancel = crate::agent::provider::new_cancel_flag();
         let cb: crate::agent::agent::UpdateCallback = std::sync::Arc::new(|_| {});
-        let result = tool.execute(serde_json::json!({"path": "/nonexistent_path_xyz"}), cb, &cancel);
+        let result =
+            tool.execute(serde_json::json!({"path": "/nonexistent_path_xyz"}), cb, &cancel);
         assert!(result.content.contains("not found") || result.content.contains("error"));
     }
 }
@@ -225,7 +230,12 @@ impl AgentTool for LsTool {
     fn validate(&self, _input: &serde_json::Value) -> Result<(), ToolError> {
         Ok(())
     }
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        _update: UpdateCallback,
+        _cancel: &CancelFlag,
+    ) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or(".");
         let resolved = self.resolve_path(path_str);
         let depth = input["depth"]

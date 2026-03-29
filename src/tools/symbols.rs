@@ -13,20 +13,18 @@ pub struct SymbolsTool {
 
 impl SymbolsTool {
     pub fn new(cwd: PathBuf) -> Self {
-        Self {
-            cwd,
-            index: Arc::new(RwLock::new(SymbolIndex::new())),
-        }
+        Self { cwd, index: Arc::new(RwLock::new(SymbolIndex::new())) }
     }
 
     /// Construct with a persistent on-disk symbol cache stored in `nerv_dir`.
-    /// If `cwd` is inside a git repo, paths are stored relative to the repo root
-    /// so the cache survives directory renames.
+    /// If `cwd` is inside a git repo, paths are stored relative to the repo
+    /// root so the cache survives directory renames.
     ///
     /// When `cwd` is not inside a git repo we skip the on-disk cache entirely —
     /// there is no stable fingerprint to key the per-repo directory on, and the
     /// fallback from `repo_data_dir` would be `~/.nerv` itself, causing
-    /// `~/.nerv/symbol_cache.db` to accumulate entries from arbitrary directories.
+    /// `~/.nerv/symbol_cache.db` to accumulate entries from arbitrary
+    /// directories.
     pub fn new_with_cache(cwd: PathBuf, nerv_dir: &std::path::Path) -> Self {
         let _ = nerv_dir; // kept in signature for API stability; path now derived from cwd
         // Only open a cache when we have a stable per-repo path. Without a
@@ -40,10 +38,7 @@ impl SymbolsTool {
             }
             _ => crate::index::SymbolIndex::new(),
         };
-        Self {
-            cwd,
-            index: Arc::new(RwLock::new(index)),
-        }
+        Self { cwd, index: Arc::new(RwLock::new(index)) }
     }
 
     pub fn index(&self) -> Arc<RwLock<SymbolIndex>> {
@@ -56,11 +51,7 @@ impl SymbolsTool {
                 return home.join(rest.trim_start_matches('/'));
             }
         }
-        if path.starts_with('/') {
-            PathBuf::from(path)
-        } else {
-            self.cwd.join(path)
-        }
+        if path.starts_with('/') { PathBuf::from(path) } else { self.cwd.join(path) }
     }
 }
 
@@ -103,9 +94,7 @@ impl AgentTool for SymbolsTool {
     }
 
     fn prompt_guidelines(&self) -> Vec<String> {
-        vec![
-            "`symbols` with `query: \"\"` returns every definition (name, kind, file, line, signature). Use to orient before targeted `codemap` calls.".into(),
-        ]
+        vec!["`symbols` with `query: \"\"` returns every definition (name, kind, file, line, signature). Use to orient before targeted `codemap` calls.".into()]
     }
 
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
@@ -117,17 +106,16 @@ impl AgentTool for SymbolsTool {
         Ok(())
     }
 
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        _update: UpdateCallback,
+        _cancel: &CancelFlag,
+    ) -> ToolResult {
         let query = input["query"].as_str().unwrap_or("");
-        let kind_filter = input
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .and_then(parse_kind_filter);
+        let kind_filter = input.get("kind").and_then(|v| v.as_str()).and_then(parse_kind_filter);
         let file_filter = input.get("file").and_then(|v| v.as_str());
-        let want_refs = input
-            .get("references")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let want_refs = input.get("references").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let file_path = file_filter.map(|f| self.resolve_path(f));
 
@@ -149,16 +137,9 @@ impl AgentTool for SymbolsTool {
         } else {
             out.push_str("DEFINITIONS:\n");
             for sym in show {
-                let rel = sym
-                    .file
-                    .strip_prefix(&self.cwd)
-                    .unwrap_or(&sym.file)
-                    .display();
-                let parent_suffix = sym
-                    .parent
-                    .as_ref()
-                    .map(|p| format!("  ({})", p))
-                    .unwrap_or_default();
+                let rel = sym.file.strip_prefix(&self.cwd).unwrap_or(&sym.file).display();
+                let parent_suffix =
+                    sym.parent.as_ref().map(|p| format!("  ({})", p)).unwrap_or_default();
                 out.push_str(&format!(
                     "  {}:{:<4}  {} {}{}\n",
                     rel,
@@ -238,10 +219,8 @@ fn find_doc_files(cwd: &std::path::Path) -> Vec<String> {
         .output();
     if let Ok(out) = output {
         if out.status.success() {
-            let mut files: Vec<String> = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .map(|l| l.to_owned())
-                .collect();
+            let mut files: Vec<String> =
+                String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_owned()).collect();
             files.sort();
             return files;
         }
@@ -253,10 +232,7 @@ fn find_doc_files(cwd: &std::path::Path) -> Vec<String> {
         .output();
     if let Ok(out) = output {
         if out.status.success() {
-            return String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .map(|l| l.to_owned())
-                .collect();
+            return String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_owned()).collect();
         }
     }
     vec![]
@@ -279,18 +255,16 @@ fn find_references(symbol: &str, cwd: &std::path::Path) -> Vec<String> {
         Err(_) => return vec![],
     };
 
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|l| l.to_string())
-        .collect()
+    String::from_utf8_lossy(&output.stdout).lines().map(|l| l.to_string()).collect()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::agent::agent::AgentTool;
     use crate::agent::provider::new_cancel_flag;
-    use std::sync::Arc;
 
     #[test]
     fn docs_section_on_empty_query() {
@@ -300,7 +274,11 @@ mod tests {
         std::fs::write(tmp.path().join("docs.md"), "# Docs\n").unwrap();
         // Init a git repo and stage files so git ls-files works (no rg dependency).
         std::process::Command::new("git").args(["init"]).current_dir(tmp.path()).output().unwrap();
-        std::process::Command::new("git").args(["add", "."]).current_dir(tmp.path()).output().unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
 
         let tool = SymbolsTool::new(tmp.path().to_path_buf());
         let cancel = new_cancel_flag();
@@ -319,7 +297,11 @@ mod tests {
         let tool = SymbolsTool::new(tmp.path().to_path_buf());
         let cancel = new_cancel_flag();
         let result = tool.execute(serde_json::json!({"query": "hello"}), Arc::new(|_| {}), &cancel);
-        assert!(!result.content.contains("DOCS:"), "specific query should NOT have DOCS: {}", result.content);
+        assert!(
+            !result.content.contains("DOCS:"),
+            "specific query should NOT have DOCS: {}",
+            result.content
+        );
     }
 
     #[test]
@@ -335,6 +317,10 @@ mod tests {
             Arc::new(|_| {}),
             &cancel,
         );
-        assert!(!result.content.contains("DOCS:"), "file-filtered query should NOT have DOCS: {}", result.content);
+        assert!(
+            !result.content.contains("DOCS:"),
+            "file-filtered query should NOT have DOCS: {}",
+            result.content
+        );
     }
 }

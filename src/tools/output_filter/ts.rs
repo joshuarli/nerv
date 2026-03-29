@@ -17,18 +17,12 @@ pub fn filter_jest(text: &str) -> Option<String> {
         return None;
     }
 
-    if is_jest {
-        filter_jest_output(text)
-    } else {
-        filter_vitest_output(text)
-    }
+    if is_jest { filter_jest_output(text) } else { filter_vitest_output(text) }
 }
 
 fn filter_jest_output(text: &str) -> Option<String> {
     // Summary lines
-    let suites_line = text
-        .lines()
-        .find(|l| l.trim_start().starts_with("Test Suites:"));
+    let suites_line = text.lines().find(|l| l.trim_start().starts_with("Test Suites:"));
     let tests_line = text.lines().find(|l| l.trim_start().starts_with("Tests:"));
 
     // All passing
@@ -57,9 +51,7 @@ fn filter_jest_output(text: &str) -> Option<String> {
 
     let count = failures.len();
     let body = failures.join("\n\n");
-    let summary = tests_line
-        .map(|l| format!("\n{}", l.trim()))
-        .unwrap_or_default();
+    let summary = tests_line.map(|l| format!("\n{}", l.trim())).unwrap_or_default();
     Some(format!("{} failure(s):\n{}{}", count, body, summary))
 }
 
@@ -137,9 +129,7 @@ fn filter_vitest_output(text: &str) -> Option<String> {
     }
     let count = failures.len();
     let body = failures.join("\n\n");
-    let tail = summary
-        .map(|s| format!("\n{}", s.trim()))
-        .unwrap_or_default();
+    let tail = summary.map(|s| format!("\n{}", s.trim())).unwrap_or_default();
     Some(format!("{} failure(s):\n{}{}", count, body, tail))
 }
 
@@ -159,9 +149,7 @@ fn extract_vitest_failures(text: &str) -> Vec<String> {
             current.push(line.trim());
         } else if in_failure {
             let t = line.trim();
-            if t.starts_with("Tests ")
-                || t.starts_with("Test Files ")
-                || t.starts_with("Duration")
+            if t.starts_with("Tests ") || t.starts_with("Test Files ") || t.starts_with("Duration")
             {
                 failures.push(current.join("\n"));
                 current.clear();

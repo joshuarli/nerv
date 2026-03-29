@@ -1,7 +1,8 @@
 //! Tool permission system.
 //!
 //! Auto-approves operations within the repo root. Prompts for confirmation
-//! when tools access paths outside the repo or run potentially dangerous commands.
+//! when tools access paths outside the repo or run potentially dangerous
+//! commands.
 
 use std::path::{Path, PathBuf};
 
@@ -13,7 +14,8 @@ pub enum Permission {
     Ask(String),
 }
 
-/// Check whether a tool call should be auto-approved or needs user confirmation.
+/// Check whether a tool call should be auto-approved or needs user
+/// confirmation.
 pub fn check(tool: &str, args: &serde_json::Value, repo_root: Option<&Path>) -> Permission {
     check_with_allowed_dirs(tool, args, repo_root, &[])
 }
@@ -64,23 +66,16 @@ pub fn path_for_args(tool: &str, args: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// Resolve a raw path string to an absolute PathBuf (without touching filesystem).
+/// Resolve a raw path string to an absolute PathBuf (without touching
+/// filesystem).
 fn resolve_path(path: &str, repo_root: Option<&Path>) -> PathBuf {
     if path.starts_with('/') {
         PathBuf::from(path)
     } else if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = crate::home_dir() {
-            home.join(rest)
-        } else {
-            PathBuf::from(path)
-        }
+        if let Some(home) = crate::home_dir() { home.join(rest) } else { PathBuf::from(path) }
     } else {
         // Relative — resolve against repo root if available.
-        if let Some(root) = repo_root {
-            root.join(path)
-        } else {
-            PathBuf::from(path)
-        }
+        if let Some(root) = repo_root { root.join(path) } else { PathBuf::from(path) }
     }
 }
 
@@ -218,11 +213,7 @@ fn extract_path_tokens(cmd: &str) -> Vec<String> {
     // literal content and must not be scanned for path tokens.
     let cmd = if let Some(pos) = cmd.find("<<") {
         // Find end of the `<<` line; heredoc body starts after the first newline.
-        if let Some(nl) = cmd[pos..].find('\n') {
-            &cmd[..pos + nl]
-        } else {
-            &cmd[..pos]
-        }
+        if let Some(nl) = cmd[pos..].find('\n') { &cmd[..pos + nl] } else { &cmd[..pos] }
     } else {
         cmd
     };
@@ -246,10 +237,7 @@ fn extract_path_tokens(cmd: &str) -> Vec<String> {
     }
 
     // Split on whitespace but also catch tokens after redirect operators
-    let cleaned = stripped
-        .replace(">>", " >> ")
-        .replace(">", " > ")
-        .replace("<", " < ");
+    let cleaned = stripped.replace(">>", " >> ").replace(">", " > ").replace("<", " < ");
     for token in cleaned.split_whitespace() {
         if token.starts_with('/') || token.starts_with("~/") {
             // Only treat a token as a path if it actually exists on the
@@ -316,10 +304,7 @@ mod tests {
     #[test]
     fn read_outside_repo_asks() {
         let args = serde_json::json!({"path": "/etc/passwd"});
-        assert!(matches!(
-            check("read", &args, Some(&repo())),
-            Permission::Ask(_)
-        ));
+        assert!(matches!(check("read", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
@@ -331,20 +316,14 @@ mod tests {
     #[test]
     fn write_outside_repo_asks() {
         let args = serde_json::json!({"path": "/tmp/evil.sh", "content": "rm -rf /"});
-        assert!(matches!(
-            check("write", &args, Some(&repo())),
-            Permission::Ask(_)
-        ));
+        assert!(matches!(check("write", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
     fn edit_outside_repo_asks() {
         let args =
             serde_json::json!({"path": "/Users/josh/.zshrc", "old_text": "a", "new_text": "b"});
-        assert!(matches!(
-            check("edit", &args, Some(&repo())),
-            Permission::Ask(_)
-        ));
+        assert!(matches!(check("edit", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
@@ -356,19 +335,13 @@ mod tests {
     #[test]
     fn bash_dangerous_command_asks() {
         let args = serde_json::json!({"command": "sudo rm -rf /"});
-        assert!(matches!(
-            check("bash", &args, Some(&repo())),
-            Permission::Ask(_)
-        ));
+        assert!(matches!(check("bash", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
     fn bash_outside_path_asks() {
         let args = serde_json::json!({"command": "cat /etc/passwd"});
-        assert!(matches!(
-            check("bash", &args, Some(&repo())),
-            Permission::Ask(_)
-        ));
+        assert!(matches!(check("bash", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
@@ -404,19 +377,13 @@ mod tests {
     #[test]
     fn relative_escaping_repo_asks() {
         let args = serde_json::json!({"path": "../../etc/passwd"});
-        assert!(matches!(
-            check("read", &args, Some(&repo())),
-            Permission::Ask(_)
-        ));
+        assert!(matches!(check("read", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
     fn bash_eval_asks() {
         let args = serde_json::json!({"command": "eval \"$HOSTILE\""});
-        assert!(matches!(
-            check("bash", &args, Some(&repo())),
-            Permission::Ask(_)
-        ));
+        assert!(matches!(check("bash", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
@@ -436,26 +403,21 @@ mod tests {
     #[test]
     fn bash_redirect_outside_repo_asks() {
         let args = serde_json::json!({"command": "echo evil > /etc/passwd"});
-        assert!(matches!(
-            check("bash", &args, Some(&repo())),
-            Permission::Ask(_)
-        ));
+        assert!(matches!(check("bash", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
     fn bash_pipe_to_tee_outside_asks() {
         let args = serde_json::json!({"command": "echo hi | tee /etc/passwd"});
-        assert!(matches!(
-            check("bash", &args, Some(&repo())),
-            Permission::Ask(_)
-        ));
+        assert!(matches!(check("bash", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
     fn bash_regex_pattern_double_slash_allowed() {
         // A regex argument like `//.*Value` starts with `/` but is not a path.
         // It must not trigger a permission prompt.
-        let args = serde_json::json!({"command": r#"rg --color=never --no-heading -n "//.*Value" src/"#});
+        let args =
+            serde_json::json!({"command": r#"rg --color=never --no-heading -n "//.*Value" src/"#});
         assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
     }
 
@@ -467,7 +429,8 @@ mod tests {
 
     #[test]
     fn bash_git_commit_with_double_slash_in_message_allowed() {
-        // `//` appearing in a -m commit message must not be treated as an outside-repo path.
+        // `//` appearing in a -m commit message must not be treated as an outside-repo
+        // path.
         let args = serde_json::json!({"command": r#"git commit -m "fix prompt for // patterns""#});
         assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
     }
@@ -480,18 +443,14 @@ mod tests {
         // outer shell string), which confuses the quote-stripper.
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         // Normal form
-        let cmd = format!(
-            "cd {} && git add -A && git commit -m \"fix: some message\"",
-            root.display()
-        );
+        let cmd =
+            format!("cd {} && git add -A && git commit -m \"fix: some message\"", root.display());
         let args = serde_json::json!({"command": cmd});
         assert_eq!(check("bash", &args, Some(&root)), Permission::Allow);
 
         // Stray trailing `"` — the raw string the /commit skill sometimes emits
-        let cmd2 = format!(
-            "cd {} && git add -A && git commit -m \"fix: some message\"\"",
-            root.display()
-        );
+        let cmd2 =
+            format!("cd {} && git add -A && git commit -m \"fix: some message\"\"", root.display());
         let args2 = serde_json::json!({"command": cmd2});
         assert_eq!(check("bash", &args2, Some(&root)), Permission::Allow);
     }

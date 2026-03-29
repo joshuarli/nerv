@@ -3,12 +3,10 @@ use std::sync::atomic::Ordering;
 
 use serde::Deserialize;
 
-use crate::errors::ProviderError;
-
 use super::convert::{LlmContent, LlmMessage};
 use super::provider::*;
 use super::types::*;
-
+use crate::errors::ProviderError;
 
 #[derive(Deserialize)]
 struct OaiUsage {
@@ -69,11 +67,7 @@ pub struct OpenAICompatProvider {
 
 impl OpenAICompatProvider {
     pub fn new(name: String, base_url: String, api_key: Option<String>) -> Self {
-        Self {
-            api_key,
-            base_url,
-            name,
-        }
+        Self { api_key, base_url, name }
     }
 
     pub fn build_request_body(&self, request: &CompletionRequest) -> serde_json::Value {
@@ -106,11 +100,7 @@ impl OpenAICompatProvider {
                     for c in content {
                         match c {
                             LlmContent::Text(t) => text_parts.push(t.as_str()),
-                            LlmContent::ToolCall {
-                                id,
-                                name,
-                                arguments,
-                            } => {
+                            LlmContent::ToolCall { id, name, arguments } => {
                                 tool_calls.push(serde_json::json!({
                                     "id": id, "type": "function",
                                     "function": {"name": name, "arguments": arguments.to_string()},
@@ -134,11 +124,7 @@ impl OpenAICompatProvider {
                     }
                     messages.push(msg);
                 }
-                LlmMessage::ToolResult {
-                    tool_call_id,
-                    content,
-                    ..
-                } => {
+                LlmMessage::ToolResult { tool_call_id, content, .. } => {
                     let text = content
                         .iter()
                         .filter_map(|c| match c {
@@ -154,10 +140,16 @@ impl OpenAICompatProvider {
         body["messages"] = serde_json::Value::Array(messages);
 
         if !request.tools.is_empty() {
-            let tools: Vec<serde_json::Value> = request.tools.iter().map(|t| serde_json::json!({
-                "type": "function",
-                "function": {"name": t.name, "description": t.description, "parameters": t.parameters},
-            })).collect();
+            let tools: Vec<serde_json::Value> = request
+                .tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {"name": t.name, "description": t.description, "parameters": t.parameters},
+                    })
+                })
+                .collect();
             body["tools"] = serde_json::Value::Array(tools);
         }
 
@@ -167,7 +159,6 @@ impl OpenAICompatProvider {
                     body["reasoning_effort"] = serde_json::json!("medium");
                     body["max_completion_tokens"] = serde_json::json!(request.max_tokens + tokens);
                 }
-
             }
         }
         body
@@ -179,7 +170,8 @@ impl Provider for OpenAICompatProvider {
         &self.name
     }
 
-    /// Probe `GET /models` — standard OpenAI-compat endpoint, no tokens consumed.
+    /// Probe `GET /models` — standard OpenAI-compat endpoint, no tokens
+    /// consumed.
     fn healthcheck(&self) -> bool {
         let url = format!("{}/models", self.base_url);
         let mut req = crate::http::agent().get(&url);
@@ -198,16 +190,13 @@ impl Provider for OpenAICompatProvider {
         let body = self.build_request_body(request);
         let url = format!("{}/chat/completions", self.base_url);
 
-        let mut req = crate::http::agent()
-            .post(&url)
-            .header("content-type", "application/json");
+        let mut req = crate::http::agent().post(&url).header("content-type", "application/json");
         if let Some(ref key) = self.api_key {
             req = req.header("authorization", &format!("Bearer {}", key));
         }
 
-        let response = req.send_json(&body).map_err(|e| ProviderError::SseParse {
-            message: e.to_string(),
-        })?;
+        let response =
+            req.send_json(&body).map_err(|e| ProviderError::SseParse { message: e.to_string() })?;
 
         let status = response.status().as_u16();
         if status != 200 {
@@ -246,10 +235,7 @@ impl Provider for OpenAICompatProvider {
                 // Drop receiver — reader thread will see send error, drop body,
                 // close TCP connection, causing the server to stop generating.
                 drop(line_rx);
-                on_event(ProviderEvent::MessageStop {
-                    stop_reason: StopReason::Aborted,
-                    usage,
-                });
+                on_event(ProviderEvent::MessageStop { stop_reason: StopReason::Aborted, usage });
                 return Ok(());
             }
 
@@ -274,10 +260,7 @@ impl Provider for OpenAICompatProvider {
                 continue;
             }
             if line == "data: [DONE]" {
-                on_event(ProviderEvent::MessageStop {
-                    stop_reason: StopReason::EndTurn,
-                    usage,
-                });
+                on_event(ProviderEvent::MessageStop { stop_reason: StopReason::EndTurn, usage });
                 return Ok(());
             }
             let Some(data) = line.strip_prefix("data: ") else {
@@ -301,10 +284,8 @@ impl Provider for OpenAICompatProvider {
                 on_event(ProviderEvent::TextDelta(text));
             }
             // Reasoning/thinking content from local models (QwQ, DeepSeek-R1, etc.)
-            if let Some(thinking) = delta
-                .reasoning_content
-                .or(delta.reasoning)
-                .filter(|t| !t.is_empty())
+            if let Some(thinking) =
+                delta.reasoning_content.or(delta.reasoning).filter(|t| !t.is_empty())
             {
                 on_event(ProviderEvent::ThinkingDelta(thinking));
             }
@@ -312,16 +293,10 @@ impl Provider for OpenAICompatProvider {
                 let id = tc.id.unwrap_or_default();
                 if let Some(func) = tc.function {
                     if let Some(name) = func.name.filter(|n| !n.is_empty()) {
-                        on_event(ProviderEvent::ToolCallStart {
-                            id: id.clone(),
-                            name,
-                        });
+                        on_event(ProviderEvent::ToolCallStart { id: id.clone(), name });
                     }
                     if let Some(args) = func.arguments.filter(|a| !a.is_empty()) {
-                        on_event(ProviderEvent::ToolCallArgsDelta {
-                            id: id.clone(),
-                            delta: args,
-                        });
+                        on_event(ProviderEvent::ToolCallArgsDelta { id: id.clone(), delta: args });
                     }
                 }
             }
@@ -332,10 +307,7 @@ impl Provider for OpenAICompatProvider {
                     "length" => StopReason::MaxTokens,
                     _ => StopReason::EndTurn,
                 };
-                on_event(ProviderEvent::MessageStop {
-                    stop_reason: sr,
-                    usage,
-                });
+                on_event(ProviderEvent::MessageStop { stop_reason: sr, usage });
                 return Ok(());
             }
         }

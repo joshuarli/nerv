@@ -1,11 +1,13 @@
 /// Full-screen session tree selector for /tree.
 ///
-/// Implements [`FullscreenList`] so it can be driven by [`run_fullscreen_picker`].
+/// Implements [`FullscreenList`] so it can be driven by
+/// [`run_fullscreen_picker`].
 ///
 /// Features per spec (docs/tree.md):
 /// - ↑/↓ navigate depth-first
 /// - ←/→ or PgUp/PgDn page
-/// - Ctrl+←/Alt+← fold current node; if already folded jump to prev branch start
+/// - Ctrl+←/Alt+← fold current node; if already folded jump to prev branch
+///   start
 /// - Ctrl+→/Alt+→ unfold current node; jump to next branch start or branch end
 /// - Enter selects
 /// - Ctrl+U toggle: user messages only
@@ -39,12 +41,14 @@ struct FlatNode {
     entry_id: String,
     /// First ~80 chars of the entry content.
     summary: String,
-    /// Raw text of the entry (for user messages only, placed into editor on select).
+    /// Raw text of the entry (for user messages only, placed into editor on
+    /// select).
     raw_text: String,
     /// True if this is a user message entry.
     is_user: bool,
     has_tool_calls: bool,
-    /// Indentation level (0 = root, 1 = child at branching point, …) — kept for debugging.
+    /// Indentation level (0 = root, 1 = child at branching point, …) — kept for
+    /// debugging.
     #[allow(dead_code)]
     indent: usize,
     /// True if this node has siblings (draws ├─ or └─ connector).
@@ -61,8 +65,8 @@ struct FlatNode {
     parent_id: Option<String>,
     /// True if this node has any visible children (used for fold indicator).
     has_children: bool,
-    /// For each ancestor level, whether that level still has more siblings below.
-    /// Used to draw │ continuation lines through the prefix.
+    /// For each ancestor level, whether that level still has more siblings
+    /// below. Used to draw │ continuation lines through the prefix.
     ancestors_with_more: Vec<bool>,
 }
 
@@ -89,7 +93,8 @@ pub struct TreeSelection {
     pub is_user: bool,
     /// Raw text of a user message entry (empty for non-user).
     pub raw_text: String,
-    /// Parent entry ID (None for root). Used to set leaf to parent for user msgs.
+    /// Parent entry ID (None for root). Used to set leaf to parent for user
+    /// msgs.
     pub parent_id: Option<String>,
     /// True if this is the very first message and has no parent.
     pub is_root: bool,
@@ -147,7 +152,9 @@ impl TreeSelector {
     }
 
     fn toggle_fold(&mut self) {
-        let Some(node) = self.nodes.get(self.selected) else { return };
+        let Some(node) = self.nodes.get(self.selected) else {
+            return;
+        };
         if !node.has_children {
             // Not foldable — jump to previous branch start instead.
             self.jump_prev_branch();
@@ -163,7 +170,9 @@ impl TreeSelector {
     }
 
     fn unfold_or_jump_next(&mut self) {
-        let Some(node) = self.nodes.get(self.selected) else { return };
+        let Some(node) = self.nodes.get(self.selected) else {
+            return;
+        };
         if node.is_folded {
             let id = node.entry_id.clone();
             self.folded.remove(&id);
@@ -182,7 +191,9 @@ impl TreeSelector {
                 self.selected = i;
                 return;
             }
-            if i == 0 { break; }
+            if i == 0 {
+                break;
+            }
             i -= 1;
         }
     }
@@ -360,15 +371,13 @@ impl FullscreenList for TreeSelector {
 
             let raw = if node.summary.is_empty() { "(empty)" } else { &node.summary };
             // Extra: prefix + " label \"...\"" + fold + " ← active"
-            let extra = prefix.len() + 1 + label.len() + 3 + fold_indicator.len() + active_dot.len() + 10;
+            let extra =
+                prefix.len() + 1 + label.len() + 3 + fold_indicator.len() + active_dot.len() + 10;
             let content_width = cols.saturating_sub(extra);
             let trimmed = char_truncate(raw, content_width);
             // Non-meta summaries are wrapped in quotes.
-            let quoted = if node.is_meta {
-                trimmed.to_string()
-            } else {
-                format!("\"{}\"", trimmed)
-            };
+            let quoted =
+                if node.is_meta { trimmed.to_string() } else { format!("\"{}\"", trimmed) };
 
             let active_suffix = if is_current { " ← active" } else { "" };
             let fold_part = format!("{}{}", fold_indicator, active_dot);
@@ -377,33 +386,49 @@ impl FullscreenList for TreeSelector {
                 let _ = write!(
                     out,
                     "{rev}{prefix} {label} {fold}{quoted}{active}{reset}\x1b[K\r\n",
-                    rev = theme::REVERSE, reset = theme::RESET,
-                    prefix = prefix, label = label, fold = fold_part,
-                    quoted = quoted, active = active_suffix,
+                    rev = theme::REVERSE,
+                    reset = theme::RESET,
+                    prefix = prefix,
+                    label = label,
+                    fold = fold_part,
+                    quoted = quoted,
+                    active = active_suffix,
                 );
             } else if is_current {
                 let _ = write!(
                     out,
                     "{bold}{prefix} {label} {fold}{quoted}{active}{reset}\x1b[K\r\n",
-                    bold = theme::ACCENT_BOLD, reset = theme::RESET,
-                    prefix = prefix, label = label, fold = fold_part,
-                    quoted = quoted, active = active_suffix,
+                    bold = theme::ACCENT_BOLD,
+                    reset = theme::RESET,
+                    prefix = prefix,
+                    label = label,
+                    fold = fold_part,
+                    quoted = quoted,
+                    active = active_suffix,
                 );
             } else if is_active {
                 let _ = write!(
                     out,
                     "{style}{prefix} {label} {fold}{quoted}{active}{reset}\x1b[K\r\n",
-                    style = style, reset = theme::RESET,
-                    prefix = prefix, label = label, fold = fold_part,
-                    quoted = quoted, active = active_suffix,
+                    style = style,
+                    reset = theme::RESET,
+                    prefix = prefix,
+                    label = label,
+                    fold = fold_part,
+                    quoted = quoted,
+                    active = active_suffix,
                 );
             } else {
                 let _ = write!(
                     out,
                     "{muted}{prefix} {label} {fold}{quoted}{active}{reset}\x1b[K\r\n",
-                    muted = theme::MUTED, reset = theme::RESET,
-                    prefix = prefix, label = label, fold = fold_part,
-                    quoted = quoted, active = active_suffix,
+                    muted = theme::MUTED,
+                    reset = theme::RESET,
+                    prefix = prefix,
+                    label = label,
+                    fold = fold_part,
+                    quoted = quoted,
+                    active = active_suffix,
                 );
             }
         }
@@ -420,8 +445,11 @@ impl FullscreenList for TreeSelector {
             format!("  ^←/^→ fold/jump  {}/{}", self.selected + 1, self.nodes.len())
         };
         let _ = write!(
-            out, "{muted}{hint}{reset}\x1b[K\r\n",
-            muted = theme::DIM, reset = theme::RESET, hint = fold_hint,
+            out,
+            "{muted}{hint}{reset}\x1b[K\r\n",
+            muted = theme::DIM,
+            reset = theme::RESET,
+            hint = fold_hint,
         );
     }
 }
@@ -465,19 +493,22 @@ fn build_active_path(tree: &[SessionTreeNode], leaf_id: Option<&str>) -> HashSet
 fn should_show(entry_type: &str, is_user: bool, filter: FilterMode) -> bool {
     match filter {
         FilterMode::UserOnly => is_user,
-        FilterMode::Default => !matches!(entry_type, "system_prompt" | "tool_result" | "custom_message" | "label"),
+        FilterMode::Default => {
+            !matches!(entry_type, "system_prompt" | "tool_result" | "custom_message" | "label")
+        }
         FilterMode::ShowAll => entry_type != "system_prompt" && entry_type != "tool_result",
     }
 }
 
-/// Flatten tree into natural depth-first display order (root first), respecting fold + filter.
+/// Flatten tree into natural depth-first display order (root first), respecting
+/// fold + filter.
 ///
-/// Each level of indentation is 2 chars. Children of a branching node (multiple visible
-/// children) get `indent+1`; single-child chains stay at the same indent so linear
-/// conversations don't waste horizontal space.
+/// Each level of indentation is 2 chars. Children of a branching node (multiple
+/// visible children) get `indent+1`; single-child chains stay at the same
+/// indent so linear conversations don't waste horizontal space.
 ///
-/// `ancestor_has_more`: a bitmask / Vec tracking which ancestor levels still have
-/// siblings below them, so we can draw `│` continuation lines correctly.
+/// `ancestor_has_more`: a bitmask / Vec tracking which ancestor levels still
+/// have siblings below them, so we can draw `│` continuation lines correctly.
 fn flatten(
     tree: &[SessionTreeNode],
     folded: &HashSet<String>,
@@ -485,11 +516,13 @@ fn flatten(
 ) -> Vec<FlatNode> {
     let mut result = Vec::new();
 
-    // Stack entry: (node, indent, ancestors_with_more, is_last, parent_id, direct_branch_child)
-    // ancestors_with_more[i] = true means level i still has more siblings below.
-    // direct_branch_child = true only for immediate children of a multi-child node;
-    // flat-chain descendants inherit false so they don't draw a connector.
-    let mut stack: Vec<(&SessionTreeNode, usize, Vec<bool>, bool, Option<String>, bool)> = Vec::new();
+    // Stack entry: (node, indent, ancestors_with_more, is_last, parent_id,
+    // direct_branch_child) ancestors_with_more[i] = true means level i still
+    // has more siblings below. direct_branch_child = true only for immediate
+    // children of a multi-child node; flat-chain descendants inherit false so
+    // they don't draw a connector.
+    let mut stack: Vec<(&SessionTreeNode, usize, Vec<bool>, bool, Option<String>, bool)> =
+        Vec::new();
 
     let roots: Vec<&SessionTreeNode> = tree.iter().collect();
     // Push roots in reverse so we pop them in order (first root = first displayed).
@@ -497,22 +530,32 @@ fn flatten(
         stack.push((root, 0, vec![], i != roots.len() - 1, None, false));
     }
 
-    while let Some((node, indent, ancestors_with_more, has_more_siblings, parent_id, direct_branch_child)) = stack.pop() {
+    while let Some((
+        node,
+        indent,
+        ancestors_with_more,
+        has_more_siblings,
+        parent_id,
+        direct_branch_child,
+    )) = stack.pop()
+    {
         let entry_type = node.entry_type.as_str();
         let is_meta = matches!(
             entry_type,
-            "compaction" | "branch_summary" | "model_change" | "thinking_change" | "label"
-                | "session_info" | "permission_accept"
+            "compaction"
+                | "branch_summary"
+                | "model_change"
+                | "thinking_change"
+                | "label"
+                | "session_info"
+                | "permission_accept"
         );
 
         let visible = should_show(entry_type, node.is_user, filter);
 
         // Collect visible children sorted by timestamp (natural order).
-        let visible_children: Vec<&SessionTreeNode> = node
-            .children
-            .iter()
-            .filter(|c| has_visible(c, filter))
-            .collect();
+        let visible_children: Vec<&SessionTreeNode> =
+            node.children.iter().filter(|c| has_visible(c, filter)).collect();
 
         let has_children = !visible_children.is_empty();
         let is_folded = folded.contains(&node.entry_id);
@@ -546,13 +589,13 @@ fn flatten(
         let multi = visible_children.len() > 1;
 
         // Indentation rules:
-        // - Hidden nodes (system_prompt etc.) are transparent — pass through
-        //   indent and ancestors unchanged so they don't add visual depth.
-        // - Single-child chains stay at the same indent level and inherit the
-        //   same ancestors_with_more so they render flat (no connector, no
-        //   wasted horizontal space).
-        // - Only at real branch points (multiple visible children) do we
-        //   increase indent and record a │ continuation flag.
+        // - Hidden nodes (system_prompt etc.) are transparent — pass through indent and
+        //   ancestors unchanged so they don't add visual depth.
+        // - Single-child chains stay at the same indent level and inherit the same
+        //   ancestors_with_more so they render flat (no connector, no wasted horizontal
+        //   space).
+        // - Only at real branch points (multiple visible children) do we increase
+        //   indent and record a │ continuation flag.
         let (child_indent, child_ancestors) = if !visible {
             // Hidden: fully transparent.
             (indent, ancestors_with_more.clone())
@@ -560,12 +603,12 @@ fn flatten(
             // Branch point: indent increases and children draw ├─/└─ connectors.
             //
             // Whether to push a new continuation entry depends on the visual depth:
-            // - Root-level branch (no ancestors yet) or a direct-branch-child that
-            //   itself branches: push has_more_siblings so descendants know whether
-            //   to draw │ or space at this new indent level.
-            // - Flat-chain node that branches: the continuation info for the current
-            //   visual column was already pushed when the nearest direct-branch-child
-            //   ancestor was processed. Don't push again or the alignment drifts.
+            // - Root-level branch (no ancestors yet) or a direct-branch-child that itself
+            //   branches: push has_more_siblings so descendants know whether to draw │ or
+            //   space at this new indent level.
+            // - Flat-chain node that branches: the continuation info for the current visual
+            //   column was already pushed when the nearest direct-branch-child ancestor was
+            //   processed. Don't push again or the alignment drifts.
             if direct_branch_child || ancestors_with_more.is_empty() {
                 let mut a = ancestors_with_more.clone();
                 a.push(has_more_siblings);
@@ -588,8 +631,9 @@ fn flatten(
         };
 
         // Push in reverse order so first child is popped first.
-        // direct_branch_child = true only when the parent (this node) is a multi-child node
-        // AND the child is a visible node (not a transparent hidden wrapper).
+        // direct_branch_child = true only when the parent (this node) is a multi-child
+        // node AND the child is a visible node (not a transparent hidden
+        // wrapper).
         for (i, child) in visible_children.iter().enumerate().rev() {
             let is_last_child = i == visible_children.len() - 1;
             stack.push((
@@ -628,7 +672,12 @@ mod tests {
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    fn node(id: &str, role: &str, summary: &str, children: Vec<SessionTreeNode>) -> SessionTreeNode {
+    fn node(
+        id: &str,
+        role: &str,
+        summary: &str,
+        children: Vec<SessionTreeNode>,
+    ) -> SessionTreeNode {
         SessionTreeNode {
             entry_id: id.to_string(),
             entry_type: role.to_string(),
@@ -649,13 +698,17 @@ mod tests {
             .into_iter()
             .map(|n| {
                 let connector = if n.show_connector {
-                    let continuation: String = n.ancestors_with_more.iter()
+                    let continuation: String = n
+                        .ancestors_with_more
+                        .iter()
                         .map(|&more| if more { "│ " } else { "  " })
                         .collect();
                     let tip = if n.is_last { "└─" } else { "├─" };
                     format!("{}{} {}", continuation, tip, n.summary)
                 } else if !n.ancestors_with_more.is_empty() {
-                    let continuation: String = n.ancestors_with_more.iter()
+                    let continuation: String = n
+                        .ancestors_with_more
+                        .iter()
                         .map(|&more| if more { "│ " } else { "  " })
                         .collect();
                     format!("{} {}", continuation, n.summary)
@@ -669,24 +722,22 @@ mod tests {
 
     // ── tests ─────────────────────────────────────────────────────────────────
 
-    /// A completely linear conversation renders flat — no connectors, no indent.
+    /// A completely linear conversation renders flat — no connectors, no
+    /// indent.
     ///
     ///  user: hello
     ///  assistant: hi
     ///  user: how are you
     #[test]
     fn linear_chain_is_flat() {
-        let tree = vec![
-            node("1", "user", "hello",
-                vec![node("2", "assistant", "hi",
-                    vec![node("3", "user", "how are you", vec![])])]),
-        ];
+        let tree = vec![node(
+            "1",
+            "user",
+            "hello",
+            vec![node("2", "assistant", "hi", vec![node("3", "user", "how are you", vec![])])],
+        )];
         let lines = render_lines(&tree);
-        assert_eq!(lines, vec![
-            " hello",
-            " hi",
-            " how are you",
-        ]);
+        assert_eq!(lines, vec![" hello", " hi", " how are you",]);
     }
 
     /// Two branches from a single parent.
@@ -696,18 +747,14 @@ mod tests {
     ///    └─ user: hi
     #[test]
     fn single_branch_point_no_chains() {
-        let tree = vec![
-            node("1", "assistant", "whats up", vec![
-                node("2", "user", "continue", vec![]),
-                node("3", "user", "hi",       vec![]),
-            ]),
-        ];
+        let tree = vec![node(
+            "1",
+            "assistant",
+            "whats up",
+            vec![node("2", "user", "continue", vec![]), node("3", "user", "hi", vec![])],
+        )];
         let lines = render_lines(&tree);
-        assert_eq!(lines, vec![
-            " whats up",
-            "  ├─ continue",
-            "  └─ hi",
-        ]);
+        assert_eq!(lines, vec![" whats up", "  ├─ continue", "  └─ hi",]);
     }
 
     /// Branch point where each child has a flat chain.
@@ -720,26 +767,37 @@ mod tests {
     ///       assistant: hello
     #[test]
     fn branch_with_flat_chains() {
-        let tree = vec![
-            node("1", "assistant", "whats up", vec![
-                node("2", "user", "continue", vec![
-                    node("3", "user",      "continue", vec![
-                        node("4", "user", "continue", vec![])]),
-                ]),
-                node("5", "user", "hi", vec![
-                    node("6", "assistant", "hello", vec![]),
-                ]),
-            ]),
-        ];
+        let tree = vec![node(
+            "1",
+            "assistant",
+            "whats up",
+            vec![
+                node(
+                    "2",
+                    "user",
+                    "continue",
+                    vec![node(
+                        "3",
+                        "user",
+                        "continue",
+                        vec![node("4", "user", "continue", vec![])],
+                    )],
+                ),
+                node("5", "user", "hi", vec![node("6", "assistant", "hello", vec![])]),
+            ],
+        )];
         let lines = render_lines(&tree);
-        assert_eq!(lines, vec![
-            " whats up",
-            "  ├─ continue",  // direct branch child, has_more=true → ├─, ancestors=[false]
-            "  │  continue",  // flat-chain, ancestors=[false,true]  → │ 
-            "  │  continue",  // flat-chain, ancestors=[false,true]  → │ 
-            "  └─ hi",        // direct branch child, is_last        → └─, ancestors=[false]
-            "     hello",     // flat-chain, ancestors=[false,false]  →   
-        ]);
+        assert_eq!(
+            lines,
+            vec![
+                " whats up",
+                "  ├─ continue", // direct branch child, has_more=true → ├─, ancestors=[false]
+                "  │  continue", // flat-chain, ancestors=[false,true]  → │
+                "  │  continue", // flat-chain, ancestors=[false,true]  → │
+                "  └─ hi",       // direct branch child, is_last        → └─, ancestors=[false]
+                "     hello",    // flat-chain, ancestors=[false,false]  →
+            ]
+        );
     }
 
     /// Nested branch: a branch inside a chain inside a branch.
@@ -752,26 +810,37 @@ mod tests {
     ///    └─ e
     #[test]
     fn nested_branch() {
-        let tree = vec![
-            node("root", "user", "root", vec![
-                node("a", "user", "a", vec![
-                    node("b", "user", "b", vec![
-                        node("c", "user", "c", vec![]),
-                        node("d", "user", "d", vec![]),
-                    ]),
-                ]),
+        let tree = vec![node(
+            "root",
+            "user",
+            "root",
+            vec![
+                node(
+                    "a",
+                    "user",
+                    "a",
+                    vec![node(
+                        "b",
+                        "user",
+                        "b",
+                        vec![node("c", "user", "c", vec![]), node("d", "user", "d", vec![])],
+                    )],
+                ),
                 node("e", "user", "e", vec![]),
-            ]),
-        ];
+            ],
+        )];
         let lines = render_lines(&tree);
-        assert_eq!(lines, vec![
-            " root",
-            "  ├─ a",       // branch child, more=true,  ancestors=[false]
-            "  │  b",       // flat-chain,                ancestors=[false, true]
-            "  │ ├─ c",     // nested branch child, more, ancestors=[false, true]
-            "  │ └─ d",     // nested branch child, last, ancestors=[false, true]
-            "  └─ e",       // branch child, last,        ancestors=[false]
-        ]);
+        assert_eq!(
+            lines,
+            vec![
+                " root",
+                "  ├─ a",   // branch child, more=true,  ancestors=[false]
+                "  │  b",   // flat-chain,                ancestors=[false, true]
+                "  │ ├─ c", // nested branch child, more, ancestors=[false, true]
+                "  │ └─ d", // nested branch child, last, ancestors=[false, true]
+                "  └─ e",   // branch child, last,        ancestors=[false]
+            ]
+        );
     }
 
     /// Multiple root nodes render flat at the top level.
@@ -781,13 +850,10 @@ mod tests {
     #[test]
     fn multiple_roots_flat() {
         let tree = vec![
-            node("1", "user", "first session",  vec![]),
+            node("1", "user", "first session", vec![]),
             node("2", "user", "second session", vec![]),
         ];
         let lines = render_lines(&tree);
-        assert_eq!(lines, vec![
-            " first session",
-            " second session",
-        ]);
+        assert_eq!(lines, vec![" first session", " second session",]);
     }
 }

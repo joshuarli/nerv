@@ -80,11 +80,7 @@ impl AuthStorage {
             match &cred {
                 Some(Credential::ApiKey { .. }) => "api_key",
                 Some(Credential::OAuth(o)) => {
-                    if epoch_millis() >= o.expires {
-                        "oauth (expired)"
-                    } else {
-                        "oauth (valid)"
-                    }
+                    if epoch_millis() >= o.expires { "oauth (expired)" } else { "oauth (valid)" }
                 }
                 None => "not found",
             }
@@ -124,7 +120,6 @@ impl AuthStorage {
     }
 }
 
-
 const KEYCHAIN_ACCOUNT: &str = "nerv";
 
 fn keychain_service(provider: &str) -> String {
@@ -135,30 +130,14 @@ fn keychain_set(provider: &str, value: &str) {
     let service = keychain_service(provider);
     // -U updates if exists, creates if not
     let _ = std::process::Command::new("security")
-        .args([
-            "add-generic-password",
-            "-a",
-            KEYCHAIN_ACCOUNT,
-            "-s",
-            &service,
-            "-w",
-            value,
-            "-U",
-        ])
+        .args(["add-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", &service, "-w", value, "-U"])
         .output();
 }
 
 fn keychain_get(provider: &str) -> Option<String> {
     let service = keychain_service(provider);
     let output = std::process::Command::new("security")
-        .args([
-            "find-generic-password",
-            "-a",
-            KEYCHAIN_ACCOUNT,
-            "-s",
-            &service,
-            "-w",
-        ])
+        .args(["find-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", &service, "-w"])
         .output()
         .ok()?;
     if output.status.success() {
@@ -171,16 +150,9 @@ fn keychain_get(provider: &str) -> Option<String> {
 fn keychain_delete(provider: &str) {
     let service = keychain_service(provider);
     let _ = std::process::Command::new("security")
-        .args([
-            "delete-generic-password",
-            "-a",
-            KEYCHAIN_ACCOUNT,
-            "-s",
-            &service,
-        ])
+        .args(["delete-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", &service])
         .output();
 }
-
 
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
@@ -267,16 +239,9 @@ pub fn login_anthropic(
         &verifier,
     );
 
-    let listener =
-        std::net::TcpListener::bind(format!("127.0.0.1:{}", CALLBACK_PORT)).map_err(|e| {
-            format!(
-                "Failed to bind callback server on port {}: {}",
-                CALLBACK_PORT, e
-            )
-        })?;
-    listener
-        .set_nonblocking(false)
-        .map_err(|e| format!("Failed to set blocking: {}", e))?;
+    let listener = std::net::TcpListener::bind(format!("127.0.0.1:{}", CALLBACK_PORT))
+        .map_err(|e| format!("Failed to bind callback server on port {}: {}", CALLBACK_PORT, e))?;
+    listener.set_nonblocking(false).map_err(|e| format!("Failed to set blocking: {}", e))?;
 
     on_url(&auth_url);
 
@@ -291,25 +256,16 @@ pub fn login_anthropic(
 }
 
 fn wait_for_callback(listener: &std::net::TcpListener) -> Result<(String, String), String> {
-    let (mut stream, _addr) = listener
-        .accept()
-        .map_err(|e| format!("Failed to accept callback connection: {}", e))?;
+    let (mut stream, _addr) =
+        listener.accept().map_err(|e| format!("Failed to accept callback connection: {}", e))?;
 
     let mut reader = std::io::BufReader::new(&stream);
     let mut request_line = String::new();
-    reader
-        .read_line(&mut request_line)
-        .map_err(|e| format!("Failed to read request: {}", e))?;
+    reader.read_line(&mut request_line).map_err(|e| format!("Failed to read request: {}", e))?;
 
-    let path = request_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or("Invalid HTTP request")?;
+    let path = request_line.split_whitespace().nth(1).ok_or("Invalid HTTP request")?;
 
-    let query = path
-        .split('?')
-        .nth(1)
-        .ok_or("No query string in callback")?;
+    let query = path.split('?').nth(1).ok_or("No query string in callback")?;
 
     let mut code = None;
     let mut state = None;
@@ -396,10 +352,7 @@ fn parse_token_response(
     let status = response.status();
     if status != 200 {
         let err_body = response.into_body().read_to_string().unwrap_or_default();
-        return Err(format!(
-            "{} failed: HTTP {} — {}",
-            context, status, err_body
-        ));
+        return Err(format!("{} failed: HTTP {} — {}", context, status, err_body));
     }
 
     let data: serde_json::Value = response
@@ -407,14 +360,8 @@ fn parse_token_response(
         .read_json()
         .map_err(|e| format!("{} returned invalid JSON: {}", context, e))?;
 
-    let access = data["access_token"]
-        .as_str()
-        .ok_or("Missing access_token")?
-        .to_string();
-    let refresh = data["refresh_token"]
-        .as_str()
-        .ok_or("Missing refresh_token")?
-        .to_string();
+    let access = data["access_token"].as_str().ok_or("Missing access_token")?.to_string();
+    let refresh = data["refresh_token"].as_str().ok_or("Missing refresh_token")?.to_string();
     let expires_in = data["expires_in"].as_u64().unwrap_or(3600);
 
     Ok(OAuthCredentials {
@@ -441,9 +388,8 @@ fn urlencoded(s: &str) -> String {
     out
 }
 
-const HEX: [char; 16] = [
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F',
-];
+const HEX: [char; 16] =
+    ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'];
 
 fn urldecoded(s: &str) -> String {
     let mut out = Vec::with_capacity(s.len());

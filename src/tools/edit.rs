@@ -14,18 +14,11 @@ pub struct EditTool {
 
 impl EditTool {
     pub fn new(cwd: PathBuf, mutation_queue: Arc<FileMutationQueue>) -> Self {
-        Self {
-            cwd,
-            mutation_queue,
-        }
+        Self { cwd, mutation_queue }
     }
     fn resolve_path(&self, path: &str) -> PathBuf {
         let p = Path::new(path);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            self.cwd.join(p)
-        }
+        if p.is_absolute() { p.to_path_buf() } else { self.cwd.join(p) }
     }
 }
 
@@ -93,7 +86,10 @@ impl AgentTool for EditTool {
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("path").and_then(|v| v.as_str()).is_none() {
-            let keys: Vec<&str> = input.as_object().map(|m| m.keys().map(|k| k.as_str()).collect()).unwrap_or_default();
+            let keys: Vec<&str> = input
+                .as_object()
+                .map(|m| m.keys().map(|k| k.as_str()).collect())
+                .unwrap_or_default();
             return Err(ToolError::InvalidArguments {
                 message: format!("path is required (got keys: {})", keys.join(", ")),
             });
@@ -112,22 +108,16 @@ impl AgentTool for EditTool {
         }
         if has_single {
             if input.get("old_text").and_then(|v| v.as_str()).is_none() {
-                return Err(ToolError::InvalidArguments {
-                    message: "old_text is required".into(),
-                });
+                return Err(ToolError::InvalidArguments { message: "old_text is required".into() });
             }
             if input.get("new_text").and_then(|v| v.as_str()).is_none() {
-                return Err(ToolError::InvalidArguments {
-                    message: "new_text is required".into(),
-                });
+                return Err(ToolError::InvalidArguments { message: "new_text is required".into() });
             }
         }
         if has_multi {
             let arr = input["edits"]
                 .as_array()
-                .ok_or(ToolError::InvalidArguments {
-                    message: "edits must be an array".into(),
-                })?;
+                .ok_or(ToolError::InvalidArguments { message: "edits must be an array".into() })?;
             if arr.is_empty() {
                 return Err(ToolError::InvalidArguments {
                     message: "edits must not be empty".into(),
@@ -149,7 +139,12 @@ impl AgentTool for EditTool {
         Ok(())
     }
 
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        _update: UpdateCallback,
+        _cancel: &CancelFlag,
+    ) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");
         let abs_path = self.resolve_path(path_str);
 
@@ -176,7 +171,7 @@ impl AgentTool for EditTool {
                         content: format!("Error reading {}: {}", path_str, e),
                         details: None,
                         is_error: true,
-                    }
+                    };
                 }
             };
             if bytes.len() > MAX_EDIT_FILE_SIZE {
@@ -193,11 +188,7 @@ impl AgentTool for EditTool {
             }
             let content = String::from_utf8_lossy(&bytes);
             let (bom, content_no_bom) = strip_bom(&content);
-            let line_ending = if content_no_bom.contains("\r\n") {
-                "\r\n"
-            } else {
-                "\n"
-            };
+            let line_ending = if content_no_bom.contains("\r\n") { "\r\n" } else { "\n" };
             let normalized = normalize_crlf(content_no_bom);
 
             if edits.len() == 1 {
@@ -239,8 +230,7 @@ fn apply_single_edit(
             let fuzzy_end_line = fuzzy_line + fuzzy_old.matches('\n').count();
             let orig_lines: Vec<&str> = normalized.lines().collect();
             if fuzzy_end_line < orig_lines.len() {
-                let orig_start: usize =
-                    orig_lines[..fuzzy_line].iter().map(|l| l.len() + 1).sum();
+                let orig_start: usize = orig_lines[..fuzzy_line].iter().map(|l| l.len() + 1).sum();
                 let orig_end: usize = orig_lines[..=fuzzy_end_line]
                     .iter()
                     .map(|l| l.len() + 1)
@@ -335,7 +325,8 @@ fn apply_single_edit(
     }
 }
 
-/// Multi-edit: sort by position, apply with forward cursor, one write + one diff.
+/// Multi-edit: sort by position, apply with forward cursor, one write + one
+/// diff.
 fn apply_multi_edit(
     edits: &[Edit],
     content: &str,
@@ -375,7 +366,7 @@ fn apply_multi_edit(
                             ),
                             details: None,
                             is_error: true,
-                        }
+                        };
                     }
                 };
                 if fuzzy_occurrences.next().is_some() {
@@ -394,10 +385,7 @@ fn apply_multi_edit(
                 let orig_lines: Vec<&str> = normalized.lines().collect();
                 if fuzzy_end_line >= orig_lines.len() {
                     return ToolResult {
-                        content: format!(
-                            "Error: edits[{}].old_text not found in {}",
-                            i, path_str
-                        ),
+                        content: format!("Error: edits[{}].old_text not found in {}", i, path_str),
                         details: None,
                         is_error: true,
                     };
@@ -408,7 +396,8 @@ fn apply_multi_edit(
                     .map(|l| l.len() + 1)
                     .sum::<usize>()
                     .saturating_sub(1);
-                // Replace norm_old with the actual matched slice so apply step uses the right length
+                // Replace norm_old with the actual matched slice so apply step uses the right
+                // length
                 let actual_slice = &normalized[orig_start..orig_end.min(normalized.len())];
                 positioned.push((orig_start, edit, actual_slice.to_string()));
                 continue;
@@ -475,7 +464,9 @@ fn apply_multi_edit(
     );
     ToolResult {
         content: format!("Applied {} edits to {}\n{}", edits.len(), path_str, diff_str),
-        details: Some(serde_json::json!({"diff": diff_str, "display": diff_str, "path": path_str, "edits": edits.len()})),
+        details: Some(
+            serde_json::json!({"diff": diff_str, "display": diff_str, "path": path_str, "edits": edits.len()}),
+        ),
         is_error: false,
     }
 }
@@ -489,7 +480,8 @@ fn strip_bom(content: &str) -> (&str, &str) {
 }
 
 /// Restore line endings and prepend BOM if present.
-/// Takes ownership of content to avoid cloning when bom is empty and file is LF.
+/// Takes ownership of content to avoid cloning when bom is empty and file is
+/// LF.
 fn finalize_content(bom: &str, content: String, line_ending: &str) -> String {
     if line_ending == "\r\n" {
         let mut out = String::with_capacity(bom.len() + content.len() + content.len() / 40);
@@ -514,11 +506,7 @@ fn finalize_content(bom: &str, content: String, line_ending: &str) -> String {
 
 /// Normalize CRLF to LF, avoiding allocation if no CRLFs present.
 fn normalize_crlf(s: &str) -> Cow<'_, str> {
-    if s.contains("\r\n") {
-        Cow::Owned(s.replace("\r\n", "\n"))
-    } else {
-        Cow::Borrowed(s)
-    }
+    if s.contains("\r\n") { Cow::Owned(s.replace("\r\n", "\n")) } else { Cow::Borrowed(s) }
 }
 
 fn normalize_for_fuzzy(s: &str) -> String {

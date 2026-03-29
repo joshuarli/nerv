@@ -47,10 +47,7 @@ impl Provider for MockProvider {
         _cancel: &CancelFlag,
         on_event: &mut dyn FnMut(ProviderEvent),
     ) -> Result<(), nerv::errors::ProviderError> {
-        self.captured_tools
-            .lock()
-            .unwrap()
-            .push(request.tools.clone());
+        self.captured_tools.lock().unwrap().push(request.tools.clone());
         for event in self.responses.lock().unwrap().remove(0) {
             on_event(event);
         }
@@ -77,62 +74,42 @@ impl AgentTool for EchoTool {
     fn validate(&self, _input: &serde_json::Value) -> Result<(), ToolError> {
         Ok(())
     }
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
-        ToolResult::ok(format!(
-            "echo: {}",
-            input["text"].as_str().unwrap_or("(no input)")
-        ))
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        _update: UpdateCallback,
+        _cancel: &CancelFlag,
+    ) -> ToolResult {
+        ToolResult::ok(format!("echo: {}", input["text"].as_str().unwrap_or("(no input)")))
     }
 }
 
 pub fn simple_response(text: &str) -> Vec<ProviderEvent> {
     vec![
-        ProviderEvent::UsageUpdate(Usage {
-            input: 100,
-            output: 20,
-            ..Default::default()
-        }),
+        ProviderEvent::UsageUpdate(Usage { input: 100, output: 20, ..Default::default() }),
         ProviderEvent::TextDelta(text.to_string()),
         ProviderEvent::MessageStop {
             stop_reason: StopReason::EndTurn,
-            usage: Usage {
-                input: 100,
-                output: 20,
-                ..Default::default()
-            },
+            usage: Usage { input: 100, output: 20, ..Default::default() },
         },
     ]
 }
 
 pub fn tool_call_response(tool_id: &str, tool_name: &str, args: &str) -> Vec<ProviderEvent> {
     vec![
-        ProviderEvent::ToolCallStart {
-            id: tool_id.to_string(),
-            name: tool_name.to_string(),
-        },
-        ProviderEvent::ToolCallArgsDelta {
-            id: tool_id.to_string(),
-            delta: args.to_string(),
-        },
-        ProviderEvent::ToolCallEnd {
-            id: tool_id.to_string(),
-        },
+        ProviderEvent::ToolCallStart { id: tool_id.to_string(), name: tool_name.to_string() },
+        ProviderEvent::ToolCallArgsDelta { id: tool_id.to_string(), delta: args.to_string() },
+        ProviderEvent::ToolCallEnd { id: tool_id.to_string() },
         ProviderEvent::MessageStop {
             stop_reason: StopReason::ToolUse,
-            usage: Usage {
-                input: 100,
-                output: 30,
-                ..Default::default()
-            },
+            usage: Usage { input: 100, output: 30, ..Default::default() },
         },
     ]
 }
 
 pub fn error_response(msg: &str) -> Vec<ProviderEvent> {
     vec![ProviderEvent::MessageStop {
-        stop_reason: StopReason::Error {
-            message: msg.to_string(),
-        },
+        stop_reason: StopReason::Error { message: msg.to_string() },
         usage: Usage::default(),
     }]
 }
@@ -143,27 +120,17 @@ pub fn thinking_then_text(thinking: &str, text: &str) -> Vec<ProviderEvent> {
         ProviderEvent::TextDelta(text.to_string()),
         ProviderEvent::MessageStop {
             stop_reason: StopReason::EndTurn,
-            usage: Usage {
-                input: 100,
-                output: 40,
-                ..Default::default()
-            },
+            usage: Usage { input: 100, output: 40, ..Default::default() },
         },
     ]
 }
 
 pub fn chunked_response(chunks: &[&str]) -> Vec<ProviderEvent> {
-    let mut events: Vec<ProviderEvent> = chunks
-        .iter()
-        .map(|c| ProviderEvent::TextDelta(c.to_string()))
-        .collect();
+    let mut events: Vec<ProviderEvent> =
+        chunks.iter().map(|c| ProviderEvent::TextDelta(c.to_string())).collect();
     events.push(ProviderEvent::MessageStop {
         stop_reason: StopReason::EndTurn,
-        usage: Usage {
-            input: 100,
-            output: 20,
-            ..Default::default()
-        },
+        usage: Usage { input: 100, output: 20, ..Default::default() },
     });
     events
 }
@@ -178,12 +145,7 @@ pub fn test_model() -> Model {
         reasoning: false,
         supports_adaptive_thinking: false,
         supports_xhigh: false,
-        pricing: ModelPricing {
-            input: 1.0,
-            output: 2.0,
-            cache_read: 0.0,
-            cache_write: 0.0,
-        },
+        pricing: ModelPricing { input: 1.0, output: 2.0, cache_read: 0.0, cache_write: 0.0 },
     }
 }
 
@@ -216,9 +178,7 @@ pub fn mock_session(
     let model_registry = Arc::new(ModelRegistry::empty());
     let mut tool_registry = ToolRegistry::new();
     if with_echo_tool {
-        tool_registry.register(ToolDefinition {
-            tool: Arc::new(EchoTool),
-        });
+        tool_registry.register(ToolDefinition { tool: Arc::new(EchoTool) });
     }
 
     let session_manager = SessionManager::new(&nerv_dir);

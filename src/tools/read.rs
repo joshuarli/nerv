@@ -21,18 +21,11 @@ pub struct ReadTool {
 
 impl ReadTool {
     pub fn new(cwd: PathBuf) -> Self {
-        Self {
-            cwd,
-            cache: Mutex::new(std::collections::HashMap::new()),
-        }
+        Self { cwd, cache: Mutex::new(std::collections::HashMap::new()) }
     }
     fn resolve_path(&self, path: &str) -> PathBuf {
         let p = Path::new(path);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            self.cwd.join(p)
-        }
+        if p.is_absolute() { p.to_path_buf() } else { self.cwd.join(p) }
     }
 }
 
@@ -57,14 +50,22 @@ impl AgentTool for ReadTool {
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("path").and_then(|v| v.as_str()).is_none() {
-            let keys: Vec<&str> = input.as_object().map(|m| m.keys().map(|s| s.as_str()).collect()).unwrap_or_default();
+            let keys: Vec<&str> = input
+                .as_object()
+                .map(|m| m.keys().map(|s| s.as_str()).collect())
+                .unwrap_or_default();
             return Err(ToolError::InvalidArguments {
                 message: format!("path (string) is required (got keys: {})", keys.join(", ")),
             });
         }
         Ok(())
     }
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        _update: UpdateCallback,
+        _cancel: &CancelFlag,
+    ) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");
         let abs_path = self.resolve_path(path_str);
         let offset = input.get("offset").and_then(|v| v.as_u64()).map(|v| v as usize);
@@ -95,11 +96,16 @@ impl AgentTool for ReadTool {
                             } else {
                                 entry.line_count
                             };
-                            let covered = entry.ranges_served.iter().any(|&(s, e)| s <= req_start && e >= req_end);
+                            let covered = entry
+                                .ranges_served
+                                .iter()
+                                .any(|&(s, e)| s <= req_start && e >= req_end);
                             if covered {
                                 let msg = format!(
                                     "[already read {} lines {}-{} — use content from earlier in this conversation]",
-                                    path_str, req_start + 1, req_end
+                                    path_str,
+                                    req_start + 1,
+                                    req_end
                                 );
                                 return ToolResult::ok_with_details(
                                     msg,
@@ -156,7 +162,13 @@ impl AgentTool for ReadTool {
                 let display = if total_lines == 0 {
                     format!("{} (empty)", path_str)
                 } else if has_range {
-                    format!("{} (lines {}-{} of {})", path_str, start + 1, start + shown, total_lines)
+                    format!(
+                        "{} (lines {}-{} of {})",
+                        path_str,
+                        start + 1,
+                        start + shown,
+                        total_lines
+                    )
                 } else if truncated {
                     format!("{} ({} lines, truncated)", path_str, total_lines)
                 } else {
@@ -184,7 +196,11 @@ impl AgentTool for ReadTool {
             }
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    ToolResult::error(format!("File not found: {} (cwd: {})", path_str, self.cwd.display()))
+                    ToolResult::error(format!(
+                        "File not found: {} (cwd: {})",
+                        path_str,
+                        self.cwd.display()
+                    ))
                 } else {
                     ToolResult::error(format!("Error reading {}: {}", path_str, e))
                 }
@@ -194,17 +210,22 @@ impl AgentTool for ReadTool {
 }
 
 fn digit_width(line_count: usize) -> usize {
-    if line_count < 1000 { 3 }
-    else if line_count < 10000 { 4 }
-    else { 6 }
+    if line_count < 1000 {
+        3
+    } else if line_count < 10000 {
+        4
+    } else {
+        6
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::agent::agent::AgentTool;
     use crate::agent::provider::new_cancel_flag;
-    use std::sync::Arc;
 
     fn make_tool(dir: &Path) -> Arc<ReadTool> {
         Arc::new(ReadTool::new(dir.to_path_buf()))
@@ -216,7 +237,12 @@ mod tests {
         tool.execute(serde_json::json!({"path": path}), cb, &cancel)
     }
 
-    fn read_range(tool: &dyn AgentTool, path: &str, offset: Option<u64>, limit: Option<u64>) -> ToolResult {
+    fn read_range(
+        tool: &dyn AgentTool,
+        path: &str,
+        offset: Option<u64>,
+        limit: Option<u64>,
+    ) -> ToolResult {
         let cb: UpdateCallback = Arc::new(|_| {});
         let cancel = new_cancel_flag();
         let mut args = serde_json::json!({"path": path});
@@ -307,7 +333,11 @@ mod tests {
         assert!(r2.content.contains("unchanged"));
         // Range read for a subset should hit range dedup
         let r3 = read_range(tool.as_ref(), "f.txt", Some(1), Some(1));
-        assert!(r3.content.contains("already read"), "subset range should be deduped: {}", r3.content);
+        assert!(
+            r3.content.contains("already read"),
+            "subset range should be deduped: {}",
+            r3.content
+        );
     }
 
     #[test]
@@ -353,7 +383,11 @@ mod tests {
         assert!(!r1.is_error);
         // Read lines 10-15 — different range, should NOT be deduped
         let r2 = read_range(tool.as_ref(), "f.txt", Some(10), Some(5));
-        assert!(!r2.content.contains("already read"), "non-overlapping range should not be deduped: {}", r2.content);
+        assert!(
+            !r2.content.contains("already read"),
+            "non-overlapping range should not be deduped: {}",
+            r2.content
+        );
         assert!(r2.content.contains("line 10"));
     }
 

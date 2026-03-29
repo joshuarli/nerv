@@ -11,10 +11,7 @@ pub struct StyledText {
 
 impl StyledText {
     pub fn new(style: &'static str, content: impl Into<String>) -> Self {
-        Self {
-            style,
-            content: content.into(),
-        }
+        Self { style, content: content.into() }
     }
 }
 
@@ -26,13 +23,11 @@ impl Component for StyledText {
         let wrapped = wrap_text_with_ansi(&self.content, width);
         wrapped
             .into_iter()
-            .map(|line| {
-                if line.is_empty() {
-                    line
-                } else {
-                    format!("{}{}\x1b[0m", self.style, line)
-                }
-            })
+            .map(
+                |line| {
+                    if line.is_empty() { line } else { format!("{}{}\x1b[0m", self.style, line) }
+                },
+            )
             .collect()
     }
 }

@@ -27,10 +27,8 @@ fn filter_go_test_text(text: &str) -> Option<String> {
 
     // All passing: only "ok" lines, no FAIL lines
     if !text.contains("--- FAIL") && !text.contains("FAIL\t") {
-        let ok_lines: Vec<&str> = text
-            .lines()
-            .filter(|l| l.starts_with("ok  \t") || l.starts_with("ok\t"))
-            .collect();
+        let ok_lines: Vec<&str> =
+            text.lines().filter(|l| l.starts_with("ok  \t") || l.starts_with("ok\t")).collect();
         if !ok_lines.is_empty() {
             return Some(ok_lines.join("\n"));
         }
@@ -40,10 +38,8 @@ fn filter_go_test_text(text: &str) -> Option<String> {
     let failures = extract_go_text_failures(text);
     if failures.is_empty() {
         // Return FAIL summary lines
-        let fail_lines: Vec<&str> = text
-            .lines()
-            .filter(|l| l.starts_with("FAIL\t") || l.starts_with("--- FAIL"))
-            .collect();
+        let fail_lines: Vec<&str> =
+            text.lines().filter(|l| l.starts_with("FAIL\t") || l.starts_with("--- FAIL")).collect();
         if !fail_lines.is_empty() {
             return Some(fail_lines.join("\n"));
         }
@@ -54,11 +50,8 @@ fn filter_go_test_text(text: &str) -> Option<String> {
     let body = failures.join("\n\n");
     // Add package-level FAIL lines
     let pkg_fails: Vec<&str> = text.lines().filter(|l| l.starts_with("FAIL\t")).collect();
-    let tail = if !pkg_fails.is_empty() {
-        format!("\n{}", pkg_fails.join("\n"))
-    } else {
-        String::new()
-    };
+    let tail =
+        if !pkg_fails.is_empty() { format!("\n{}", pkg_fails.join("\n")) } else { String::new() };
     Some(format!("{} failure(s):\n{}{}", count, body, tail))
 }
 
@@ -69,7 +62,8 @@ fn filter_go_test_text(text: &str) -> Option<String> {
 /// output in a HashMap so subtests (`TestFoo/sub`) work correctly.
 ///
 /// Non-verbose output (no `=== RUN` lines) just returns the `--- FAIL:`
-/// markers with no body, which is handled by the fallback in `filter_go_test_text`.
+/// markers with no body, which is handled by the fallback in
+/// `filter_go_test_text`.
 fn extract_go_text_failures(text: &str) -> Vec<String> {
     let mut failures: Vec<String> = Vec::new();
     // test_name → accumulated output lines
@@ -78,19 +72,14 @@ fn extract_go_text_failures(text: &str) -> Vec<String> {
     let mut current_test: Option<String> = None;
 
     for line in text.lines() {
-        if let Some(name) = line
-            .strip_prefix("=== RUN   ")
-            .or_else(|| line.strip_prefix("=== RUN\t"))
+        if let Some(name) =
+            line.strip_prefix("=== RUN   ").or_else(|| line.strip_prefix("=== RUN\t"))
         {
             current_test = Some(name.trim().to_string());
         } else if line.starts_with("--- FAIL:") {
             // Extract test name from "--- FAIL: TestName (0.00s)"
-            let name = line
-                .trim_start_matches('-')
-                .trim()
-                .strip_prefix("FAIL:")
-                .unwrap_or("")
-                .trim();
+            let name =
+                line.trim_start_matches('-').trim().strip_prefix("FAIL:").unwrap_or("").trim();
             let name = name.split_whitespace().next().unwrap_or(name).to_string();
             let body = test_output.remove(&name).unwrap_or_default();
             let body_str = body.join("\n");
@@ -109,17 +98,15 @@ fn extract_go_text_failures(text: &str) -> Vec<String> {
         } else if let Some(ref name) = current_test {
             // Accumulate output for this test (skip blank lines to save space)
             if !line.trim().is_empty() {
-                test_output
-                    .entry(name.clone())
-                    .or_default()
-                    .push(line.to_string());
+                test_output.entry(name.clone()).or_default().push(line.to_string());
             }
         }
     }
     failures
 }
 
-// ── JSON (NDJSON) format ──────────────────────────────────────────────────────
+// ── JSON (NDJSON) format
+// ──────────────────────────────────────────────────────
 
 #[derive(Default)]
 struct GoTestAgg {
@@ -160,9 +147,7 @@ fn filter_go_test_json(text: &str) -> Option<String> {
                 }
                 "output" => {
                     if !output.trim().is_empty() {
-                        entry
-                            .current_output
-                            .push(output.trim_end_matches('\n').to_string());
+                        entry.current_output.push(output.trim_end_matches('\n').to_string());
                     }
                 }
                 "pass" => {
@@ -198,11 +183,7 @@ fn filter_go_test_json(text: &str) -> Option<String> {
     let total_pass: usize = agg.packages.values().map(|p| p.passed).sum();
 
     if total_fail == 0 {
-        return Some(format!(
-            "{} passed across {} package(s)",
-            total_pass,
-            agg.packages.len()
-        ));
+        return Some(format!("{} passed across {} package(s)", total_pass, agg.packages.len()));
     }
 
     let mut parts: Vec<String> = Vec::new();
@@ -214,12 +195,7 @@ fn filter_go_test_json(text: &str) -> Option<String> {
             }
         }
     }
-    Some(format!(
-        "{} failure(s), {} passed:\n{}",
-        total_fail,
-        total_pass,
-        parts.join("\n")
-    ))
+    Some(format!("{} failure(s), {} passed:\n{}", total_fail, total_pass, parts.join("\n")))
 }
 
 #[cfg(test)]

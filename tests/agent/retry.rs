@@ -5,9 +5,7 @@ use nerv::core::retry::{RetryManager, RetrySettings};
 fn make_error_message(error_text: &str) -> AssistantMessage {
     AssistantMessage {
         content: vec![],
-        stop_reason: StopReason::Error {
-            message: error_text.into(),
-        },
+        stop_reason: StopReason::Error { message: error_text.into() },
         usage: None,
         timestamp: 0,
     }
@@ -41,10 +39,7 @@ fn non_retryable_errors() {
 
 #[test]
 fn disabled_retry_never_retries() {
-    let mgr = RetryManager::new(RetrySettings {
-        enabled: false,
-        ..RetrySettings::default()
-    });
+    let mgr = RetryManager::new(RetrySettings { enabled: false, ..RetrySettings::default() });
     assert!(!mgr.is_retryable(&make_error_message("overloaded")));
 }
 

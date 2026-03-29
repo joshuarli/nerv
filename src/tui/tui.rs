@@ -33,9 +33,7 @@ impl Default for Container {
 
 impl Container {
     pub fn new() -> Self {
-        Self {
-            children: Vec::new(),
-        }
+        Self { children: Vec::new() }
     }
 
     pub fn push(&mut self, child: Box<dyn Component>) {
@@ -311,14 +309,13 @@ fn escape_complete(seq: &[u8]) -> bool {
     }
     match seq[1] {
         b'[' => seq[2..].iter().any(|&b| (0x40..=0x7E).contains(&b)),
-        b']' | b'_' => {
-            seq[2..].contains(&0x07) || seq.windows(2).any(|w| w == [0x1B, b'\\'])
-        }
+        b']' | b'_' => seq[2..].contains(&0x07) || seq.windows(2).any(|w| w == [0x1B, b'\\']),
         _ => true,
     }
 }
 
-/// Extract the last active SGR sequence from a string, to re-emit before appending.
+/// Extract the last active SGR sequence from a string, to re-emit before
+/// appending.
 fn last_sgr(s: &str) -> String {
     let mut result = String::new();
     let bytes = s.as_bytes();

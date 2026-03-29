@@ -1,8 +1,9 @@
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
 use crate::tui::keys;
 use crate::tui::tui::{CURSOR_MARKER, Component};
 use crate::tui::utils::visible_width;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 pub struct Editor {
     /// Logical lines of text (split by \n).
@@ -177,8 +178,7 @@ impl Editor {
     fn push_undo(&mut self) {
         const MAX_UNDO: usize = 50;
         self.undo_stack.truncate(self.undo_index + 1);
-        self.undo_stack
-            .push((self.lines.clone(), self.cursor_line, self.cursor_col));
+        self.undo_stack.push((self.lines.clone(), self.cursor_line, self.cursor_col));
         // Drop the oldest entry when over the cap so memory is bounded.
         if self.undo_stack.len() > MAX_UNDO {
             self.undo_stack.remove(0);
@@ -204,7 +204,6 @@ impl Editor {
         }
     }
 
-
     /// Grapheme count up to byte offset in a string.
     fn grapheme_count_at(s: &str, byte_offset: usize) -> usize {
         s[..byte_offset.min(s.len())].graphemes(true).count()
@@ -212,10 +211,7 @@ impl Editor {
 
     /// Byte offset of the nth grapheme in a string.
     fn byte_offset_of_grapheme(s: &str, n: usize) -> usize {
-        s.grapheme_indices(true)
-            .nth(n)
-            .map(|(i, _)| i)
-            .unwrap_or(s.len())
+        s.grapheme_indices(true).nth(n).map(|(i, _)| i).unwrap_or(s.len())
     }
 
     /// Number of graphemes in a string.
@@ -476,16 +472,11 @@ impl Editor {
         }
     }
 
-
     fn layout_text(&self, content_width: u16) -> Vec<LayoutLine> {
         let mut layout = Vec::new();
 
         if self.is_empty() {
-            layout.push(LayoutLine {
-                text: String::new(),
-                has_cursor: true,
-                cursor_pos: 0,
-            });
+            layout.push(LayoutLine { text: String::new(), has_cursor: true, cursor_pos: 0 });
             return layout;
         }
 
@@ -582,17 +573,9 @@ fn wrap_line_with_cursor(
             let text = line[chunk_start..chunk_end].to_string();
 
             let has_cursor = is_cursor_line && cursor_col >= chunk_start && cursor_col < chunk_end;
-            let cursor_pos = if has_cursor {
-                cursor_col - chunk_start
-            } else {
-                0
-            };
+            let cursor_pos = if has_cursor { cursor_col - chunk_start } else { 0 };
 
-            chunks.push(LayoutLine {
-                text,
-                has_cursor,
-                cursor_pos,
-            });
+            chunks.push(LayoutLine { text, has_cursor, cursor_pos });
 
             chunk_start = byte_offset;
             chunk_width = 0;
@@ -604,16 +587,8 @@ fn wrap_line_with_cursor(
     // Last chunk
     let text = line[chunk_start..].to_string();
     let has_cursor = is_cursor_line && cursor_col >= chunk_start;
-    let cursor_pos = if has_cursor {
-        cursor_col - chunk_start
-    } else {
-        0
-    };
-    chunks.push(LayoutLine {
-        text,
-        has_cursor,
-        cursor_pos,
-    });
+    let cursor_pos = if has_cursor { cursor_col - chunk_start } else { 0 };
+    chunks.push(LayoutLine { text, has_cursor, cursor_pos });
 
     chunks
 }

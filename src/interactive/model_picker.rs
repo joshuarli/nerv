@@ -1,8 +1,8 @@
 /// Full-screen model picker for `/model`.
 ///
-/// Implements [`FullscreenList`] so it can be driven by [`run_fullscreen_picker`].
-/// Typing filters models by name/id/provider; up/down moves the cursor; Enter
-/// returns the selected model ID.
+/// Implements [`FullscreenList`] so it can be driven by
+/// [`run_fullscreen_picker`]. Typing filters models by name/id/provider;
+/// up/down moves the cursor; Enter returns the selected model ID.
 use std::io::Write;
 
 use super::fullscreen_picker::FullscreenList;
@@ -74,11 +74,7 @@ impl FullscreenList for ModelPicker {
         let total = filtered.len();
 
         // Scroll so cursor stays visible.
-        let scroll = if self.cursor >= list_rows {
-            self.cursor - list_rows + 1
-        } else {
-            0
-        };
+        let scroll = if self.cursor >= list_rows { self.cursor - list_rows + 1 } else { 0 };
 
         let mut last_provider = "";
         let mut visual_row = 0usize;
@@ -139,7 +135,8 @@ impl FullscreenList for ModelPicker {
         }
 
         if total == 0 {
-            let msg = format!("  {DIM}no models match{RESET}", DIM = theme::DIM, RESET = theme::RESET);
+            let msg =
+                format!("  {DIM}no models match{RESET}", DIM = theme::DIM, RESET = theme::RESET);
             let _ = write!(out, "\x1b[4;1H{}", msg); // overwrite row 4
         }
 

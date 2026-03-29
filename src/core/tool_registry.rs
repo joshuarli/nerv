@@ -1,5 +1,6 @@
-use crate::agent::agent::AgentTool;
 use std::sync::Arc;
+
+use crate::agent::agent::AgentTool;
 
 pub struct ToolDefinition {
     pub tool: Arc<dyn AgentTool>,
@@ -18,10 +19,7 @@ impl Default for ToolRegistry {
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        Self {
-            all: Vec::new(),
-            active: Vec::new(),
-        }
+        Self { all: Vec::new(), active: Vec::new() }
     }
 
     pub fn register(&mut self, def: ToolDefinition) {
@@ -40,10 +38,7 @@ impl ToolRegistry {
         self.active
             .iter()
             .filter_map(|name| {
-                self.all
-                    .iter()
-                    .find(|(n, _)| n == name)
-                    .map(|(_, d)| d.tool.clone())
+                self.all.iter().find(|(n, _)| n == name).map(|(_, d)| d.tool.clone())
             })
             .collect()
     }
@@ -52,17 +47,12 @@ impl ToolRegistry {
         self.all
             .iter()
             .filter_map(|(name, def)| {
-                def.tool
-                    .prompt_snippet()
-                    .map(|s| (name.clone(), s.to_string()))
+                def.tool.prompt_snippet().map(|s| (name.clone(), s.to_string()))
             })
             .collect()
     }
 
     pub fn prompt_guidelines(&self) -> Vec<String> {
-        self.all
-            .iter()
-            .flat_map(|(_, def)| def.tool.prompt_guidelines())
-            .collect()
+        self.all.iter().flat_map(|(_, def)| def.tool.prompt_guidelines()).collect()
     }
 }

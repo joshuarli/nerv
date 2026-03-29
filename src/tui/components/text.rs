@@ -8,9 +8,7 @@ pub struct Text {
 
 impl Text {
     pub fn new(content: impl Into<String>) -> Self {
-        Self {
-            content: content.into(),
-        }
+        Self { content: content.into() }
     }
 
     pub fn set_content(&mut self, content: impl Into<String>) {
@@ -31,9 +29,7 @@ pub struct TruncatedText {
 
 impl TruncatedText {
     pub fn new(content: impl Into<String>) -> Self {
-        Self {
-            content: content.into(),
-        }
+        Self { content: content.into() }
     }
 
     pub fn set_content(&mut self, content: impl Into<String>) {

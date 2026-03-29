@@ -15,10 +15,13 @@
 /// ```
 ///
 /// Matchers:
-///   - `onPermissionDenied`  — a tool call was denied (user said no, or permission check blocked it)
+///   - `onPermissionDenied`  — a tool call was denied (user said no, or
+///     permission check blocked it)
 ///   - `onCompactionDone`    — a compaction cycle completed (auto or manual)
-///   - `onResponseComplete`  — the model finished a turn and is waiting for user input
-///   - `onUserInput`         — the user submitted a prompt (useful for clearing "done" indicators)
+///   - `onResponseComplete`  — the model finished a turn and is waiting for
+///     user input
+///   - `onUserInput`         — the user submitted a prompt (useful for clearing
+///     "done" indicators)
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

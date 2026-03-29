@@ -40,14 +40,22 @@ impl AgentTool for FindTool {
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("pattern").and_then(|v| v.as_str()).is_none() {
-            let keys: Vec<&str> = input.as_object().map(|m| m.keys().map(|s| s.as_str()).collect()).unwrap_or_default();
+            let keys: Vec<&str> = input
+                .as_object()
+                .map(|m| m.keys().map(|s| s.as_str()).collect())
+                .unwrap_or_default();
             return Err(ToolError::InvalidArguments {
                 message: format!("pattern (string) is required (got keys: {})", keys.join(", ")),
             });
         }
         Ok(())
     }
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        _update: UpdateCallback,
+        _cancel: &CancelFlag,
+    ) -> ToolResult {
         let pattern = input["pattern"].as_str().unwrap_or("");
         let path = input["path"].as_str().unwrap_or(".");
         let resolved_path = self.resolve_path(path);
@@ -74,7 +82,8 @@ impl AgentTool for FindTool {
                 if content.trim().is_empty() {
                     ToolResult::ok("No files found")
                 } else {
-                    let file_count = content.lines()
+                    let file_count = content
+                        .lines()
                         .filter(|l| !l.starts_with("[stderr]") && !l.is_empty())
                         .count();
                     let display = format!("{} files", file_count);

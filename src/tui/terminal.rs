@@ -6,7 +6,8 @@ pub trait Terminal: Send {
     fn stop(&mut self);
     fn restart(&mut self);
     fn write_bytes(&mut self, data: &[u8]);
-    /// Write text to the main screen scrollback (exits alt screen, prints, re-enters).
+    /// Write text to the main screen scrollback (exits alt screen, prints,
+    /// re-enters).
     fn dump_scrollback(&mut self, text: &str);
     fn columns(&self) -> u16;
     fn rows(&self) -> u16;
@@ -29,11 +30,7 @@ impl Default for ProcessTerminal {
 
 impl ProcessTerminal {
     pub fn new() -> Self {
-        Self {
-            stdout: io::stdout(),
-            original_termios: None,
-            kitty_active: false,
-        }
+        Self { stdout: io::stdout(), original_termios: None, kitty_active: false }
     }
 }
 

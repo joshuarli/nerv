@@ -28,12 +28,7 @@ impl ProviderError {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::RateLimited { .. }
-                | Self::Overloaded
-                | Self::Server {
-                    status: 500..=599,
-                    ..
-                }
+            Self::RateLimited { .. } | Self::Overloaded | Self::Server { status: 500..=599, .. }
         )
     }
 }
@@ -53,10 +48,7 @@ pub enum ToolError {
     ValidationFailed { message: String },
 
     #[error("process failed (exit {exit_code:?}): {message}")]
-    ProcessFailed {
-        exit_code: Option<i32>,
-        message: String,
-    },
+    ProcessFailed { exit_code: Option<i32>, message: String },
 
     #[error("tool execution cancelled")]
     Cancelled,

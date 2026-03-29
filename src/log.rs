@@ -59,12 +59,6 @@ fn write_log(level: Level, label: &str, msg: &str) {
         return;
     }
     if let Some(ref mut file) = *LOG_FILE.lock().unwrap() {
-        let _ = writeln!(
-            file,
-            "{} [{}] {}",
-            crate::session::types::now_iso(),
-            label,
-            msg
-        );
+        let _ = writeln!(file, "{} [{}] {}", crate::session::types::now_iso(), label, msg);
     }
 }

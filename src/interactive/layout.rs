@@ -38,7 +38,8 @@ impl AppLayout {
         self.cached_fixed.get()
     }
 
-    /// Render just the fixed UI (statusbar queue, btw panel, editor, statusbar, footer).
+    /// Render just the fixed UI (statusbar queue, btw panel, editor, statusbar,
+    /// footer).
     pub fn render_fixed(&self, width: u16) -> Vec<String> {
         let mut lines = Vec::new();
         lines.extend(self.statusbar.render_queue(width));

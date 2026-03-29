@@ -290,9 +290,7 @@ fn build_hl(line: &str, state: &mut HlState, rules: &Rules) -> Vec<Hl> {
             }
             // UPPER_SNAKE_CASE constants
             if i - start >= 2
-                && id
-                    .iter()
-                    .all(|&b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+                && id.iter().all(|&b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
                 && id.iter().any(|&b| b.is_ascii_uppercase())
             {
                 for b in &mut hl[start..i] {
@@ -423,7 +421,6 @@ fn apply_hl_html(line: &str, hl: &[Hl]) -> String {
     out
 }
 
-
 macro_rules! s {
     ($o:expr, $c:expr, $m:expr) => {
         ($o, $c, $m)
@@ -479,11 +476,7 @@ static PYTHON: Rules = Rules {
 static GO: Rules = Rules {
     line_comment: "//",
     block_comment: ("/*", "*/"),
-    strings: &[
-        s!("`", "`", true),
-        s!("\"", "\"", false),
-        s!("'", "'", false),
-    ],
+    strings: &[s!("`", "`", true), s!("\"", "\"", false), s!("'", "'", false)],
     keywords: &[
         "break",
         "case",
@@ -546,11 +539,7 @@ static GO: Rules = Rules {
 static TS: Rules = Rules {
     line_comment: "//",
     block_comment: ("/*", "*/"),
-    strings: &[
-        s!("`", "`", true),
-        s!("\"", "\"", false),
-        s!("'", "'", false),
-    ],
+    strings: &[s!("`", "`", true), s!("\"", "\"", false), s!("'", "'", false)],
     keywords: &[
         "abstract",
         "as",
@@ -630,11 +619,7 @@ static TS: Rules = Rules {
 static JS: Rules = Rules {
     line_comment: "//",
     block_comment: ("/*", "*/"),
-    strings: &[
-        s!("`", "`", true),
-        s!("\"", "\"", false),
-        s!("'", "'", false),
-    ],
+    strings: &[s!("`", "`", true), s!("\"", "\"", false), s!("'", "'", false)],
     keywords: &[
         "async",
         "await",

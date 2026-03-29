@@ -49,10 +49,7 @@ fn measure_allocs<F: FnOnce() -> R, R>(f: F) -> (R, AllocStats) {
     TL_ACTIVE.with(|a| a.set(true));
     let result = f();
     TL_ACTIVE.with(|a| a.set(false));
-    let stats = AllocStats {
-        count: TL_COUNT.with(|c| c.get()),
-        bytes: TL_BYTES.with(|b| b.get()),
-    };
+    let stats = AllocStats { count: TL_COUNT.with(|c| c.get()), bytes: TL_BYTES.with(|b| b.get()) };
     (result, stats)
 }
 
@@ -77,22 +74,12 @@ fn read_100_lines_allocs() {
     // Warm up (first call may trigger lazy init)
     let _ = tool.execute(input.clone(), update.clone(), &noop_cancel());
 
-    let (result, stats) = measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
+    let (result, stats) =
+        measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
     assert!(!result.is_error);
-    eprintln!(
-        "read 100 lines: {} allocs, {} bytes",
-        stats.count, stats.bytes
-    );
-    assert!(
-        stats.count < 50,
-        "read 100 lines: too many allocs ({})",
-        stats.count
-    );
-    assert!(
-        stats.bytes < 30_000,
-        "read 100 lines: too many bytes ({})",
-        stats.bytes
-    );
+    eprintln!("read 100 lines: {} allocs, {} bytes", stats.count, stats.bytes);
+    assert!(stats.count < 50, "read 100 lines: too many allocs ({})", stats.count);
+    assert!(stats.bytes < 30_000, "read 100 lines: too many bytes ({})", stats.bytes);
 }
 
 #[test]
@@ -116,22 +103,12 @@ fn edit_single_500_lines_allocs() {
 
     // Measure
     std::fs::write(tmp.path().join("code.rs"), &original).unwrap();
-    let (result, stats) = measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
+    let (result, stats) =
+        measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
     assert!(!result.is_error, "{}", result.content);
-    eprintln!(
-        "edit single 500 lines: {} allocs, {} bytes",
-        stats.count, stats.bytes
-    );
-    assert!(
-        stats.count < 100,
-        "edit single: too many allocs ({})",
-        stats.count
-    );
-    assert!(
-        stats.bytes < 500_000,
-        "edit single: too many bytes ({})",
-        stats.bytes
-    );
+    eprintln!("edit single 500 lines: {} allocs, {} bytes", stats.count, stats.bytes);
+    assert!(stats.count < 100, "edit single: too many allocs ({})", stats.count);
+    assert!(stats.bytes < 500_000, "edit single: too many bytes ({})", stats.bytes);
 }
 
 #[test]
@@ -161,53 +138,26 @@ fn edit_multi_5x_500_lines_allocs() {
 
     // Measure
     std::fs::write(tmp.path().join("code.rs"), &original).unwrap();
-    let (result, stats) = measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
+    let (result, stats) =
+        measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
     assert!(!result.is_error, "{}", result.content);
-    eprintln!(
-        "edit multi 5x 500 lines: {} allocs, {} bytes",
-        stats.count, stats.bytes
-    );
-    assert!(
-        stats.count < 150,
-        "edit multi: too many allocs ({})",
-        stats.count
-    );
-    assert!(
-        stats.bytes < 1_000_000,
-        "edit multi: too many bytes ({})",
-        stats.bytes
-    );
+    eprintln!("edit multi 5x 500 lines: {} allocs, {} bytes", stats.count, stats.bytes);
+    assert!(stats.count < 150, "edit multi: too many allocs ({})", stats.count);
+    assert!(stats.bytes < 1_000_000, "edit multi: too many bytes ({})", stats.bytes);
 }
 
 #[test]
 fn diff_2000_lines_allocs() {
-    let old: String = (1..=2000)
-        .map(|i| format!("line {}\n", i))
-        .collect();
-    let new = old
-        .replace("line 100\n", "CHANGED\n")
-        .replace("line 1500\n", "CHANGED\n");
+    let old: String = (1..=2000).map(|i| format!("line {}\n", i)).collect();
+    let new = old.replace("line 100\n", "CHANGED\n").replace("line 1500\n", "CHANGED\n");
 
     // Warm up
     let _ = nerv::tools::diff::unified_diff(&old, &new, "a", "b");
 
-    let (_, stats) = measure_allocs(|| {
-        nerv::tools::diff::unified_diff(&old, &new, "a", "b")
-    });
-    eprintln!(
-        "diff 2000 lines: {} allocs, {} bytes",
-        stats.count, stats.bytes
-    );
-    assert!(
-        stats.count < 50,
-        "diff: too many allocs ({})",
-        stats.count
-    );
-    assert!(
-        stats.bytes < 2_000_000,
-        "diff: too many bytes ({})",
-        stats.bytes
-    );
+    let (_, stats) = measure_allocs(|| nerv::tools::diff::unified_diff(&old, &new, "a", "b"));
+    eprintln!("diff 2000 lines: {} allocs, {} bytes", stats.count, stats.bytes);
+    assert!(stats.count < 50, "diff: too many allocs ({})", stats.count);
+    assert!(stats.bytes < 2_000_000, "diff: too many bytes ({})", stats.bytes);
 }
 
 #[test]
@@ -222,17 +172,11 @@ fn write_10kb_allocs() {
     // Warm up
     let _ = tool.execute(input.clone(), update.clone(), &noop_cancel());
 
-    let (result, stats) = measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
+    let (result, stats) =
+        measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
     assert!(!result.is_error);
-    eprintln!(
-        "write 10kb: {} allocs, {} bytes",
-        stats.count, stats.bytes
-    );
-    assert!(
-        stats.count < 100,
-        "write: too many allocs ({})",
-        stats.count
-    );
+    eprintln!("write 10kb: {} allocs, {} bytes", stats.count, stats.bytes);
+    assert!(stats.count < 100, "write: too many allocs ({})", stats.count);
 }
 
 #[test]
@@ -259,14 +203,16 @@ fn edit_lf_vs_crlf_overhead() {
     std::fs::write(tmp.path().join("test.txt"), &lf_content).unwrap();
     let _ = tool.execute(input.clone(), update.clone(), &noop_cancel()); // warm up
     std::fs::write(tmp.path().join("test.txt"), &lf_content).unwrap();
-    let (r1, lf_stats) = measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
+    let (r1, lf_stats) =
+        measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
     assert!(!r1.is_error, "{}", r1.content);
 
     // Measure CRLF
     std::fs::write(tmp.path().join("test.txt"), &crlf_content).unwrap();
     let _ = tool.execute(input.clone(), update.clone(), &noop_cancel()); // warm up
     std::fs::write(tmp.path().join("test.txt"), &crlf_content).unwrap();
-    let (r2, crlf_stats) = measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
+    let (r2, crlf_stats) =
+        measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
     assert!(!r2.is_error, "{}", r2.content);
 
     eprintln!(
@@ -277,6 +223,7 @@ fn edit_lf_vs_crlf_overhead() {
     assert!(
         lf_stats.bytes < crlf_stats.bytes,
         "LF ({} bytes) should allocate less than CRLF ({} bytes)",
-        lf_stats.bytes, crlf_stats.bytes,
+        lf_stats.bytes,
+        crlf_stats.bytes,
     );
 }

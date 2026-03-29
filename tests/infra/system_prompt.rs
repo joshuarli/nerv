@@ -1,8 +1,9 @@
 //! System prompt construction tests.
 
+use std::path::{Path, PathBuf};
+
 use nerv::core::resource_loader::{ContextFile, LoadedResources};
 use nerv::core::system_prompt::build_system_prompt;
-use std::path::{Path, PathBuf};
 
 fn empty_resources() -> LoadedResources {
     LoadedResources {
@@ -46,10 +47,7 @@ fn custom_system_prompt_replaces_default() {
 #[test]
 fn tool_snippets_included() {
     let resources = empty_resources();
-    let snippets = vec![(
-        "read".to_string(),
-        "read files with line numbers".to_string(),
-    )];
+    let snippets = vec![("read".to_string(), "read files with line numbers".to_string())];
     let prompt = build_system_prompt(Path::new("/tmp"), &resources, &["read"], &snippets, &[]);
 
     assert!(prompt.contains("read: read files with line numbers"));

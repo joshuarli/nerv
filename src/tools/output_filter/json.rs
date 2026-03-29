@@ -26,10 +26,7 @@ pub fn extract_json_schema(text: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(trimmed).ok()?;
     let schema = render_schema(&v, 0);
     let original_bytes = trimmed.len();
-    Some(format!(
-        "[JSON schema — {} bytes compressed to schema]\n{}",
-        original_bytes, schema
-    ))
+    Some(format!("[JSON schema — {} bytes compressed to schema]\n{}", original_bytes, schema))
 }
 
 fn render_schema(v: &serde_json::Value, depth: usize) -> String {
@@ -80,9 +77,7 @@ fn render_schema(v: &serde_json::Value, depth: usize) -> String {
             let closing = "  ".repeat(depth);
             let fields: Vec<String> = map
                 .iter()
-                .map(|(k, val)| {
-                    format!("{}\"{}\": {}", indent, k, render_schema(val, depth + 1))
-                })
+                .map(|(k, val)| format!("{}\"{}\": {}", indent, k, render_schema(val, depth + 1)))
                 .collect();
             format!("{{\n{}\n{}}}", fields.join(",\n"), closing)
         }
@@ -143,9 +138,8 @@ mod tests {
     #[test]
     fn large_json_array_root_compressed() {
         // Top-level array (not object)
-        let arr: Vec<serde_json::Value> = (0..100)
-            .map(|i| serde_json::json!({"id": i, "val": format!("item{}", i)}))
-            .collect();
+        let arr: Vec<serde_json::Value> =
+            (0..100).map(|i| serde_json::json!({"id": i, "val": format!("item{}", i)})).collect();
         let text = serde_json::to_string_pretty(&arr).unwrap();
         assert!(text.len() >= MIN_CHARS, "test data must exceed threshold");
 
@@ -160,7 +154,7 @@ mod tests {
     fn array_exactly_two_items_no_truncation_note() {
         // Array with exactly MAX_ARRAY_ITEMS items — no "... N more" line
         let arr = serde_json::json!([
-            "x".repeat(600),  // need total > MIN_CHARS
+            "x".repeat(600), // need total > MIN_CHARS
             "y".repeat(600),
             "z".repeat(600),
             "w".repeat(600),
@@ -198,7 +192,8 @@ mod tests {
 
     #[test]
     fn valid_json_not_starting_with_brace_or_bracket_returns_none() {
-        // A JSON number or string at top level — we skip these (not interesting schemas)
+        // A JSON number or string at top level — we skip these (not interesting
+        // schemas)
         let text = format!("\"{}\"", "x".repeat(MIN_CHARS));
         assert!(extract_json_schema(&text).is_none());
     }
@@ -206,8 +201,8 @@ mod tests {
     #[test]
     fn empty_object_renders() {
         let text = format!("{{}} {}", "x".repeat(MIN_CHARS));
-        // Won't parse as valid JSON because of trailing text, so returns None — that's fine.
-        // Test the render_schema path for empty object directly.
+        // Won't parse as valid JSON because of trailing text, so returns None — that's
+        // fine. Test the render_schema path for empty object directly.
         let v = serde_json::json!({});
         assert_eq!(render_schema(&v, 0), "{}");
     }

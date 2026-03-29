@@ -57,14 +57,22 @@ impl AgentTool for GrepTool {
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("pattern").and_then(|v| v.as_str()).is_none() {
-            let keys: Vec<&str> = input.as_object().map(|m| m.keys().map(|s| s.as_str()).collect()).unwrap_or_default();
+            let keys: Vec<&str> = input
+                .as_object()
+                .map(|m| m.keys().map(|s| s.as_str()).collect())
+                .unwrap_or_default();
             return Err(ToolError::InvalidArguments {
                 message: format!("pattern (string) is required (got keys: {})", keys.join(", ")),
             });
         }
         Ok(())
     }
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        _update: UpdateCallback,
+        _cancel: &CancelFlag,
+    ) -> ToolResult {
         let pattern = input["pattern"].as_str().unwrap_or("");
         let path = input["path"].as_str().unwrap_or(".");
         let resolved_path = self.resolve_path(path);
@@ -75,14 +83,14 @@ impl AgentTool for GrepTool {
         let literal = input.get("literal").and_then(|v| v.as_bool()).unwrap_or(false);
         let context = input.get("context").and_then(|v| v.as_u64()).unwrap_or(3);
         let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
-        // Output mode flags — mutually exclusive; files_with_matches takes precedence over count
-        let files_with_matches = input.get("files_with_matches").and_then(|v| v.as_bool()).unwrap_or(false);
+        // Output mode flags — mutually exclusive; files_with_matches takes precedence
+        // over count
+        let files_with_matches =
+            input.get("files_with_matches").and_then(|v| v.as_bool()).unwrap_or(false);
         let count_mode = input.get("count").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let mut cmd = Command::new("rg");
-        cmd.arg("--color=never")
-            .arg(format!("--max-count={}", limit))
-            .current_dir(&self.cwd);
+        cmd.arg("--color=never").arg(format!("--max-count={}", limit)).current_dir(&self.cwd);
 
         if files_with_matches {
             // -l: only filenames; no context lines or line numbers needed
@@ -92,9 +100,7 @@ impl AgentTool for GrepTool {
             cmd.arg("--count");
         } else {
             // Normal mode: annotated matches with context
-            cmd.arg("--no-heading")
-                .arg("--line-number")
-                .arg(format!("--context={}", context));
+            cmd.arg("--no-heading").arg("--line-number").arg(format!("--context={}", context));
         }
 
         if ignore_case {
@@ -127,8 +133,9 @@ impl AgentTool for GrepTool {
                 }
                 let tr = truncate_tail(&output.stdout, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
 
-                // Truncate long lines to keep grep output compact (not needed in files/count modes
-                // since those lines are always short, but harmless to apply uniformly)
+                // Truncate long lines to keep grep output compact (not needed in files/count
+                // modes since those lines are always short, but harmless to
+                // apply uniformly)
                 let mut content = truncate_long_lines(&tr.content, GREP_MAX_LINE_LENGTH);
                 // Surface any warnings/errors rg emitted on stderr
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -147,8 +154,9 @@ impl AgentTool for GrepTool {
                     }
                 } else if count_mode {
                     // Each line is "file:N"; sum the N values
-                    let total: u64 = content.lines()
-                        .filter_map(|l| l.rfind(':').and_then(|i| l[i+1..].parse::<u64>().ok()))
+                    let total: u64 = content
+                        .lines()
+                        .filter_map(|l| l.rfind(':').and_then(|i| l[i + 1..].parse::<u64>().ok()))
                         .sum();
                     if tr.truncated {
                         format!("{} matches across files (truncated)", total)
@@ -156,9 +164,8 @@ impl AgentTool for GrepTool {
                         format!("{} matches across files", total)
                     }
                 } else {
-                    let match_count = content.lines()
-                        .filter(|l| !l.starts_with("--") && !l.is_empty())
-                        .count();
+                    let match_count =
+                        content.lines().filter(|l| !l.starts_with("--") && !l.is_empty()).count();
                     if tr.truncated {
                         format!("{} matches (truncated)", match_count)
                     } else {

@@ -1,7 +1,8 @@
-use crossbeam_channel as channel;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+
+use crossbeam_channel as channel;
 
 use super::layout::AppLayout;
 use super::theme;
@@ -21,10 +22,7 @@ pub enum PickerRequest {
         repo_root: Option<String>,
     },
     /// Open the session tree selector.
-    TreeSelector {
-        tree: Vec<SessionTreeNode>,
-        current_leaf: Option<String>,
-    },
+    TreeSelector { tree: Vec<SessionTreeNode>, current_leaf: Option<String> },
     /// Open the model picker.
     ModelPicker,
     /// Open the /btw ephemeral overlay.
@@ -47,7 +45,8 @@ pub struct InteractiveMode {
     current_thinking: ThinkingLevel,
     current_effort: Option<EffortLevel>,
     model_registry: Arc<ModelRegistry>,
-    /// Shared provider registry — cloned Arc from the session, used by the /btw overlay.
+    /// Shared provider registry — cloned Arc from the session, used by the /btw
+    /// overlay.
     pub provider_registry: Arc<RwLock<ProviderRegistry>>,
     /// Snapshot of the full agent state as of the last AgentEnd — used by /btw.
     messages_snapshot: Vec<AgentMessage>,
@@ -55,7 +54,8 @@ pub struct InteractiveMode {
     tools_snapshot: Vec<std::sync::Arc<dyn crate::agent::agent::AgentTool>>,
     skills: Vec<crate::core::skills::Skill>,
     repo_root: Option<String>,
-    /// Stable repo fingerprint (SHA of initial commit) — rename-safe session filter.
+    /// Stable repo fingerprint (SHA of initial commit) — rename-safe session
+    /// filter.
     repo_id: Option<String>,
     pub session_id: Option<String>,
     pub status_message: Option<String>,
@@ -79,14 +79,17 @@ pub struct InteractiveMode {
     pub pending_permission_details: Option<(String, serde_json::Value)>,
     /// Plan mode: read-only research mode, no file mutations.
     pub plan_mode: bool,
-    /// Current auto-compact threshold (0–100). Mirrors what was last sent to the session.
+    /// Current auto-compact threshold (0–100). Mirrors what was last sent to
+    /// the session.
     pub compact_threshold: u8,
-    /// Directories the user has granted full access to (shared with the session thread).
+    /// Directories the user has granted full access to (shared with the session
+    /// thread).
     pub allowed_dirs: Arc<Mutex<Vec<PathBuf>>>,
     /// Shared cancel flag — set this to interrupt a running stream immediately.
     cancel_flag: CancelFlag,
-    /// Shared compact threshold (percent 0–100) — written directly so `/compact at N`
-    /// takes effect before the next turn without going through cmd_tx.
+    /// Shared compact threshold (percent 0–100) — written directly so `/compact
+    /// at N` takes effect before the next turn without going through
+    /// cmd_tx.
     compact_threshold_arc: Arc<AtomicU32>,
 }
 
@@ -211,20 +214,11 @@ impl InteractiveMode {
                     self.status_is_error = true;
                 }
             },
-            AgentSessionEvent::PermissionRequest {
-                tool,
-                args,
-                reason,
-                response_tx,
-                ..
-            } => {
+            AgentSessionEvent::PermissionRequest { tool, args, reason, response_tx, .. } => {
                 // Show the full command/path so the user can make an informed decision.
                 // For bash, pull out the command string directly; for others show the reason.
                 let detail = if tool == "bash" {
-                    args["command"]
-                        .as_str()
-                        .unwrap_or(&reason)
-                        .to_string()
+                    args["command"].as_str().unwrap_or(&reason).to_string()
                 } else {
                     reason.clone()
                 };
@@ -286,13 +280,9 @@ impl InteractiveMode {
             }
             AgentSessionEvent::WorktreeCreated { path } => {
                 layout.footer.set_cwd(&path.to_string_lossy());
-                self.status_message =
-                    Some(format!("Worktree created: {}", path.display()));
+                self.status_message = Some(format!("Worktree created: {}", path.display()));
             }
-            AgentSessionEvent::WorktreeMerged {
-                original_path,
-                message,
-            } => {
+            AgentSessionEvent::WorktreeMerged { original_path, message } => {
                 layout.footer.set_cwd(&original_path.to_string_lossy());
                 self.status_message = Some(message);
             }
@@ -307,7 +297,14 @@ impl InteractiveMode {
                     layout.footer.set_session_name(None);
                 }
             }
-            AgentSessionEvent::SessionLoaded { messages, cost_usd, total_input, total_output, api_calls, input_history } => {
+            AgentSessionEvent::SessionLoaded {
+                messages,
+                cost_usd,
+                total_input,
+                total_output,
+                api_calls,
+                input_history,
+            } => {
                 // Dump full history to terminal scrollback
                 let mut scrollback = String::new();
                 for msg in &messages {
@@ -362,11 +359,8 @@ impl InteractiveMode {
 
                 // Show recent context via ChatWriter
                 layout.chat.clear();
-                let recent = if messages.len() > 6 {
-                    &messages[messages.len() - 6..]
-                } else {
-                    &messages
-                };
+                let recent =
+                    if messages.len() > 6 { &messages[messages.len() - 6..] } else { &messages };
                 for msg in recent {
                     match msg {
                         AgentMessage::User { content, .. } => {
@@ -399,9 +393,7 @@ impl InteractiveMode {
                                 }
                             }
                         }
-                        AgentMessage::ToolResult {
-                            content, is_error, ..
-                        } => {
+                        AgentMessage::ToolResult { content, is_error, .. } => {
                             let text: String = content
                                 .iter()
                                 .filter_map(|c| match c {
@@ -418,13 +410,12 @@ impl InteractiveMode {
                     }
                 }
                 // Estimate context tokens from loaded messages
-                let context_tokens: usize = messages
-                    .iter()
-                    .map(crate::compaction::estimate_tokens)
-                    .sum();
+                let context_tokens: usize =
+                    messages.iter().map(crate::compaction::estimate_tokens).sum();
                 layout.footer.reset_context();
                 layout.footer.set_context_used(context_tokens as u32);
-                // Restore accumulated stats from the session DB (after reset_context clears them).
+                // Restore accumulated stats from the session DB (after reset_context clears
+                // them).
                 layout.footer.restore_stats(cost_usd, total_input, total_output, api_calls);
 
                 self.status_message = if messages.is_empty() {
@@ -451,11 +442,7 @@ impl InteractiveMode {
                 layout.footer.set_compacting(true);
                 tui.request_render(false);
             }
-            AgentSessionEvent::AutoCompactionEnd {
-                summary,
-                will_retry,
-                messages,
-            } => {
+            AgentSessionEvent::AutoCompactionEnd { summary, will_retry, messages } => {
                 layout.footer.set_compacting(false);
                 self.is_compacting = false;
                 if will_retry {
@@ -550,9 +537,7 @@ impl InteractiveMode {
                                     }
                                 }
                             }
-                            AgentMessage::ToolResult {
-                                content, is_error, ..
-                            } => {
+                            AgentMessage::ToolResult { content, is_error, .. } => {
                                 let text: String = content
                                     .iter()
                                     .filter_map(|c| match c {
@@ -573,10 +558,8 @@ impl InteractiveMode {
                     // Preserve all running stats — reset_context() zeroes them.
                     let (prior_cost, prior_input, prior_output, prior_calls) =
                         layout.footer.snapshot_stats();
-                    let context_tokens: usize = messages
-                        .iter()
-                        .map(crate::compaction::estimate_tokens)
-                        .sum();
+                    let context_tokens: usize =
+                        messages.iter().map(crate::compaction::estimate_tokens).sum();
                     layout.footer.reset_context();
                     layout.footer.restore_stats(prior_cost, prior_input, prior_output, prior_calls);
                     layout.footer.set_context_used(context_tokens as u32);
@@ -622,9 +605,7 @@ impl InteractiveMode {
                     self.editing_queue_idx = None;
                     let _ = self.cmd_tx.send(SessionCommand::Prompt { text: msg });
                 }
-                layout
-                    .statusbar
-                    .set_queue(&self.pending_messages, self.editing_queue_idx);
+                layout.statusbar.set_queue(&self.pending_messages, self.editing_queue_idx);
                 tui.request_render(false);
             }
             AgentEvent::MessageStart { message } => {
@@ -653,9 +634,7 @@ impl InteractiveMode {
                     StreamDelta::ToolCallArgsStart { .. } => {}
                     StreamDelta::ToolCallArgsDelta { .. } => {}
                 }
-                layout
-                    .statusbar
-                    .set_output_tokens(layout.chat.streaming_len() as u32 / 4);
+                layout.statusbar.set_output_tokens(layout.chat.streaming_len() as u32 / 4);
                 tui.request_render(false);
             }
             AgentEvent::MessageEnd { message } => {
@@ -675,7 +654,8 @@ impl InteractiveMode {
                     .next();
                 layout.chat.finish_stream(&text, thinking.as_deref());
 
-                // Output tokens: use API value if available, otherwise chars/4 heuristic (local models)
+                // Output tokens: use API value if available, otherwise chars/4 heuristic (local
+                // models)
                 let raw = message.usage.clone().unwrap_or_default();
                 let output_tokens = if raw.output > 0 {
                     raw.output
@@ -758,7 +738,8 @@ impl InteractiveMode {
             return None;
         }
 
-        // Fire onUserInput hooks (e.g. reset tmux window colour set by onResponseComplete).
+        // Fire onUserInput hooks (e.g. reset tmux window colour set by
+        // onResponseComplete).
         {
             let cfg = crate::core::config::NervConfig::load(crate::nerv_dir());
             crate::core::notifications::fire(
@@ -796,7 +777,8 @@ impl InteractiveMode {
         }
     }
 
-    /// Replace `/skillname` tokens inside `text` with the matching skill's content.
+    /// Replace `/skillname` tokens inside `text` with the matching skill's
+    /// content.
     fn expand_inline_skills(&self, text: String) -> String {
         expand_inline_skills_impl(text, &self.skills)
     }
@@ -819,12 +801,9 @@ impl InteractiveMode {
                         // this before each auto-compact check).
                         self.compact_threshold_arc.store(pct as u32, Ordering::Relaxed);
                         // Also send through the channel so the session persists it to DB.
-                        let _ = self
-                            .cmd_tx
-                            .send(SessionCommand::SetCompactThreshold { pct });
+                        let _ = self.cmd_tx.send(SessionCommand::SetCompactThreshold { pct });
                     } else {
-                        self.status_message =
-                            Some("Usage: /compact at <1-100>".into());
+                        self.status_message = Some("Usage: /compact at <1-100>".into());
                     }
                 } else if args == "off" || args == "false" || args == "0" {
                     let _ = self.cmd_tx.send(SessionCommand::SetAutoCompact { enabled: false });
@@ -835,13 +814,9 @@ impl InteractiveMode {
                     // can pick up the Compact command without waiting for it to finish.
                     self.cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                     let _ = self.cmd_tx.send(SessionCommand::Abort);
-                    let _ = self.cmd_tx.send(SessionCommand::Compact {
-                        custom_instructions: None,
-                    });
+                    let _ = self.cmd_tx.send(SessionCommand::Compact { custom_instructions: None });
                 } else {
-                    self.status_message = Some(
-                        "Usage: /compact [on|off|at <1-100>]".into(),
-                    );
+                    self.status_message = Some("Usage: /compact [on|off|at <1-100>]".into());
                 }
             }
             "/model" => {
@@ -877,22 +852,14 @@ impl InteractiveMode {
                         "on" | "true" | "1" => ThinkingLevel::On,
                         "off" | "false" | "0" => ThinkingLevel::Off,
                         _ => {
-                            self.status_message = Some(
-                                "Usage: /think [on|off]".into(),
-                            );
+                            self.status_message = Some("Usage: /think [on|off]".into());
                             return None;
                         }
                     }
                 };
-                let _ = self
-                    .cmd_tx
-                    .try_send(SessionCommand::SetThinkingLevel { level: next });
+                let _ = self.cmd_tx.try_send(SessionCommand::SetThinkingLevel { level: next });
                 self.current_thinking = next;
-                let label = if next == ThinkingLevel::On {
-                    "Thinking on"
-                } else {
-                    "Thinking off"
-                };
+                let label = if next == ThinkingLevel::On { "Thinking on" } else { "Thinking off" };
                 self.status_message = Some(label.into());
             }
             "/effort" => {
@@ -914,20 +881,20 @@ impl InteractiveMode {
                         "high" => Some(EffortLevel::High),
                         "max" => Some(EffortLevel::Max),
                         _ => {
-                            self.status_message = Some(
-                                "Usage: /effort [off|low|medium|high|max]".into(),
-                            );
+                            self.status_message =
+                                Some("Usage: /effort [off|low|medium|high|max]".into());
                             return None;
                         }
                     }
                 };
-                let _ = self
-                    .cmd_tx
-                    .try_send(SessionCommand::SetEffortLevel { level: next });
+                let _ = self.cmd_tx.try_send(SessionCommand::SetEffortLevel { level: next });
                 self.current_effort = next;
                 let label = match next {
                     None => "Effort: off".into(),
-                    Some(e) => format!("Effort: {:?}", e).to_lowercase().replace("some(", "").replace(")", ""),
+                    Some(e) => format!("Effort: {:?}", e)
+                        .to_lowercase()
+                        .replace("some(", "")
+                        .replace(")", ""),
                 };
                 self.status_message = Some(format!("Effort: {}", label));
             }
@@ -975,9 +942,7 @@ impl InteractiveMode {
                         repo_id: self.repo_id.clone(),
                     });
                 } else {
-                    let _ = self.cmd_tx.send(SessionCommand::LoadSession {
-                        id: args.to_string(),
-                    });
+                    let _ = self.cmd_tx.send(SessionCommand::LoadSession { id: args.to_string() });
                 }
             }
             "/wt" => {
@@ -1003,15 +968,11 @@ impl InteractiveMode {
             "/login" => {
                 let provider = if args.is_empty() { "anthropic" } else { args };
                 self.status_message = Some(format!("Starting {} login...", provider));
-                let _ = self.cmd_tx.send(SessionCommand::Login {
-                    provider: provider.to_string(),
-                });
+                let _ = self.cmd_tx.send(SessionCommand::Login { provider: provider.to_string() });
             }
             "/logout" => {
                 let provider = if args.is_empty() { "anthropic" } else { args };
-                let _ = self.cmd_tx.send(SessionCommand::Logout {
-                    provider: provider.to_string(),
-                });
+                let _ = self.cmd_tx.send(SessionCommand::Logout { provider: provider.to_string() });
             }
             "/fork" => {
                 let _ = self.cmd_tx.send(SessionCommand::ForkSession);
@@ -1070,14 +1031,15 @@ impl InteractiveMode {
                         help.push_str(&format!("\n /{}  — {}", skill.name, skill.description));
                     }
                 }
-                help.push_str("\n\nKeys: Enter=send  Shift/Ctrl+Enter=newline  Shift+Tab=think  ^S=tree  Esc/^C=quit  ^G=$EDITOR");
+                help.push_str(
+                    "\n\nKeys: Enter=send  Shift/Ctrl+Enter=newline  Shift+Tab=think  ^S=tree  Esc/^C=quit  ^G=$EDITOR",
+                );
                 self.status_message = Some(help);
             }
             _ => {
                 // Check for skill commands: /skill:name or /name (if matches a skill)
-                let skill_name = command
-                    .strip_prefix("/skill:")
-                    .or_else(|| command.strip_prefix("/"));
+                let skill_name =
+                    command.strip_prefix("/skill:").or_else(|| command.strip_prefix("/"));
 
                 if let Some(name) = skill_name
                     && let Some(skill) = self.skills.iter().find(|s| s.name == name)
@@ -1176,10 +1138,7 @@ impl InteractiveMode {
     }
 
     pub fn model_name(&self) -> &str {
-        self.current_model
-            .as_ref()
-            .map(|m| m.name.as_str())
-            .unwrap_or("no model")
+        self.current_model.as_ref().map(|m| m.name.as_str()).unwrap_or("no model")
     }
 
     /// Start editing a queued message — load it into the editor.
@@ -1197,7 +1156,8 @@ impl InteractiveMode {
         Some(self.pending_messages[idx].clone())
     }
 
-    /// Move down in the queue. Returns text for editor, or None to exit queue editing.
+    /// Move down in the queue. Returns text for editor, or None to exit queue
+    /// editing.
     pub fn edit_queue_down(&mut self) -> Option<String> {
         let idx = self.editing_queue_idx?;
         if idx + 1 < self.pending_messages.len() {
@@ -1223,9 +1183,7 @@ impl InteractiveMode {
     pub fn toggle_plan_mode(&mut self) -> bool {
         let enabled = !self.plan_mode;
         self.plan_mode = enabled;
-        let _ = self
-            .cmd_tx
-            .try_send(SessionCommand::SetPlanMode { enabled });
+        let _ = self.cmd_tx.try_send(SessionCommand::SetPlanMode { enabled });
         enabled
     }
 
@@ -1275,8 +1233,8 @@ impl InteractiveMode {
 
 /// Replace `/skillname` tokens inside `text` with the matching skill's content.
 /// Tokens are only expanded when preceded by whitespace (or at start of string)
-/// and followed by whitespace, punctuation, or end-of-string — so URLs and paths
-/// like `/usr/bin` are left untouched.
+/// and followed by whitespace, punctuation, or end-of-string — so URLs and
+/// paths like `/usr/bin` are left untouched.
 fn expand_inline_skills_impl(text: String, skills: &[crate::core::skills::Skill]) -> String {
     if skills.is_empty() || !text.contains('/') {
         return text;
@@ -1315,9 +1273,7 @@ fn expand_inline_skills_impl(text: String, skills: &[crate::core::skills::Skill]
 }
 
 fn count_tree_nodes(tree: &[crate::session::types::SessionTreeNode]) -> usize {
-    tree.iter()
-        .map(|n| 1 + count_tree_nodes(&n.children))
-        .sum()
+    tree.iter().map(|n| 1 + count_tree_nodes(&n.children)).sum()
 }
 
 /// Copy `text` to the system clipboard.
@@ -1332,11 +1288,8 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
     let candidates: &[&[&str]] = &[&["pbcopy"]];
 
     #[cfg(target_os = "linux")]
-    let candidates: &[&[&str]] = &[
-        &["wl-copy"],
-        &["xclip", "-selection", "clipboard"],
-        &["xsel", "--clipboard", "--input"],
-    ];
+    let candidates: &[&[&str]] =
+        &[&["wl-copy"], &["xclip", "-selection", "clipboard"], &["xsel", "--clipboard", "--input"]];
 
     for argv in candidates {
         let (prog, args) = argv.split_first().unwrap();
@@ -1370,9 +1323,10 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::expand_inline_skills_impl;
     use crate::core::skills::Skill;
-    use std::path::PathBuf;
 
     fn skill(name: &str, content: &str) -> Skill {
         Skill {

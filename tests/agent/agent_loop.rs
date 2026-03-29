@@ -1,10 +1,11 @@
 use std::sync::{Arc, RwLock};
 
-use crate::helpers::*;
 use nerv::agent::agent::{Agent, AgentTool, UpdateCallback};
 use nerv::agent::convert::convert_to_llm;
 use nerv::agent::provider::*;
 use nerv::agent::types::*;
+
+use crate::helpers::*;
 
 fn setup_agent(responses: Vec<Vec<ProviderEvent>>) -> Agent {
     let provider = Arc::new(MockProvider::new(responses));
@@ -17,10 +18,7 @@ fn setup_agent(responses: Vec<Vec<ProviderEvent>>) -> Agent {
 }
 
 fn user_msg(text: &str) -> AgentMessage {
-    AgentMessage::User {
-        content: vec![ContentItem::Text { text: text.into() }],
-        timestamp: 1000,
-    }
+    AgentMessage::User { content: vec![ContentItem::Text { text: text.into() }], timestamp: 1000 }
 }
 
 fn collect_events(
@@ -39,18 +37,12 @@ fn simple_text_response_produces_correct_messages() {
 
     assert_eq!(messages.len(), 2);
     assert!(matches!(messages[0], AgentMessage::User { .. }));
-    let AgentMessage::Assistant(ref a) = messages[1] else {
-        panic!("expected assistant")
-    };
+    let AgentMessage::Assistant(ref a) = messages[1] else { panic!("expected assistant") };
     assert_eq!(a.text_content(), "Hello!");
 
     assert!(events.iter().any(|e| matches!(e, AgentEvent::AgentStart)));
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, AgentEvent::AgentEnd { .. })));
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, AgentEvent::MessageEnd { .. })));
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::AgentEnd { .. })));
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::MessageEnd { .. })));
 }
 
 #[test]
@@ -64,17 +56,13 @@ fn tool_call_triggers_execution() {
     let (messages, events) = collect_events(&mut agent, vec![user_msg("test")]);
 
     assert!(messages.len() >= 3);
-    assert!(messages
-        .iter()
-        .any(|m| matches!(m, AgentMessage::ToolResult { .. })));
+    assert!(messages.iter().any(|m| matches!(m, AgentMessage::ToolResult { .. })));
 
     assert!(events.iter().any(|e| matches!(
         e,
         AgentEvent::ToolExecutionStart { name, .. } if name == "echo"
     )));
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, AgentEvent::ToolExecutionEnd { .. })));
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolExecutionEnd { .. })));
 }
 
 #[test]
@@ -94,31 +82,15 @@ fn error_response_stops_loop() {
 fn multiple_tool_calls_execute_sequentially() {
     let mut agent = setup_agent(vec![
         vec![
-            ProviderEvent::ToolCallStart {
-                id: "c1".into(),
-                name: "echo".into(),
-            },
-            ProviderEvent::ToolCallArgsDelta {
-                id: "c1".into(),
-                delta: r#"{"text":"a"}"#.into(),
-            },
+            ProviderEvent::ToolCallStart { id: "c1".into(), name: "echo".into() },
+            ProviderEvent::ToolCallArgsDelta { id: "c1".into(), delta: r#"{"text":"a"}"#.into() },
             ProviderEvent::ToolCallEnd { id: "c1".into() },
-            ProviderEvent::ToolCallStart {
-                id: "c2".into(),
-                name: "echo".into(),
-            },
-            ProviderEvent::ToolCallArgsDelta {
-                id: "c2".into(),
-                delta: r#"{"text":"b"}"#.into(),
-            },
+            ProviderEvent::ToolCallStart { id: "c2".into(), name: "echo".into() },
+            ProviderEvent::ToolCallArgsDelta { id: "c2".into(), delta: r#"{"text":"b"}"#.into() },
             ProviderEvent::ToolCallEnd { id: "c2".into() },
             ProviderEvent::MessageStop {
                 stop_reason: StopReason::ToolUse,
-                usage: Usage {
-                    input: 100,
-                    output: 30,
-                    ..Default::default()
-                },
+                usage: Usage { input: 100, output: 30, ..Default::default() },
             },
         ],
         simple_response("all done"),
@@ -127,25 +99,20 @@ fn multiple_tool_calls_execute_sequentially() {
 
     let (messages, _) = collect_events(&mut agent, vec![user_msg("test")]);
 
-    let tool_results: Vec<_> = messages
-        .iter()
-        .filter(|m| matches!(m, AgentMessage::ToolResult { .. }))
-        .collect();
+    let tool_results: Vec<_> =
+        messages.iter().filter(|m| matches!(m, AgentMessage::ToolResult { .. })).collect();
     assert_eq!(tool_results.len(), 2);
 }
 
 #[test]
 fn unknown_tool_returns_error() {
-    let mut agent = setup_agent(vec![
-        tool_call_response("c1", "nonexistent", r#"{}"#),
-        simple_response("ok"),
-    ]);
+    let mut agent =
+        setup_agent(vec![tool_call_response("c1", "nonexistent", r#"{}"#), simple_response("ok")]);
 
     let (messages, _) = collect_events(&mut agent, vec![user_msg("test")]);
 
-    let has_error = messages.iter().any(|m| {
-        matches!(m, AgentMessage::ToolResult { is_error: true, .. })
-    });
+    let has_error =
+        messages.iter().any(|m| matches!(m, AgentMessage::ToolResult { is_error: true, .. }));
     assert!(has_error, "should get error for unknown tool");
 }
 
@@ -164,9 +131,7 @@ fn convert_to_llm_round_trips_messages() {
     let messages = vec![
         user_msg("hello"),
         AgentMessage::Assistant(AssistantMessage {
-            content: vec![ContentBlock::Text {
-                text: "hi".into(),
-            }],
+            content: vec![ContentBlock::Text { text: "hi".into() }],
             stop_reason: StopReason::EndTurn,
             usage: None,
             timestamp: 1000,
@@ -184,11 +149,24 @@ fn cancel_flag_stops_agent() {
         cancel: nerv::agent::provider::CancelFlag,
     }
     impl AgentTool for CancelTool {
-        fn name(&self) -> &str { "cancel" }
-        fn description(&self) -> &str { "Sets cancel flag" }
-        fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({"type":"object"}) }
-        fn validate(&self, _: &serde_json::Value) -> Result<(), nerv::errors::ToolError> { Ok(()) }
-        fn execute(&self, _: serde_json::Value, _: UpdateCallback, _: &nerv::agent::provider::CancelFlag) -> nerv::agent::agent::ToolResult {
+        fn name(&self) -> &str {
+            "cancel"
+        }
+        fn description(&self) -> &str {
+            "Sets cancel flag"
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type":"object"})
+        }
+        fn validate(&self, _: &serde_json::Value) -> Result<(), nerv::errors::ToolError> {
+            Ok(())
+        }
+        fn execute(
+            &self,
+            _: serde_json::Value,
+            _: UpdateCallback,
+            _: &nerv::agent::provider::CancelFlag,
+        ) -> nerv::agent::agent::ToolResult {
             self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             nerv::agent::agent::ToolResult::ok("cancelled")
         }
@@ -205,11 +183,13 @@ fn cancel_flag_stops_agent() {
 
     // After the tool sets cancel, the agent should not make another API call
     // The loop exits because has_tool_calls && !cancel is false
-    let assistant_count = messages
-        .iter()
-        .filter(|m| matches!(m, AgentMessage::Assistant(_)))
-        .count();
-    assert!(assistant_count <= 2, "cancel should prevent further turns, got {} assistants", assistant_count);
+    let assistant_count =
+        messages.iter().filter(|m| matches!(m, AgentMessage::Assistant(_))).count();
+    assert!(
+        assistant_count <= 2,
+        "cancel should prevent further turns, got {} assistants",
+        assistant_count
+    );
 }
 
 #[test]
@@ -222,18 +202,11 @@ fn turn_events_bracket_each_turn() {
 
     let (_, events) = collect_events(&mut agent, vec![user_msg("test")]);
 
-    let turn_starts = events
-        .iter()
-        .filter(|e| matches!(e, AgentEvent::TurnStart))
-        .count();
-    let turn_ends = events
-        .iter()
-        .filter(|e| matches!(e, AgentEvent::TurnEnd))
-        .count();
+    let turn_starts = events.iter().filter(|e| matches!(e, AgentEvent::TurnStart)).count();
+    let turn_ends = events.iter().filter(|e| matches!(e, AgentEvent::TurnEnd)).count();
     assert!(turn_starts >= 2, "should have at least 2 turns");
     assert_eq!(turn_starts, turn_ends, "starts and ends should match");
 }
-
 
 /// Collect messages delivered to persist_fn during a prompt.
 fn collect_persisted(
@@ -311,7 +284,6 @@ fn persist_fn_order_matches_returned_messages() {
     }
 }
 
-
 #[test]
 fn tool_descriptions_pruned_after_threshold() {
     let provider = Arc::new(MockProvider::new(vec![simple_response("done")]));
@@ -377,9 +349,12 @@ fn tool_descriptions_kept_for_early_turns() {
     }
 }
 
-// ── Output gate tests ─────────────────────────────────────────────────────────
+// ── Output gate tests
+// ─────────────────────────────────────────────────────────
 
-use nerv::agent::agent::{OutputGateDecision, OutputGateInfo, ToolResult, OUTPUT_GATE_THRESHOLD_BYTES};
+use nerv::agent::agent::{
+    OUTPUT_GATE_THRESHOLD_BYTES, OutputGateDecision, OutputGateInfo, ToolResult,
+};
 
 /// Mock "bash" tool: always returns the given fixed output.
 struct BigBashTool {
@@ -387,13 +362,24 @@ struct BigBashTool {
 }
 
 impl AgentTool for BigBashTool {
-    fn name(&self) -> &str { "bash" }
-    fn description(&self) -> &str { "Mock bash" }
+    fn name(&self) -> &str {
+        "bash"
+    }
+    fn description(&self) -> &str {
+        "Mock bash"
+    }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({"type":"object","properties":{"command":{"type":"string"}}})
     }
-    fn validate(&self, _: &serde_json::Value) -> Result<(), nerv::errors::ToolError> { Ok(()) }
-    fn execute(&self, _input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
+    fn validate(&self, _: &serde_json::Value) -> Result<(), nerv::errors::ToolError> {
+        Ok(())
+    }
+    fn execute(
+        &self,
+        _input: serde_json::Value,
+        _update: UpdateCallback,
+        _cancel: &CancelFlag,
+    ) -> ToolResult {
         ToolResult::ok_with_details(
             self.output.clone(),
             serde_json::json!({"exit_code": 0, "filtered": true}),
@@ -417,10 +403,7 @@ fn output_gate_not_triggered_below_threshold() {
     // Output below 50 KB → gate should never fire.
     let small = "x".repeat(1_000);
     let mut agent = setup_agent_with_bash(
-        vec![
-            tool_call_response("c1", "bash", r#"{"command":"echo hi"}"#),
-            simple_response("Done"),
-        ],
+        vec![tool_call_response("c1", "bash", r#"{"command":"echo hi"}"#), simple_response("Done")],
         small.clone(),
     );
     let gate_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -430,13 +413,19 @@ fn output_gate_not_triggered_below_threshold() {
         OutputGateDecision::Allow
     }));
     let (messages, _) = collect_events(&mut agent, vec![user_msg("run bash")]);
-    assert!(!gate_fired.load(std::sync::atomic::Ordering::SeqCst), "gate should not fire for small output");
+    assert!(
+        !gate_fired.load(std::sync::atomic::Ordering::SeqCst),
+        "gate should not fire for small output"
+    );
     // The bash result should be the small string.
     let tool_result = messages.iter().find(|m| matches!(m, AgentMessage::ToolResult { .. }));
     assert!(tool_result.is_some());
     if let Some(AgentMessage::ToolResult { content, is_error, .. }) = tool_result {
         assert!(!is_error, "small output should not be an error");
-        let text = match &content[0] { ContentItem::Text { text } => text, _ => panic!() };
+        let text = match &content[0] {
+            ContentItem::Text { text } => text,
+            _ => panic!(),
+        };
         assert!(text.contains(&small[..100]));
     }
 }
@@ -461,18 +450,25 @@ fn output_gate_allow_passes_result_through() {
         OutputGateDecision::Allow
     }));
     let (messages, _) = collect_events(&mut agent, vec![user_msg("run bash")]);
-    assert!(gate_fired.load(std::sync::atomic::Ordering::SeqCst), "gate must fire for large output");
+    assert!(
+        gate_fired.load(std::sync::atomic::Ordering::SeqCst),
+        "gate must fire for large output"
+    );
     let tool_result = messages.iter().find(|m| matches!(m, AgentMessage::ToolResult { .. }));
     if let Some(AgentMessage::ToolResult { content, is_error, .. }) = tool_result {
         assert!(!is_error, "allowed output should not be an error");
-        let text = match &content[0] { ContentItem::Text { text } => text, _ => panic!() };
+        let text = match &content[0] {
+            ContentItem::Text { text } => text,
+            _ => panic!(),
+        };
         assert_eq!(text, &big, "content should pass through unchanged when allowed");
     }
 }
 
 #[test]
 fn output_gate_deny_replaces_with_hint() {
-    // Output above 50 KB, gate returns Deny → content replaced with actionable hint, is_error = true.
+    // Output above 50 KB, gate returns Deny → content replaced with actionable
+    // hint, is_error = true.
     let big = "B".repeat(OUTPUT_GATE_THRESHOLD_BYTES + 1_000);
     let mut agent = setup_agent_with_bash(
         vec![
@@ -481,15 +477,16 @@ fn output_gate_deny_replaces_with_hint() {
         ],
         big,
     );
-    agent.state.output_gate_fn = Some(Arc::new(|_info: OutputGateInfo| {
-        OutputGateDecision::Deny
-    }));
+    agent.state.output_gate_fn = Some(Arc::new(|_info: OutputGateInfo| OutputGateDecision::Deny));
     let (messages, _) = collect_events(&mut agent, vec![user_msg("run bash")]);
     let tool_result = messages.iter().find(|m| matches!(m, AgentMessage::ToolResult { .. }));
     assert!(tool_result.is_some(), "tool result message must exist");
     if let Some(AgentMessage::ToolResult { content, is_error, .. }) = tool_result {
         assert!(is_error, "denied output should be marked as error");
-        let text = match &content[0] { ContentItem::Text { text } => text, _ => panic!() };
+        let text = match &content[0] {
+            ContentItem::Text { text } => text,
+            _ => panic!(),
+        };
         assert!(text.contains("output-too-large"), "hint should mention output-too-large");
         assert!(text.contains("find / -type f"), "hint should include the command");
         assert!(text.contains("grep"), "hint should suggest grep");

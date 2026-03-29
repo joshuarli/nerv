@@ -46,23 +46,15 @@ pub fn truncate_tail(data: &[u8], max_bytes: usize, max_lines: usize) -> Truncat
     // Truncate by bytes
     let start = data.len() - max_bytes;
     // Find a UTF-8 boundary
-    let start = (start..data.len())
-        .find(|&i| std::str::from_utf8(&data[i..]).is_ok())
-        .unwrap_or(start);
+    let start =
+        (start..data.len()).find(|&i| std::str::from_utf8(&data[i..]).is_ok()).unwrap_or(start);
 
     let tail = String::from_utf8_lossy(&data[start..]);
     let omitted_bytes = start;
-    let content = format!(
-        "[{} bytes omitted, showing last {}]\n{}",
-        omitted_bytes, max_bytes, tail
-    );
+    let content =
+        format!("[{} bytes omitted, showing last {}]\n{}", omitted_bytes, max_bytes, tail);
 
-    TruncationResult {
-        content,
-        truncated: true,
-        original_bytes,
-        full_output_path: None,
-    }
+    TruncationResult { content, truncated: true, original_bytes, full_output_path: None }
 }
 
 /// Truncate keeping the head (first N lines).

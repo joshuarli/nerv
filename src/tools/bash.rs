@@ -3,12 +3,12 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::Ordering;
 
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use crate::agent::provider::CancelFlag;
 use crate::errors::ToolError;
 use crate::tools::output_filter;
-use std::sync::atomic::Ordering;
 
 pub struct BashTool {
     cwd: PathBuf,
@@ -17,10 +17,7 @@ pub struct BashTool {
 
 impl BashTool {
     pub fn new(cwd: PathBuf) -> Self {
-        Self {
-            cwd,
-            shell: "/bin/bash".into(),
-        }
+        Self { cwd, shell: "/bin/bash".into() }
     }
 }
 
@@ -36,14 +33,22 @@ impl AgentTool for BashTool {
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("command").and_then(|v| v.as_str()).is_none() {
-            let keys: Vec<&str> = input.as_object().map(|m| m.keys().map(|s| s.as_str()).collect()).unwrap_or_default();
+            let keys: Vec<&str> = input
+                .as_object()
+                .map(|m| m.keys().map(|s| s.as_str()).collect())
+                .unwrap_or_default();
             return Err(ToolError::InvalidArguments {
                 message: format!("command (string) is required (got keys: {})", keys.join(", ")),
             });
         }
         Ok(())
     }
-    fn execute(&self, input: serde_json::Value, update: UpdateCallback, cancel: &CancelFlag) -> ToolResult {
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        update: UpdateCallback,
+        cancel: &CancelFlag,
+    ) -> ToolResult {
         let command = input["command"].as_str().unwrap_or("");
         let mut child = match unsafe {
             Command::new(&self.shell)
@@ -62,8 +67,7 @@ impl AgentTool for BashTool {
                     Ok(())
                 })
                 .spawn()
-        }
-        {
+        } {
             Ok(c) => c,
             Err(e) => {
                 return ToolResult::error(format!("Failed to spawn: {}", e));
@@ -104,11 +108,7 @@ impl AgentTool for BashTool {
                 // Poll stdout with a 100ms timeout so we wake up frequently
                 // to check the cancel flag even when the child produces no output
                 // (e.g. long-running builds).
-                let mut pollfd = libc::pollfd {
-                    fd,
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
+                let mut pollfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
                 let poll_ret = unsafe { libc::poll(&mut pollfd, 1, 100) };
                 if poll_ret == 0 {
                     // Timeout — no data yet, loop back to check cancel
@@ -157,9 +157,10 @@ impl AgentTool for BashTool {
             filtered.into_owned()
         };
 
-        // Suppress display for bare sed/head/tail/awk file reads — the system prompt tells
-        // agents these produce no TUI output, incentivising them to use the read tool instead.
-        // Only suppress when there's no pipe (rg | head is fine; head file.rs is not).
+        // Suppress display for bare sed/head/tail/awk file reads — the system prompt
+        // tells agents these produce no TUI output, incentivising them to use
+        // the read tool instead. Only suppress when there's no pipe (rg | head
+        // is fine; head file.rs is not).
         let is_text_reading = !command.contains('|') && {
             let c = command.trim_start();
             c.starts_with("sed ")
@@ -174,7 +175,8 @@ impl AgentTool for BashTool {
 
         let line_count = content.lines().count();
         let display = if is_text_reading {
-            // No display preview for text-reading tools — agent should use the read tool instead
+            // No display preview for text-reading tools — agent should use the read tool
+            // instead
             None
         } else if exit_code != Some(0) {
             Some(format!("exit {} ({} lines)", exit_code.unwrap_or(-1), line_count))

@@ -1,9 +1,8 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use std::time::Duration;
 
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use nerv::interactive::chat_writer::ChatWriter;
 use nerv::tui::tui::Component;
-
 
 fn pgo_criterion() -> Criterion {
     // For `make pgo-profile`: just hit the hot paths, no statistical rigor needed.
@@ -14,12 +13,13 @@ fn pgo_criterion() -> Criterion {
 }
 
 fn fast() -> Criterion {
-    if std::env::var("PGO_PROFILE").is_ok() { return pgo_criterion(); }
+    if std::env::var("PGO_PROFILE").is_ok() {
+        return pgo_criterion();
+    }
     Criterion::default()
         .warm_up_time(Duration::from_millis(200))
         .measurement_time(Duration::from_secs(2))
 }
-
 
 const PROSE_RESPONSE: &str = "\
 The `transform_context` function applies twelve optimisations in a single pass \
@@ -178,7 +178,10 @@ fn bench_push_tool(c: &mut Criterion) {
     group.bench_function("push_tool_result_short", |b| {
         let mut w = ChatWriter::new();
         b.iter(|| {
-            w.push_tool_result(black_box("src/agent/transform.rs:114: pub fn transform_context("), false);
+            w.push_tool_result(
+                black_box("src/agent/transform.rs:114: pub fn transform_context("),
+                false,
+            );
         });
     });
 

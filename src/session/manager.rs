@@ -17,13 +17,15 @@ pub struct SessionContext {
     pub cost_usd: f64,
     /// Total input tokens sent across all API calls in this session branch.
     pub total_input: u64,
-    /// Total output tokens received across all API calls in this session branch.
+    /// Total output tokens received across all API calls in this session
+    /// branch.
     pub total_output: u64,
     /// Number of API calls made in this session branch.
     pub api_calls: u32,
     /// All user-typed prompts ever submitted in this session, oldest first.
     pub input_history: Vec<String>,
-    /// Per-session config overrides (model, thinking, effort, auto_compact, compaction_model).
+    /// Per-session config overrides (model, thinking, effort, auto_compact,
+    /// compaction_model).
     pub session_config: SessionConfig,
 }
 
@@ -61,16 +63,10 @@ impl SessionManager {
         .expect("failed to create sessions table");
 
         // Migrate: add input_history column to existing databases that pre-date it.
-        db.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN input_history TEXT;",
-        )
-        .ok(); // Ignore error — column already exists on fresh DBs.
+        db.execute_batch("ALTER TABLE sessions ADD COLUMN input_history TEXT;").ok(); // Ignore error — column already exists on fresh DBs.
 
         // Migrate: add session_config column for per-session config overrides.
-        db.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN session_config TEXT;",
-        )
-        .ok();
+        db.execute_batch("ALTER TABLE sessions ADD COLUMN session_config TEXT;").ok();
 
         db.execute_batch(
             "CREATE TABLE IF NOT EXISTS entries (
@@ -118,8 +114,7 @@ impl SessionManager {
 
         // Compute stable repo fingerprint from the initial git commit SHA.
         // NULL for non-git directories — cwd-prefix fallback still works for them.
-        let repo_id = crate::find_repo_root(cwd)
-            .and_then(|root| crate::repo_fingerprint(&root));
+        let repo_id = crate::find_repo_root(cwd).and_then(|root| crate::repo_fingerprint(&root));
 
         let worktree_str: Option<String> = worktree.map(|wt| wt.to_string_lossy().to_string());
 
@@ -139,11 +134,14 @@ impl SessionManager {
 
     pub fn load_session(&mut self, session_id: &str) -> anyhow::Result<SessionContext> {
         // Find full session ID from prefix
-        let full_id: String = self.db.query_row(
-            "SELECT id FROM sessions WHERE id LIKE ?1 LIMIT 1",
-            params![format!("{}%", session_id)],
-            |row| row.get(0),
-        ).map_err(|_| anyhow::anyhow!("session not found: {}", session_id))?;
+        let full_id: String = self
+            .db
+            .query_row(
+                "SELECT id FROM sessions WHERE id LIKE ?1 LIMIT 1",
+                params![format!("{}%", session_id)],
+                |row| row.get(0),
+            )
+            .map_err(|_| anyhow::anyhow!("session not found: {}", session_id))?;
 
         self.session_id = Some(full_id.clone());
         self.entries.clear();
@@ -184,11 +182,8 @@ impl SessionManager {
     }
 
     pub fn append_entry(&mut self, entry: SessionEntry) -> anyhow::Result<()> {
-        let session_id = self
-            .session_id
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no active session"))?
-            .clone();
+        let session_id =
+            self.session_id.as_ref().ok_or_else(|| anyhow::anyhow!("no active session"))?.clone();
 
         let data = serde_json::to_string(&entry)?;
         let entry_id = entry.id().to_string();
@@ -196,8 +191,21 @@ impl SessionManager {
 
         let result = {
             let tx = self.db.transaction()?;
-            let r = Self::append_entry_inner_tx(&tx, &session_id, &entry_id, parent_id.as_deref(), &data, &entry, self.next_seq, self.entries.is_empty());
-            if r.is_ok() { tx.commit()?; } else { tx.rollback().ok(); }
+            let r = Self::append_entry_inner_tx(
+                &tx,
+                &session_id,
+                &entry_id,
+                parent_id.as_deref(),
+                &data,
+                &entry,
+                self.next_seq,
+                self.entries.is_empty(),
+            );
+            if r.is_ok() {
+                tx.commit()?;
+            } else {
+                tx.rollback().ok();
+            }
             r
         };
 
@@ -259,10 +267,7 @@ impl SessionManager {
                 }
             }
         }
-        tx.execute(
-            "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
-            params![now, session_id],
-        )?;
+        tx.execute("UPDATE sessions SET updated_at = ?1 WHERE id = ?2", params![now, session_id])?;
 
         Ok(())
     }
@@ -321,10 +326,7 @@ impl SessionManager {
                 .collect::<Vec<_>>()
                 .join(",");
 
-            let fts_sql = format!(
-                "DELETE FROM search_index WHERE entry_id IN ({})",
-                placeholders
-            );
+            let fts_sql = format!("DELETE FROM search_index WHERE entry_id IN ({})", placeholders);
             let mut stmt = self.db.prepare(&fts_sql)?;
             for (i, id) in branch_ids_to_delete.iter().enumerate() {
                 stmt.raw_bind_parameter(i + 1, id.as_str())?;
@@ -368,10 +370,7 @@ impl SessionManager {
     }
 
     pub fn append_thinking_level_change(&mut self, level: ThinkingLevel) -> anyhow::Result<()> {
-        let level_str = serde_json::to_value(level)?
-            .as_str()
-            .unwrap_or("off")
-            .to_string();
+        let level_str = serde_json::to_value(level)?.as_str().unwrap_or("off").to_string();
         let entry = SessionEntry::ThinkingLevelChange(ThinkingLevelChangeEntry {
             id: self.next_id(),
             parent_id: self.leaf_id.clone(),
@@ -382,20 +381,16 @@ impl SessionManager {
     }
 
     fn reload_entries(&mut self) -> anyhow::Result<()> {
-        let session_id = self
-            .session_id
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no active session"))?
-            .clone();
+        let session_id =
+            self.session_id.as_ref().ok_or_else(|| anyhow::anyhow!("no active session"))?.clone();
 
         self.entries.clear();
         self.by_id.clear();
         self.leaf_id = None;
         self.next_seq = 0;
 
-        let mut stmt = self
-            .db
-            .prepare("SELECT seq, data FROM entries WHERE session_id = ?1 ORDER BY seq")?;
+        let mut stmt =
+            self.db.prepare("SELECT seq, data FROM entries WHERE session_id = ?1 ORDER BY seq")?;
         let rows = stmt.query_map(params![session_id], |row| {
             let seq: i64 = row.get(0)?;
             let data: String = row.get(1)?;
@@ -474,10 +469,7 @@ impl SessionManager {
                 tokens_before: ce.tokens_before,
                 timestamp: crate::agent::types::now_millis(),
             });
-            branch
-                .iter()
-                .position(|e| e.id() == ce.first_kept_entry_id)
-                .unwrap_or(compact_idx + 1)
+            branch.iter().position(|e| e.id() == ce.first_kept_entry_id).unwrap_or(compact_idx + 1)
         } else {
             0
         };
@@ -541,21 +533,27 @@ impl SessionManager {
     /// Update the worktree and cwd for the current session.
     pub fn update_worktree(&self, cwd: &Path, worktree: &Path) {
         if let Some(ref sid) = self.session_id {
-            self.db.execute(
-                "UPDATE sessions SET cwd = ?1, worktree = ?2 WHERE id = ?3",
-                params![cwd.to_string_lossy().as_ref(), worktree.to_string_lossy().as_ref(), sid],
-            ).ok();
+            self.db
+                .execute(
+                    "UPDATE sessions SET cwd = ?1, worktree = ?2 WHERE id = ?3",
+                    params![
+                        cwd.to_string_lossy().as_ref(),
+                        worktree.to_string_lossy().as_ref(),
+                        sid
+                    ],
+                )
+                .ok();
         }
     }
 
-    /// Persist the full input history (all user-typed prompts) for the current session.
+    /// Persist the full input history (all user-typed prompts) for the current
+    /// session.
     pub fn save_input_history(&self, history: &[String]) {
         if let Some(ref sid) = self.session_id {
             let json = serde_json::to_string(history).unwrap_or_else(|_| "[]".to_string());
-            self.db.execute(
-                "UPDATE sessions SET input_history = ?1 WHERE id = ?2",
-                params![json, sid],
-            ).ok();
+            self.db
+                .execute("UPDATE sessions SET input_history = ?1 WHERE id = ?2", params![json, sid])
+                .ok();
         }
     }
 
@@ -566,11 +564,9 @@ impl SessionManager {
             None => return Vec::new(),
         };
         self.db
-            .query_row(
-                "SELECT input_history FROM sessions WHERE id = ?1",
-                params![sid],
-                |row| row.get::<_, Option<String>>(0),
-            )
+            .query_row("SELECT input_history FROM sessions WHERE id = ?1", params![sid], |row| {
+                row.get::<_, Option<String>>(0)
+            })
             .ok()
             .flatten()
             .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
@@ -580,10 +576,7 @@ impl SessionManager {
     /// Set the human-readable name for the current session.
     pub fn set_name(&self, name: &str) {
         if let Some(ref sid) = self.session_id {
-            self.db.execute(
-                "UPDATE sessions SET name = ?1 WHERE id = ?2",
-                params![name, sid],
-            ).ok();
+            self.db.execute("UPDATE sessions SET name = ?1 WHERE id = ?2", params![name, sid]).ok();
         }
     }
 
@@ -591,16 +584,15 @@ impl SessionManager {
     pub fn name(&self) -> Option<String> {
         let sid = self.session_id.as_deref()?;
         self.db
-            .query_row(
-                "SELECT name FROM sessions WHERE id = ?1",
-                params![sid],
-                |row| row.get::<_, Option<String>>(0),
-            )
+            .query_row("SELECT name FROM sessions WHERE id = ?1", params![sid], |row| {
+                row.get::<_, Option<String>>(0)
+            })
             .ok()
             .flatten()
     }
 
-    /// Get the auto-compact threshold (fraction 0.0–1.0) for the current session, if set.
+    /// Get the auto-compact threshold (fraction 0.0–1.0) for the current
+    /// session, if set.
     pub fn get_compact_threshold(&self) -> Option<f64> {
         let sid = self.session_id.as_deref()?;
         self.db
@@ -616,10 +608,12 @@ impl SessionManager {
     /// Persist the auto-compact threshold for the current session.
     pub fn set_compact_threshold(&self, pct: f64) {
         if let Some(ref sid) = self.session_id {
-            self.db.execute(
-                "UPDATE sessions SET compact_threshold = ?1 WHERE id = ?2",
-                params![pct, sid],
-            ).ok();
+            self.db
+                .execute(
+                    "UPDATE sessions SET compact_threshold = ?1 WHERE id = ?2",
+                    params![pct, sid],
+                )
+                .ok();
         }
     }
 
@@ -630,11 +624,9 @@ impl SessionManager {
             None => return SessionConfig::default(),
         };
         self.db
-            .query_row(
-                "SELECT session_config FROM sessions WHERE id = ?1",
-                params![sid],
-                |row| row.get::<_, Option<String>>(0),
-            )
+            .query_row("SELECT session_config FROM sessions WHERE id = ?1", params![sid], |row| {
+                row.get::<_, Option<String>>(0)
+            })
             .ok()
             .flatten()
             .and_then(|json| serde_json::from_str(&json).ok())
@@ -645,16 +637,19 @@ impl SessionManager {
     pub fn set_session_config(&self, config: &SessionConfig) {
         if let Some(ref sid) = self.session_id {
             if let Ok(json) = serde_json::to_string(config) {
-                self.db.execute(
-                    "UPDATE sessions SET session_config = ?1 WHERE id = ?2",
-                    params![json, sid],
-                ).ok();
+                self.db
+                    .execute(
+                        "UPDATE sessions SET session_config = ?1 WHERE id = ?2",
+                        params![json, sid],
+                    )
+                    .ok();
             }
         }
     }
 
-    /// Update a single field of the per-session config. Reads current, applies the
-    /// closure, writes back. This is safe because the session thread is the only writer.
+    /// Update a single field of the per-session config. Reads current, applies
+    /// the closure, writes back. This is safe because the session thread is
+    /// the only writer.
     pub fn update_session_config<F: FnOnce(&mut SessionConfig)>(&self, f: F) {
         let mut cfg = self.get_session_config();
         f(&mut cfg);
@@ -664,22 +659,18 @@ impl SessionManager {
     /// Clear the worktree association for the current session.
     pub fn clear_worktree(&self) {
         if let Some(ref sid) = self.session_id {
-            self.db.execute(
-                "UPDATE sessions SET worktree = NULL WHERE id = ?1",
-                params![sid],
-            ).ok();
+            self.db.execute("UPDATE sessions SET worktree = NULL WHERE id = ?1", params![sid]).ok();
         }
     }
 
     /// Get the worktree path for the current session, if any.
     pub fn session_worktree(&self) -> Option<std::path::PathBuf> {
         let sid = self.session_id.as_ref()?;
-        let wt: Option<String> = self.db
-            .query_row(
-                "SELECT worktree FROM sessions WHERE id = ?1",
-                params![sid],
-                |row| row.get(0),
-            )
+        let wt: Option<String> = self
+            .db
+            .query_row("SELECT worktree FROM sessions WHERE id = ?1", params![sid], |row| {
+                row.get(0)
+            })
             .ok()
             .flatten();
         wt.filter(|s| !s.is_empty()).map(std::path::PathBuf::from)
@@ -707,11 +698,8 @@ impl SessionManager {
 
     /// Find the latest leaf: highest-seq entry that has no children.
     fn find_latest_leaf(&self) -> Option<String> {
-        let children_of: HashSet<&str> = self
-            .entries
-            .iter()
-            .filter_map(|e| e.parent_id())
-            .collect();
+        let children_of: HashSet<&str> =
+            self.entries.iter().filter_map(|e| e.parent_id()).collect();
 
         // Walk entries in reverse (highest seq first), pick first with no children
         self.entries
@@ -796,31 +784,26 @@ impl SessionManager {
         tree
     }
 
-    /// Return the `repo_id` (initial-commit SHA) for the current active session, if any.
-    /// Return true if any session in the DB was started in a repository
-    /// identified by `repo_id` (the initial-commit SHA fingerprint).
-    /// Copy the current branch (root → leaf) into a brand-new session and switch to it.
+    /// Return the `repo_id` (initial-commit SHA) for the current active
+    /// session, if any. Return true if any session in the DB was started in
+    /// a repository identified by `repo_id` (the initial-commit SHA
+    /// fingerprint). Copy the current branch (root → leaf) into a brand-new
+    /// session and switch to it.
     ///
-    /// All entries on the active branch are duplicated into the new session, preserving
-    /// their existing `id`, `parent_id`, and `seq` values so the tree structure is
-    /// intact.  The `search_index` rows are copied as well.  Sibling branches from the
-    /// source session are intentionally left behind — only the path you are currently
-    /// on is forked.
+    /// All entries on the active branch are duplicated into the new session,
+    /// preserving their existing `id`, `parent_id`, and `seq` values so the
+    /// tree structure is intact.  The `search_index` rows are copied as
+    /// well.  Sibling branches from the source session are intentionally
+    /// left behind — only the path you are currently on is forked.
     ///
     /// Returns the new session id on success.
     pub fn fork_session(&mut self) -> anyhow::Result<String> {
-        let src_id = self
-            .session_id
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no active session"))?
-            .clone();
+        let src_id =
+            self.session_id.as_ref().ok_or_else(|| anyhow::anyhow!("no active session"))?.clone();
 
         // Collect the branch entry ids we want to copy.
-        let branch_ids: Vec<String> = self
-            .get_branch()
-            .iter()
-            .map(|e| e.id().to_string())
-            .collect();
+        let branch_ids: Vec<String> =
+            self.get_branch().iter().map(|e| e.id().to_string()).collect();
 
         if branch_ids.is_empty() {
             anyhow::bail!("nothing to fork — session has no entries");
@@ -870,25 +853,23 @@ impl SessionManager {
         // PRIMARY KEY across the whole DB (not scoped to session_id), so we
         // cannot reuse the source ids within the same database file.  We also
         // remap parent_id references so the parent chain stays intact.
-        let id_map: HashMap<String, String> = branch_ids
-            .iter()
-            .map(|old| (old.clone(), gen_entry_id()))
-            .collect();
+        let id_map: HashMap<String, String> =
+            branch_ids.iter().map(|old| (old.clone(), gen_entry_id())).collect();
 
         // Prepare the search_index read once outside the loop.
-        let mut si_stmt = tx.prepare(
-            "SELECT text, role FROM search_index WHERE entry_id = ?1",
-        )?;
+        let mut si_stmt = tx.prepare("SELECT text, role FROM search_index WHERE entry_id = ?1")?;
 
         for old_id in branch_ids {
             let new_entry_id = &id_map[old_id];
 
             // Read the source row.
-            let (parent_id_raw, seq, data): (Option<String>, i64, String) = tx.query_row(
-                "SELECT parent_id, seq, data FROM entries WHERE id = ?1",
-                params![old_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            ).map_err(|_| anyhow::anyhow!("entry {old_id} not found during fork"))?;
+            let (parent_id_raw, seq, data): (Option<String>, i64, String) = tx
+                .query_row(
+                    "SELECT parent_id, seq, data FROM entries WHERE id = ?1",
+                    params![old_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .map_err(|_| anyhow::anyhow!("entry {old_id} not found during fork"))?;
 
             // Remap parent_id if it was also in this branch (it always is for a
             // linear branch, but be safe).
@@ -943,11 +924,9 @@ impl SessionManager {
     pub fn repo_id(&self) -> Option<String> {
         let sid = self.session_id.as_deref()?;
         self.db
-            .query_row(
-                "SELECT repo_id FROM sessions WHERE id = ?1",
-                params![sid],
-                |row| row.get::<_, Option<String>>(0),
-            )
+            .query_row("SELECT repo_id FROM sessions WHERE id = ?1", params![sid], |row| {
+                row.get::<_, Option<String>>(0)
+            })
             .ok()
             .flatten()
     }
@@ -1029,17 +1008,18 @@ impl SessionManager {
             Err(_) => return Vec::new(),
         };
 
-        let rows: Vec<(String, String, String, f64)> = match stmt.query_map(params![fts_query], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, f64>(3)?,
-            ))
-        }) {
-            Ok(r) => r.filter_map(|r| r.ok()).collect(),
-            Err(_) => return Vec::new(),
-        };
+        let rows: Vec<(String, String, String, f64)> =
+            match stmt.query_map(params![fts_query], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, f64>(3)?,
+                ))
+            }) {
+                Ok(r) => r.filter_map(|r| r.ok()).collect(),
+                Err(_) => return Vec::new(),
+            };
 
         // Dedup by session_id keeping best (lowest) rank, then join with sessions
         // in a single CTE query — no per-session round-trips.
@@ -1059,8 +1039,10 @@ impl SessionManager {
             return Vec::new();
         }
 
-        // Build a single query: join sessions + entries count for all matched session ids.
-        let placeholders = best.keys()
+        // Build a single query: join sessions + entries count for all matched session
+        // ids.
+        let placeholders = best
+            .keys()
             .enumerate()
             .map(|(i, _)| format!("?{}", i + 1))
             .collect::<Vec<_>>()
@@ -1110,8 +1092,6 @@ impl SessionManager {
         results.truncate(20);
         results
     }
-
-
 
     /// Export the current branch (leaf → root) as JSONL lines.
     ///
@@ -1178,7 +1158,8 @@ fn ymd_to_days(y: u64, m: u64, d: u64) -> u64 {
     era * 146097 + doe - 719468
 }
 
-/// Extract type string, summary text, raw_text, is_user, has_tool_calls from an entry.
+/// Extract type string, summary text, raw_text, is_user, has_tool_calls from an
+/// entry.
 fn summarize_entry(entry: &SessionEntry) -> (String, String, String, bool, bool) {
     match entry {
         SessionEntry::Message(e) => match &e.message {
@@ -1188,10 +1169,8 @@ fn summarize_entry(entry: &SessionEntry) -> (String, String, String, bool, bool)
             }
             AgentMessage::Assistant(a) => {
                 let text = a.text_content();
-                let has_tools = a
-                    .content
-                    .iter()
-                    .any(|b| matches!(b, ContentBlock::ToolCall { .. }));
+                let has_tools =
+                    a.content.iter().any(|b| matches!(b, ContentBlock::ToolCall { .. }));
                 ("message".into(), truncate(&text, 80), String::new(), false, has_tools)
             }
             AgentMessage::ToolResult { .. } => {
@@ -1215,8 +1194,12 @@ fn summarize_entry(entry: &SessionEntry) -> (String, String, String, bool, bool)
         SessionEntry::SessionInfo(s) => {
             ("session_info".into(), s.name.clone().unwrap_or_default(), String::new(), false, false)
         }
-        SessionEntry::SystemPrompt(_) => ("system_prompt".into(), String::new(), String::new(), false, false),
-        SessionEntry::CustomMessage(_) => ("custom_message".into(), String::new(), String::new(), false, false),
+        SessionEntry::SystemPrompt(_) => {
+            ("system_prompt".into(), String::new(), String::new(), false, false)
+        }
+        SessionEntry::CustomMessage(_) => {
+            ("custom_message".into(), String::new(), String::new(), false, false)
+        }
         SessionEntry::PermissionAccept(p) => (
             "permission_accept".into(),
             format!("{}({})", p.tool, truncate(&p.args, 40)),
@@ -1257,11 +1240,7 @@ fn truncate(s: &str, max: usize) -> String {
     let s = s.trim();
     // Take first line only
     let line = s.lines().next().unwrap_or("");
-    if line.len() <= max {
-        line.to_string()
-    } else {
-        format!("{}...", &line[..max - 3])
-    }
+    if line.len() <= max { line.to_string() } else { format!("{}...", &line[..max - 3]) }
 }
 
 #[derive(Debug, Clone)]
@@ -1297,11 +1276,7 @@ fn extract_searchable_text(entry: &SessionEntry) -> Option<(String, &'static str
             AgentMessage::Assistant(a) => Some((a.text_content(), "assistant")),
             AgentMessage::ToolResult { content, .. } => {
                 let text = content_text(content);
-                if text.len() < 2000 {
-                    Some((text, "tool_result"))
-                } else {
-                    None
-                }
+                if text.len() < 2000 { Some((text, "tool_result")) } else { None }
             }
             _ => None,
         },
@@ -1310,28 +1285,26 @@ fn extract_searchable_text(entry: &SessionEntry) -> Option<(String, &'static str
 }
 
 fn backfill_search_index(db: &Connection) {
-    let has_fts: i64 = db
-        .query_row("SELECT COUNT(*) FROM search_index", [], |row| row.get(0))
-        .unwrap_or(0);
-    let has_entries: i64 = db
-        .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
-        .unwrap_or(0);
+    let has_fts: i64 =
+        db.query_row("SELECT COUNT(*) FROM search_index", [], |row| row.get(0)).unwrap_or(0);
+    let has_entries: i64 =
+        db.query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0)).unwrap_or(0);
 
     if has_fts > 0 || has_entries == 0 {
         return;
     }
 
     db.execute_batch("BEGIN").ok();
-    let mut stmt = match db.prepare("SELECT id, session_id, data FROM entries ORDER BY session_id, seq") {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    let rows: Vec<(String, String, String)> = match stmt.query_map([], |row| {
-        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-    }) {
-        Ok(r) => r.filter_map(|r| r.ok()).collect(),
-        Err(_) => return,
-    };
+    let mut stmt =
+        match db.prepare("SELECT id, session_id, data FROM entries ORDER BY session_id, seq") {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+    let rows: Vec<(String, String, String)> =
+        match stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))) {
+            Ok(r) => r.filter_map(|r| r.ok()).collect(),
+            Err(_) => return,
+        };
     for (entry_id, session_id, data) in rows {
         if let Ok(entry) = serde_json::from_str::<SessionEntry>(&data) {
             if let Some((text, role)) = extract_searchable_text(&entry) {
@@ -1339,7 +1312,8 @@ fn backfill_search_index(db: &Connection) {
                     db.execute(
                         "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?1, ?2, ?3, ?4)",
                         params![text, session_id, entry_id, role],
-                    ).ok();
+                    )
+                    .ok();
                 }
             }
         }
@@ -1408,18 +1382,14 @@ mod tests {
 
     fn user_msg(text: &str) -> AgentMessage {
         AgentMessage::User {
-            content: vec![crate::agent::types::ContentItem::Text {
-                text: text.to_string(),
-            }],
+            content: vec![crate::agent::types::ContentItem::Text { text: text.to_string() }],
             timestamp: 0,
         }
     }
 
     fn assistant_msg(text: &str) -> AgentMessage {
         AgentMessage::Assistant(AssistantMessage {
-            content: vec![ContentBlock::Text {
-                text: text.to_string(),
-            }],
+            content: vec![ContentBlock::Text { text: text.to_string() }],
             stop_reason: StopReason::EndTurn,
             usage: None,
             timestamp: 0,
@@ -1440,10 +1410,8 @@ mod tests {
 
     /// Fetch all entry ids from the DB for a given session, ordered by seq.
     fn db_entry_ids(mgr: &SessionManager, session_id: &str) -> Vec<String> {
-        let mut stmt = mgr
-            .db
-            .prepare("SELECT id FROM entries WHERE session_id = ?1 ORDER BY seq")
-            .unwrap();
+        let mut stmt =
+            mgr.db.prepare("SELECT id FROM entries WHERE session_id = ?1 ORDER BY seq").unwrap();
         stmt.query_map(params![session_id], |row| row.get(0))
             .unwrap()
             .filter_map(|r| r.ok())
@@ -1645,10 +1613,6 @@ mod tests {
             2,
             "fork must only contain the active branch (2 entries), not the sibling"
         );
-        assert_eq!(
-            db_entry_count(&mgr, &src_id),
-            3,
-            "source still has all 3 entries"
-        );
+        assert_eq!(db_entry_count(&mgr, &src_id), 3, "source still has all 3 entries");
     }
 }

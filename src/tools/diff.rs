@@ -1,6 +1,5 @@
 /// Minimal line-level unified diff (replaces `similar` crate).
 /// Implements Myers diff algorithm for line sequences.
-
 use std::fmt::Write;
 
 pub fn unified_diff(old: &str, new: &str, old_label: &str, new_label: &str) -> String {
@@ -78,9 +77,7 @@ fn diff_lines<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
         let k = x as isize - y as isize;
         let ki = (k + offset as isize) as usize;
 
-        let prev_k = if k == -(d as isize)
-            || (k != d as isize && prev_v[ki - 1] < prev_v[ki + 1])
-        {
+        let prev_k = if k == -(d as isize) || (k != d as isize && prev_v[ki - 1] < prev_v[ki + 1]) {
             k + 1
         } else {
             k - 1
@@ -177,11 +174,7 @@ fn format_unified(edits: &[Edit], old_label: &str, new_label: &str, context: usi
             .filter(|e| matches!(e, Edit::Equal(_) | Edit::Insert(_)))
             .count();
 
-        let _ = write!(
-            out,
-            "@@ -{},{} +{},{} @@\n",
-            old_start, old_count, new_start, new_count,
-        );
+        let _ = write!(out, "@@ -{},{} +{},{} @@\n", old_start, old_count, new_start, new_count,);
 
         for e in &edits[start..end] {
             let (prefix, text) = match e {

@@ -1,19 +1,12 @@
 use super::types::*;
 
-/// Wire-format message that providers understand. Providers never see AgentMessage.
+/// Wire-format message that providers understand. Providers never see
+/// AgentMessage.
 #[derive(Debug, Clone)]
 pub enum LlmMessage {
-    User {
-        content: Vec<LlmContent>,
-    },
-    Assistant {
-        content: Vec<LlmContent>,
-    },
-    ToolResult {
-        tool_call_id: String,
-        content: Vec<LlmContent>,
-        is_error: bool,
-    },
+    User { content: Vec<LlmContent> },
+    Assistant { content: Vec<LlmContent> },
+    ToolResult { tool_call_id: String, content: Vec<LlmContent>, is_error: bool },
 }
 
 impl LlmMessage {
@@ -38,11 +31,7 @@ impl LlmMessage {
 pub enum LlmContent {
     Text(String),
     Image(ImageSource),
-    ToolCall {
-        id: String,
-        name: String,
-        arguments: serde_json::Value,
-    },
+    ToolCall { id: String, name: String, arguments: serde_json::Value },
     Thinking(String),
 }
 
@@ -67,11 +56,7 @@ pub fn convert_to_llm(messages: &[AgentMessage]) -> Vec<LlmMessage> {
                         ContentBlock::Thinking { thinking } => {
                             LlmContent::Thinking(thinking.clone())
                         }
-                        ContentBlock::ToolCall {
-                            id,
-                            name,
-                            arguments,
-                        } => LlmContent::ToolCall {
+                        ContentBlock::ToolCall { id, name, arguments } => LlmContent::ToolCall {
                             id: id.clone(),
                             name: name.clone(),
                             arguments: arguments.clone(),
@@ -80,12 +65,7 @@ pub fn convert_to_llm(messages: &[AgentMessage]) -> Vec<LlmMessage> {
                     .collect();
                 LlmMessage::Assistant { content: items }
             }
-            AgentMessage::ToolResult {
-                tool_call_id,
-                content,
-                is_error,
-                ..
-            } => {
+            AgentMessage::ToolResult { tool_call_id, content, is_error, .. } => {
                 let items = content.iter().map(content_item_to_llm).collect();
                 LlmMessage::ToolResult {
                     tool_call_id: tool_call_id.clone(),
@@ -102,25 +82,16 @@ pub fn convert_to_llm(messages: &[AgentMessage]) -> Vec<LlmMessage> {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                LlmMessage::User {
-                    content: vec![LlmContent::Text(text)],
-                }
+                LlmMessage::User { content: vec![LlmContent::Text(text)] }
             }
-            AgentMessage::BashExecution {
-                command,
-                output,
-                exit_code,
-                ..
-            } => {
+            AgentMessage::BashExecution { command, output, exit_code, .. } => {
                 let text = format!(
                     "[Bash execution]\n$ {}\n{}\n[exit code: {}]",
                     command,
                     output,
                     exit_code.unwrap_or(-1)
                 );
-                LlmMessage::User {
-                    content: vec![LlmContent::Text(text)],
-                }
+                LlmMessage::User { content: vec![LlmContent::Text(text)] }
             }
             AgentMessage::CompactionSummary { summary, .. } => LlmMessage::User {
                 content: vec![LlmContent::Text(format!(
@@ -164,22 +135,14 @@ fn should_merge(existing: &LlmMessage, new: &LlmMessage) -> bool {
 fn merge_into(existing: &mut LlmMessage, new: LlmMessage) {
     match (existing, new) {
         (
-            LlmMessage::User {
-                content: existing_content,
-            },
-            LlmMessage::User {
-                content: new_content,
-            },
+            LlmMessage::User { content: existing_content },
+            LlmMessage::User { content: new_content },
         ) => {
             existing_content.extend(new_content);
         }
         (
-            LlmMessage::Assistant {
-                content: existing_content,
-            },
-            LlmMessage::Assistant {
-                content: new_content,
-            },
+            LlmMessage::Assistant { content: existing_content },
+            LlmMessage::Assistant { content: new_content },
         ) => {
             existing_content.extend(new_content);
         }
@@ -194,9 +157,7 @@ mod tests {
     #[test]
     fn user_message_converts() {
         let msgs = vec![AgentMessage::User {
-            content: vec![ContentItem::Text {
-                text: "hello".into(),
-            }],
+            content: vec![ContentItem::Text { text: "hello".into() }],
             timestamp: 0,
         }];
         let llm = convert_to_llm(&msgs);
@@ -232,13 +193,11 @@ mod tests {
             },
             AgentMessage::ToolResult {
                 tool_call_id: "t1".into(),
-                content: vec![ContentItem::Text {
-                    text: "result".into(),
-                }],
+                content: vec![ContentItem::Text { text: "result".into() }],
                 is_error: false,
                 display: None,
                 details: None,
-timestamp: 1,
+                timestamp: 1,
             },
         ];
         let llm = convert_to_llm(&msgs);

@@ -10,10 +10,7 @@ use nerv::interactive::btw_overlay::{pad_right, turn_succeeded, wrap_text};
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn user_msg(text: &str) -> AgentMessage {
-    AgentMessage::User {
-        content: vec![ContentItem::Text { text: text.into() }],
-        timestamp: 0,
-    }
+    AgentMessage::User { content: vec![ContentItem::Text { text: text.into() }], timestamp: 0 }
 }
 
 fn assistant_msg(text: &str, stop: StopReason) -> AgentMessage {
@@ -25,7 +22,8 @@ fn assistant_msg(text: &str, stop: StopReason) -> AgentMessage {
     })
 }
 
-// ── wrap_text ─────────────────────────────────────────────────────────────────
+// ── wrap_text
+// ─────────────────────────────────────────────────────────────────
 
 #[test]
 fn wrap_empty_string() {
@@ -138,7 +136,8 @@ fn wrap_packs_words_greedily() {
     assert_eq!(result, vec!["a b c"]);
 }
 
-// ── pad_right ─────────────────────────────────────────────────────────────────
+// ── pad_right
+// ─────────────────────────────────────────────────────────────────
 
 #[test]
 fn pad_short_string_padded_with_spaces() {
@@ -190,7 +189,8 @@ fn pad_zero_width_returns_empty() {
     assert_eq!(result.chars().count(), 0);
 }
 
-// ── turn_succeeded ────────────────────────────────────────────────────────────
+// ── turn_succeeded
+// ────────────────────────────────────────────────────────────
 
 #[test]
 fn turn_succeeded_empty_messages() {
@@ -199,10 +199,7 @@ fn turn_succeeded_empty_messages() {
 
 #[test]
 fn turn_succeeded_normal_turn() {
-    let msgs = vec![
-        user_msg("hello"),
-        assistant_msg("hi there", StopReason::EndTurn),
-    ];
+    let msgs = vec![user_msg("hello"), assistant_msg("hi there", StopReason::EndTurn)];
     assert!(turn_succeeded(&msgs));
 }
 
@@ -212,19 +209,13 @@ fn turn_succeeded_tool_use_turn() {
     // The turn is only "succeeded" from snapshot perspective after the loop
     // completes. The agent collects all messages including ToolUse responses
     // into AgentEnd.messages, so we treat ToolUse as ok (loop succeeded).
-    let msgs = vec![
-        user_msg("use a tool"),
-        assistant_msg("calling tool", StopReason::ToolUse),
-    ];
+    let msgs = vec![user_msg("use a tool"), assistant_msg("calling tool", StopReason::ToolUse)];
     assert!(turn_succeeded(&msgs));
 }
 
 #[test]
 fn turn_failed_aborted() {
-    let msgs = vec![
-        user_msg("question"),
-        assistant_msg("partial answer", StopReason::Aborted),
-    ];
+    let msgs = vec![user_msg("question"), assistant_msg("partial answer", StopReason::Aborted)];
     assert!(!turn_succeeded(&msgs));
 }
 
@@ -232,12 +223,7 @@ fn turn_failed_aborted() {
 fn turn_failed_error() {
     let msgs = vec![
         user_msg("question"),
-        assistant_msg(
-            "",
-            StopReason::Error {
-                message: "rate limit".into(),
-            },
-        ),
+        assistant_msg("", StopReason::Error { message: "rate limit".into() }),
     ];
     assert!(!turn_succeeded(&msgs));
 }
@@ -257,56 +243,41 @@ fn turn_failed_error_among_multi_turn() {
         assistant_msg("calling tool", StopReason::ToolUse),
         // tool result would be here but we omit for simplicity — turn_succeeded
         // only inspects Assistant messages.
-        assistant_msg(
-            "",
-            StopReason::Error {
-                message: "context exceeded".into(),
-            },
-        ),
+        assistant_msg("", StopReason::Error { message: "context exceeded".into() }),
     ];
     assert!(!turn_succeeded(&msgs));
 }
 
-// ── snapshot accumulation integration ─────────────────────────────────────────
-// Test the guard logic as it would be used in the event loop.
+// ── snapshot accumulation integration
+// ───────────────────────────────────────── Test the guard logic as it would be
+// used in the event loop.
 
 #[test]
 fn snapshot_skips_aborted_turns() {
     let mut snapshot: Vec<AgentMessage> = Vec::new();
 
     // First turn: successful
-    let turn1 = vec![
-        user_msg("first question"),
-        assistant_msg("first answer", StopReason::EndTurn),
-    ];
+    let turn1 =
+        vec![user_msg("first question"), assistant_msg("first answer", StopReason::EndTurn)];
     if turn_succeeded(&turn1) {
         snapshot.extend(turn1);
     }
 
     // Second turn: aborted mid-stream
-    let turn2 = vec![
-        user_msg("second question"),
-        assistant_msg("partial...", StopReason::Aborted),
-    ];
+    let turn2 = vec![user_msg("second question"), assistant_msg("partial...", StopReason::Aborted)];
     if turn_succeeded(&turn2) {
         snapshot.extend(turn2);
     }
 
     // Third turn: retry of second question, successful
-    let turn3 = vec![
-        user_msg("second question"),
-        assistant_msg("complete answer", StopReason::EndTurn),
-    ];
+    let turn3 =
+        vec![user_msg("second question"), assistant_msg("complete answer", StopReason::EndTurn)];
     if turn_succeeded(&turn3) {
         snapshot.extend(turn3);
     }
 
     // Snapshot should have turn1 + turn3 = 4 messages, not 6.
-    assert_eq!(
-        snapshot.len(),
-        4,
-        "aborted turn should not appear in snapshot"
-    );
+    assert_eq!(snapshot.len(), 4, "aborted turn should not appear in snapshot");
 
     // The user message "second question" should appear only once.
     let user_texts: Vec<_> = snapshot
@@ -336,29 +307,25 @@ fn snapshot_skips_aborted_turns() {
 fn snapshot_skips_error_turns() {
     let mut snapshot: Vec<AgentMessage> = Vec::new();
 
-    let errored = vec![
-        user_msg("q"),
-        assistant_msg("", StopReason::Error { message: "oops".into() }),
-    ];
+    let errored =
+        vec![user_msg("q"), assistant_msg("", StopReason::Error { message: "oops".into() })];
     if turn_succeeded(&errored) {
         snapshot.extend(errored);
     }
 
-    assert!(
-        snapshot.is_empty(),
-        "errored turn should not be in snapshot"
-    );
+    assert!(snapshot.is_empty(), "errored turn should not be in snapshot");
 }
 
-// ── cache-hit assumptions ─────────────────────────────────────────────────────
+// ── cache-hit assumptions
+// ─────────────────────────────────────────────────────
 //
 // stream_btw claims "Anthropic's cache breakpoints match and the prefix is a
 // cache hit".  These tests pin the three specific ways that claim can fail.
 
 use nerv::agent::transform::transform_context;
 
-/// 1. transform_context mutates the messages before every real API request.
-///    The btw call sends raw agent.state.messages without running
+/// 1. transform_context mutates the messages before every real API request. The
+///    btw call sends raw agent.state.messages without running
 ///    transform_context, so the wire content diverges whenever any
 ///    transformation would fire.
 #[test]
@@ -414,12 +381,16 @@ fn transform_context_mutates_stale_read_results() {
     let r1_transformed = transformed.iter().find_map(|m| {
         if let AgentMessage::ToolResult { tool_call_id, content, .. } = m {
             if tool_call_id == "r1" { Some(content.clone()) } else { None }
-        } else { None }
+        } else {
+            None
+        }
     });
     let r1_raw = messages.iter().find_map(|m| {
         if let AgentMessage::ToolResult { tool_call_id, content, .. } = m {
             if tool_call_id == "r1" { Some(content.clone()) } else { None }
-        } else { None }
+        } else {
+            None
+        }
     });
 
     let r1_t = r1_transformed.expect("r1 should survive transform");
@@ -447,10 +418,10 @@ fn transform_context_mutates_stale_read_results() {
     );
 }
 
-/// 2. Appending to the system prompt changes its bytes.
-///    Anthropic's cache breakpoint 1 is placed on the last content block of
-///    system[], which is the full system prompt string.  A different string
-///    always misses that breakpoint — there is no prefix-match caching.
+/// 2. Appending to the system prompt changes its bytes. Anthropic's cache
+///    breakpoint 1 is placed on the last content block of system[], which is
+///    the full system prompt string.  A different string always misses that
+///    breakpoint — there is no prefix-match caching.
 #[test]
 fn btw_system_prompt_differs_from_main_agent_system_prompt() {
     let base = "You are a helpful assistant.";
@@ -461,22 +432,17 @@ fn btw_system_prompt_differs_from_main_agent_system_prompt() {
 
     // The two strings must be different — that's the only claim we're making.
     assert_ne!(
-        base, btw_prompt.as_str(),
+        base,
+        btw_prompt.as_str(),
         "btw system prompt must differ from the base; \
          if they match the breakpoint-1 cache hit would be real"
     );
 
     // More concretely: the btw prompt is strictly longer.
-    assert!(
-        btw_prompt.len() > base.len(),
-        "btw system prompt should be longer than base"
-    );
+    assert!(btw_prompt.len() > base.len(), "btw system prompt should be longer than base");
 
     // And the suffix must be non-empty (guard against accidental empty suffix).
-    assert!(
-        !btw_suffix.trim().is_empty(),
-        "btw suffix must not be empty"
-    );
+    assert!(!btw_suffix.trim().is_empty(), "btw suffix must not be empty");
 }
 
 /// 3. The snapshot captured at AgentEnd contains the *full* accumulated history
@@ -495,15 +461,13 @@ fn btw_last_user_breakpoint_lands_on_different_message_than_agent() {
     // Simulate agent state after one complete tool-using turn.
     // agent.state.messages at AgentEnd time (= what the snapshot captures):
     let snapshot = vec![
-        user_msg("initial question"),       // idx 0 — first user (bp4)
+        user_msg("initial question"), // idx 0 — first user (bp4)
         AgentMessage::Assistant(AssistantMessage {
-            content: vec![
-                ContentBlock::ToolCall {
-                    id: "c1".into(),
-                    name: "bash".into(),
-                    arguments: serde_json::json!({"command": "ls"}),
-                },
-            ],
+            content: vec![ContentBlock::ToolCall {
+                id: "c1".into(),
+                name: "bash".into(),
+                arguments: serde_json::json!({"command": "ls"}),
+            }],
             stop_reason: StopReason::ToolUse,
             usage: Some(Usage::default()),
             timestamp: 0,
@@ -543,18 +507,19 @@ fn btw_last_user_breakpoint_lands_on_different_message_than_agent() {
     // The breakpoints land on different positions → different wire bytes →
     // cache miss on last-user breakpoint for the new user message.
     assert_ne!(
-        agent_last_user_idx,
-        btw_last_user_idx,
+        agent_last_user_idx, btw_last_user_idx,
         "btw appends a user message, so last-user breakpoint moves; \
          the agent's cached last-user position no longer matches"
     );
 
-    // Specifically: btw's last-user is the new note, agent's is the original question.
+    // Specifically: btw's last-user is the new note, agent's is the original
+    // question.
     assert_eq!(agent_last_user_idx, 0, "agent: only user message is at idx 0");
     assert_eq!(btw_last_user_idx, btw_messages.len() - 1, "btw: note is last");
 }
 
-// ── strip_tool_content ────────────────────────────────────────────────────────
+// ── strip_tool_content
+// ────────────────────────────────────────────────────────
 
 use nerv::interactive::btw_overlay::strip_tool_content;
 
@@ -579,11 +544,7 @@ fn tool_result_msg(id: &str) -> AgentMessage {
 
 #[test]
 fn strip_tool_content_removes_tool_results() {
-    let messages = vec![
-        user_msg("hello"),
-        tool_result_msg("call_1"),
-        user_msg("world"),
-    ];
+    let messages = vec![user_msg("hello"), tool_result_msg("call_1"), user_msg("world")];
     let stripped = strip_tool_content(messages);
     assert_eq!(stripped.len(), 2, "tool result should be removed");
     assert!(matches!(stripped[0], AgentMessage::User { .. }));
@@ -592,17 +553,12 @@ fn strip_tool_content_removes_tool_results() {
 
 #[test]
 fn strip_tool_content_replaces_tool_call_blocks_with_summary() {
-    let messages = vec![
-        AgentMessage::Assistant(AssistantMessage {
-            content: vec![
-                ContentBlock::Text { text: "Let me run that.".into() },
-                tool_call_block(),
-            ],
-            stop_reason: StopReason::ToolUse,
-            usage: Some(Usage::default()),
-            timestamp: 0,
-        }),
-    ];
+    let messages = vec![AgentMessage::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text { text: "Let me run that.".into() }, tool_call_block()],
+        stop_reason: StopReason::ToolUse,
+        usage: Some(Usage::default()),
+        timestamp: 0,
+    })];
     let stripped = strip_tool_content(messages);
     assert_eq!(stripped.len(), 1);
     if let AgentMessage::Assistant(a) = &stripped[0] {
@@ -620,14 +576,12 @@ fn strip_tool_content_replaces_tool_call_blocks_with_summary() {
 
 #[test]
 fn strip_tool_content_keeps_assistant_with_only_tool_calls_as_summary() {
-    let messages = vec![
-        AgentMessage::Assistant(AssistantMessage {
-            content: vec![tool_call_block()],
-            stop_reason: StopReason::ToolUse,
-            usage: Some(Usage::default()),
-            timestamp: 0,
-        }),
-    ];
+    let messages = vec![AgentMessage::Assistant(AssistantMessage {
+        content: vec![tool_call_block()],
+        stop_reason: StopReason::ToolUse,
+        usage: Some(Usage::default()),
+        timestamp: 0,
+    })];
     let stripped = strip_tool_content(messages);
     // Now produces a summary text block instead of being dropped.
     assert_eq!(stripped.len(), 1, "assistant should be kept as a summary");

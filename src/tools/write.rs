@@ -14,11 +14,7 @@ impl WriteTool {
     }
     fn resolve_path(&self, path: &str) -> PathBuf {
         let p = Path::new(path);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            self.cwd.join(p)
-        }
+        if p.is_absolute() { p.to_path_buf() } else { self.cwd.join(p) }
     }
 }
 
@@ -34,20 +30,31 @@ impl AgentTool for WriteTool {
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("path").and_then(|v| v.as_str()).is_none() {
-            let keys: Vec<&str> = input.as_object().map(|m| m.keys().map(|s| s.as_str()).collect()).unwrap_or_default();
+            let keys: Vec<&str> = input
+                .as_object()
+                .map(|m| m.keys().map(|s| s.as_str()).collect())
+                .unwrap_or_default();
             return Err(ToolError::InvalidArguments {
                 message: format!("path (string) is required (got keys: {})", keys.join(", ")),
             });
         }
         if input.get("content").and_then(|v| v.as_str()).is_none() {
-            let keys: Vec<&str> = input.as_object().map(|m| m.keys().map(|s| s.as_str()).collect()).unwrap_or_default();
+            let keys: Vec<&str> = input
+                .as_object()
+                .map(|m| m.keys().map(|s| s.as_str()).collect())
+                .unwrap_or_default();
             return Err(ToolError::InvalidArguments {
                 message: format!("content (string) is required (got keys: {})", keys.join(", ")),
             });
         }
         Ok(())
     }
-    fn execute(&self, input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        _update: UpdateCallback,
+        _cancel: &CancelFlag,
+    ) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");
         let content = input["content"].as_str().unwrap_or("");
         let abs_path = self.resolve_path(path_str);

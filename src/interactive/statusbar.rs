@@ -21,7 +21,8 @@ const SPINNER_WORDS: &[&str] = &[
 ];
 
 /// Fixed-position status bar between the editor and footer.
-/// Shows spinner (during streaming), per-response timer + tokens, and queued messages.
+/// Shows spinner (during streaming), per-response timer + tokens, and queued
+/// messages.
 pub struct StatusBar {
     frame: usize,
     word: String,
@@ -31,14 +32,16 @@ pub struct StatusBar {
     first_output: Option<std::time::Instant>,
     /// Authoritative input token count from the API's message_start event.
     input_tokens: u32,
-    /// Live output token count (proxy during streaming, real value at MessageEnd).
+    /// Live output token count (proxy during streaming, real value at
+    /// MessageEnd).
     output_tokens: u32,
     /// Input tokens at end of previous turn — used to compute delta.
     prev_input_tokens: u32,
     completed: Option<CompletedInfo>,
     queued: Vec<String>,
     editing_idx: Option<usize>,
-    /// Cached line count from the last `render_queue` call (includes separator + wrapped lines).
+    /// Cached line count from the last `render_queue` call (includes separator
+    /// + wrapped lines).
     cached_queue_lines: std::cell::Cell<usize>,
 }
 
@@ -86,7 +89,8 @@ impl StatusBar {
         self.frame = 0;
     }
 
-    /// Update input token count. Only called from UsageUpdate (API's message_start value).
+    /// Update input token count. Only called from UsageUpdate (API's
+    /// message_start value).
     pub fn set_input_tokens(&mut self, tokens: u32) {
         self.input_tokens = tokens;
     }
@@ -218,12 +222,7 @@ impl StatusBar {
 
         // Separator between chat area and queue
         let sep_width = width as usize;
-        lines.push(format!(
-            "{}{}{}" ,
-            theme::DIM,
-            "─".repeat(sep_width),
-            r
-        ));
+        lines.push(format!("{}{}{}", theme::DIM, "─".repeat(sep_width), r));
 
         // " ▸ " prefix = 3 chars (bullet + spaces)
         let prefix_len = 3usize;
@@ -242,18 +241,9 @@ impl StatusBar {
             let wrapped = word_wrap(msg, max_text);
             for (line_idx, segment) in wrapped.iter().enumerate() {
                 if line_idx == 0 {
-                    lines.push(format!(
-                        " {}▸{} {}{}{}",
-                        bullet_color, r, text_color, segment, r
-                    ));
+                    lines.push(format!(" {}▸{} {}{}{}", bullet_color, r, text_color, segment, r));
                 } else {
-                    lines.push(format!(
-                        "{}{}{}{}",
-                        " ".repeat(indent_len),
-                        text_color,
-                        segment,
-                        r
-                    ));
+                    lines.push(format!("{}{}{}{}", " ".repeat(indent_len), text_color, segment, r));
                 }
             }
         }
@@ -290,14 +280,7 @@ impl StatusBar {
         } else if self.input_tokens > 0 {
             // Upload / waiting phase — show ↑ only (from API's message_start)
             let input_delta = self.input_tokens.saturating_sub(self.prev_input_tokens);
-            format!(
-                " {}·{} {}↑{}{}",
-                theme::DIM,
-                r,
-                theme::FOOTER_LABEL,
-                fmt_tok(input_delta),
-                r,
-            )
+            format!(" {}·{} {}↑{}{}", theme::DIM, r, theme::FOOTER_LABEL, fmt_tok(input_delta), r,)
         } else {
             // No token data yet — plain spinner
             String::new()
@@ -338,11 +321,7 @@ impl StatusBar {
 
 fn fmt_elapsed(d: std::time::Duration) -> String {
     let secs = d.as_secs();
-    if secs < 60 {
-        format!("{}s", secs)
-    } else {
-        format!("{}m {}s", secs / 60, secs % 60)
-    }
+    if secs < 60 { format!("{}s", secs) } else { format!("{}m {}s", secs / 60, secs % 60) }
 }
 
 fn fmt_tok(n: u32) -> String {
@@ -358,8 +337,8 @@ fn fmt_tok(n: u32) -> String {
 }
 
 /// Word-wrap `text` into lines of at most `max_chars` display characters.
-/// Splits on spaces; if a single word is wider than `max_chars` it is hard-split
-/// at the boundary.
+/// Splits on spaces; if a single word is wider than `max_chars` it is
+/// hard-split at the boundary.
 fn word_wrap(text: &str, max_chars: usize) -> Vec<String> {
     if max_chars == 0 {
         return vec![text.to_string()];

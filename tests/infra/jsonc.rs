@@ -1,5 +1,6 @@
-use nerv::core::config::read_jsonc;
 use std::io::Write;
+
+use nerv::core::config::read_jsonc;
 use tempfile::NamedTempFile;
 
 fn write_temp(content: &str) -> NamedTempFile {

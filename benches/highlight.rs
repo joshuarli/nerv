@@ -1,8 +1,7 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use std::time::Duration;
 
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use nerv::tui::highlight::{HlState, highlight_line, rules_for_lang};
-
 
 fn pgo_criterion() -> Criterion {
     // For `make pgo-profile`: just hit the hot paths, no statistical rigor needed.
@@ -13,7 +12,9 @@ fn pgo_criterion() -> Criterion {
 }
 
 fn fast() -> Criterion {
-    if std::env::var("PGO_PROFILE").is_ok() { return pgo_criterion(); }
+    if std::env::var("PGO_PROFILE").is_ok() {
+        return pgo_criterion();
+    }
     Criterion::default()
         .warm_up_time(Duration::from_millis(200))
         .measurement_time(Duration::from_secs(2))
@@ -126,9 +127,8 @@ fn bench_full_blocks(c: &mut Criterion) {
 fn bench_large_response(c: &mut Criterion) {
     // Simulates rendering a 200-line code fence — common in real responses
     let rules = rules_for_lang("rust").unwrap();
-    let block: Vec<String> = (0..200)
-        .map(|i| RUST_LINES[i % RUST_LINES.len()].to_string())
-        .collect();
+    let block: Vec<String> =
+        (0..200).map(|i| RUST_LINES[i % RUST_LINES.len()].to_string()).collect();
 
     c.bench_function("highlight/rust_200_lines", |b| {
         b.iter(|| {

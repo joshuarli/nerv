@@ -11,22 +11,15 @@ fn rust_keywords_highlighted() {
 #[test]
 fn rust_strings_highlighted() {
     let mut state = HlState::Normal;
-    let result = highlight_line(
-        r#"let s = "hello";"#,
-        &mut state,
-        rules_for_lang("rust").unwrap(),
-    );
+    let result = highlight_line(r#"let s = "hello";"#, &mut state, rules_for_lang("rust").unwrap());
     assert!(result.contains("\x1b[32m")); // green for string
 }
 
 #[test]
 fn rust_comments_highlighted() {
     let mut state = HlState::Normal;
-    let result = highlight_line(
-        "// this is a comment",
-        &mut state,
-        rules_for_lang("rust").unwrap(),
-    );
+    let result =
+        highlight_line("// this is a comment", &mut state, rules_for_lang("rust").unwrap());
     assert!(result.contains("\x1b[90m")); // grey for comment
 }
 
@@ -40,11 +33,8 @@ fn rust_numbers_highlighted() {
 #[test]
 fn rust_macros_highlighted() {
     let mut state = HlState::Normal;
-    let result = highlight_line(
-        "println!(\"hello\");",
-        &mut state,
-        rules_for_lang("rust").unwrap(),
-    );
+    let result =
+        highlight_line("println!(\"hello\");", &mut state, rules_for_lang("rust").unwrap());
     assert!(result.contains("\x1b[35;1m")); // bold magenta for macro
 }
 

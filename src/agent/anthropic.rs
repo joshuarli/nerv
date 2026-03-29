@@ -3,12 +3,10 @@ use std::sync::atomic::Ordering;
 
 use serde::Deserialize;
 
-use crate::errors::ProviderError;
-
 use super::convert::{LlmContent, LlmMessage};
 use super::provider::*;
 use super::types::*;
-
+use crate::errors::ProviderError;
 
 #[derive(Deserialize)]
 struct SseUsage {
@@ -196,7 +194,6 @@ impl AnthropicProvider {
                         "budget_tokens": tokens,
                     });
                 }
-
             }
         }
 
@@ -212,9 +209,7 @@ impl Provider for AnthropicProvider {
     /// Probe `GET /v1/models` — no tokens consumed, just auth validation.
     fn healthcheck(&self) -> bool {
         let url = format!("{}/v1/models", self.base_url);
-        let mut req = crate::http::agent()
-            .get(&url)
-            .header("anthropic-version", "2023-06-01");
+        let mut req = crate::http::agent().get(&url).header("anthropic-version", "2023-06-01");
         if self.use_bearer {
             // OAuth requires the same beta headers as regular requests
             req = req
@@ -275,9 +270,7 @@ impl Provider for AnthropicProvider {
             Ok(r) => r,
             Err(e) => {
                 crate::log::warn(&format!("anthropic request error: {}", e));
-                return Err(ProviderError::SseParse {
-                    message: e.to_string(),
-                });
+                return Err(ProviderError::SseParse { message: e.to_string() });
             }
         };
 
@@ -310,16 +303,16 @@ impl Provider for AnthropicProvider {
             .name("nerv-sse-reader".into())
             .stack_size(64 * 1024)
             .spawn(move || {
-            let mut body = response.into_body();
-            let reader = std::io::BufReader::new(body.as_reader());
-            for line_result in reader.lines() {
-                let msg = line_result.map_err(|e| e.to_string());
-                if line_tx.send(msg).is_err() {
-                    break; // receiver dropped (cancelled) — body drops, closing connection
+                let mut body = response.into_body();
+                let reader = std::io::BufReader::new(body.as_reader());
+                for line_result in reader.lines() {
+                    let msg = line_result.map_err(|e| e.to_string());
+                    if line_tx.send(msg).is_err() {
+                        break; // receiver dropped (cancelled) — body drops, closing connection
+                    }
                 }
-            }
-        })
-        .expect("failed to spawn SSE reader thread");
+            })
+            .expect("failed to spawn SSE reader thread");
 
         let mut current_event_type = String::new();
         let mut sse_state = SseState::default();
@@ -380,12 +373,12 @@ fn parse_sse_event(event_type: &str, data: &str, state: &mut SseState) -> Vec<Pr
                 return vec![];
             };
             let u = ev.message.usage;
-            // input = total tokens in context window: non-cached + cache hits + cache writes.
-            // Anthropic splits these when prompt caching is active; we must sum all three or
-            // the context counter shows only the tiny non-cached slice (often just 1 token).
-            let total_input = u.input_tokens
-                + u.cache_read_input_tokens
-                + u.cache_creation_input_tokens;
+            // input = total tokens in context window: non-cached + cache hits + cache
+            // writes. Anthropic splits these when prompt caching is active; we
+            // must sum all three or the context counter shows only the tiny
+            // non-cached slice (often just 1 token).
+            let total_input =
+                u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens;
             if total_input > 0 || u.output_tokens > 0 {
                 vec![ProviderEvent::UsageUpdate(Usage {
                     input: total_input,
@@ -420,10 +413,7 @@ fn parse_sse_event(event_type: &str, data: &str, state: &mut SseState) -> Vec<Pr
                 }
                 SseDelta::InputJson { partial_json } => {
                     let id = state.tool_ids.get(&ev.index).cloned().unwrap_or_default();
-                    vec![ProviderEvent::ToolCallArgsDelta {
-                        id,
-                        delta: partial_json,
-                    }]
+                    vec![ProviderEvent::ToolCallArgsDelta { id, delta: partial_json }]
                 }
                 SseDelta::Other => vec![],
             }
@@ -511,11 +501,7 @@ fn messages_to_wire(
                         LlmContent::Thinking(text) => {
                             Some(serde_json::json!({"type": "thinking", "thinking": text}))
                         }
-                        LlmContent::ToolCall {
-                            id,
-                            name,
-                            arguments,
-                        } => Some(serde_json::json!({
+                        LlmContent::ToolCall { id, name, arguments } => Some(serde_json::json!({
                             "type": "tool_use", "id": id, "name": name, "input": arguments,
                         })),
                         LlmContent::Image(_) => None,
@@ -526,11 +512,7 @@ fn messages_to_wire(
                     "content": serde_json::Value::Array(blocks),
                 }));
             }
-            LlmMessage::ToolResult {
-                tool_call_id,
-                content,
-                is_error,
-            } => {
+            LlmMessage::ToolResult { tool_call_id, content, is_error } => {
                 let blocks: Vec<serde_json::Value> =
                     content.iter().map(llm_content_to_anthropic).collect();
                 wire.push(serde_json::json!({
@@ -550,9 +532,10 @@ fn messages_to_wire(
         let first_user_idx = wire.iter().position(|m| m["role"] == "user");
         let last_user_idx = wire.iter().rposition(|m| m["role"] == "user");
 
-        // 4th breakpoint: pin the first user message (compaction summary or initial prompt).
-        // This creates a stable cache segment so the summary is Rc on every post-compaction call.
-        // Skip when first == last to avoid a duplicate breakpoint on the same message.
+        // 4th breakpoint: pin the first user message (compaction summary or initial
+        // prompt). This creates a stable cache segment so the summary is Rc on
+        // every post-compaction call. Skip when first == last to avoid a
+        // duplicate breakpoint on the same message.
         if let Some(fi) = first_user_idx
             && let Some(li) = last_user_idx
             && fi != li
@@ -581,11 +564,7 @@ fn llm_content_to_anthropic(content: &LlmContent) -> serde_json::Value {
             "type": "image",
             "source": {"type": "base64", "media_type": source.media_type, "data": source.data},
         }),
-        LlmContent::ToolCall {
-            id,
-            name,
-            arguments,
-        } => serde_json::json!({
+        LlmContent::ToolCall { id, name, arguments } => serde_json::json!({
             "type": "tool_use", "id": id, "name": name, "input": arguments,
         }),
         LlmContent::Thinking(text) => serde_json::json!({"type": "thinking", "thinking": text}),
@@ -610,8 +589,9 @@ fn cache_control_value(cache: &CacheConfig, base_url: &str) -> serde_json::Value
 mod tests {
     use super::*;
 
-    // Helper: serialize a json! literal to string, then run through the typed parser.
-    // This keeps the test fixtures readable while exercising the real code path.
+    // Helper: serialize a json! literal to string, then run through the typed
+    // parser. This keeps the test fixtures readable while exercising the real
+    // code path.
     fn p(event_type: &str, v: serde_json::Value, state: &mut SseState) -> Vec<ProviderEvent> {
         parse_sse_event(event_type, &v.to_string(), state)
     }
@@ -629,15 +609,8 @@ mod tests {
         assert!(events.is_empty());
 
         // content_block_stop for text (index 0) — should NOT emit ToolCallEnd
-        let events = p(
-            "content_block_stop",
-            serde_json::json!({"index": 0}),
-            &mut state,
-        );
-        assert!(
-            events.is_empty(),
-            "text block stop should not emit ToolCallEnd"
-        );
+        let events = p("content_block_stop", serde_json::json!({"index": 0}), &mut state);
+        assert!(events.is_empty(), "text block stop should not emit ToolCallEnd");
     }
 
     #[test]
@@ -651,15 +624,8 @@ mod tests {
         );
         assert!(events.is_empty());
 
-        let events = p(
-            "content_block_stop",
-            serde_json::json!({"index": 0}),
-            &mut state,
-        );
-        assert!(
-            events.is_empty(),
-            "thinking block stop should not emit ToolCallEnd"
-        );
+        let events = p("content_block_stop", serde_json::json!({"index": 0}), &mut state);
+        assert!(events.is_empty(), "thinking block stop should not emit ToolCallEnd");
     }
 
     #[test]
@@ -673,10 +639,8 @@ mod tests {
             &mut state,
         );
         assert_eq!(events.len(), 1);
-        assert!(
-            matches!(&events[0], ProviderEvent::ToolCallStart { id, name }
-            if id == "toolu_abc123" && name == "read")
-        );
+        assert!(matches!(&events[0], ProviderEvent::ToolCallStart { id, name }
+            if id == "toolu_abc123" && name == "read"));
 
         // input_json_delta — should use real tool ID, not block index
         let events = p(
@@ -693,11 +657,7 @@ mod tests {
         }
 
         // content_block_stop for tool_use (index 1) — should emit ToolCallEnd
-        let events = p(
-            "content_block_stop",
-            serde_json::json!({"index": 1}),
-            &mut state,
-        );
+        let events = p("content_block_stop", serde_json::json!({"index": 1}), &mut state);
         assert_eq!(events.len(), 1);
         assert!(matches!(&events[0], ProviderEvent::ToolCallEnd { id } if id == "toolu_abc123"));
     }
@@ -726,27 +686,15 @@ mod tests {
         );
 
         // Stop block 0 (text) — no ToolCallEnd
-        let e = p(
-            "content_block_stop",
-            serde_json::json!({"index": 0}),
-            &mut state,
-        );
+        let e = p("content_block_stop", serde_json::json!({"index": 0}), &mut state);
         assert!(e.is_empty());
 
         // Stop block 2 (thinking) — no ToolCallEnd
-        let e = p(
-            "content_block_stop",
-            serde_json::json!({"index": 2}),
-            &mut state,
-        );
+        let e = p("content_block_stop", serde_json::json!({"index": 2}), &mut state);
         assert!(e.is_empty());
 
         // Stop block 1 (tool_use) — ToolCallEnd with correct ID
-        let e = p(
-            "content_block_stop",
-            serde_json::json!({"index": 1}),
-            &mut state,
-        );
+        let e = p("content_block_stop", serde_json::json!({"index": 1}), &mut state);
         assert_eq!(e.len(), 1);
         assert!(matches!(&e[0], ProviderEvent::ToolCallEnd { id } if id == "toolu_xyz"));
     }
@@ -778,13 +726,9 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
-            ProviderEvent::MessageStop {
-                stop_reason: StopReason::ToolUse,
-                ..
-            }
+            ProviderEvent::MessageStop { stop_reason: StopReason::ToolUse, .. }
         ));
     }
-
 
     use crate::agent::convert::{LlmContent, LlmMessage};
 
@@ -795,23 +739,17 @@ mod tests {
     #[test]
     fn first_user_message_gets_cache_breakpoint_in_multi_turn() {
         let messages = vec![
-            LlmMessage::User {
-                content: vec![LlmContent::Text("summary of prior context".into())],
-            },
-            LlmMessage::Assistant {
-                content: vec![LlmContent::Text("ok".into())],
-            },
-            LlmMessage::User {
-                content: vec![LlmContent::Text("do something".into())],
-            },
-            LlmMessage::Assistant {
-                content: vec![LlmContent::Text("done".into())],
-            },
-            LlmMessage::User {
-                content: vec![LlmContent::Text("latest question".into())],
-            },
+            LlmMessage::User { content: vec![LlmContent::Text("summary of prior context".into())] },
+            LlmMessage::Assistant { content: vec![LlmContent::Text("ok".into())] },
+            LlmMessage::User { content: vec![LlmContent::Text("do something".into())] },
+            LlmMessage::Assistant { content: vec![LlmContent::Text("done".into())] },
+            LlmMessage::User { content: vec![LlmContent::Text("latest question".into())] },
         ];
-        let wire = messages_to_wire(&messages, &make_cache(CacheRetention::Long), "https://api.anthropic.com");
+        let wire = messages_to_wire(
+            &messages,
+            &make_cache(CacheRetention::Long),
+            "https://api.anthropic.com",
+        );
 
         // First user message should have cache_control on its last content block
         let first_user = &wire[0];
@@ -835,12 +773,12 @@ mod tests {
     fn single_user_message_no_duplicate_breakpoint() {
         // When there's only one user message, it's both first and last —
         // should only get one breakpoint, not two
-        let messages = vec![
-            LlmMessage::User {
-                content: vec![LlmContent::Text("hello".into())],
-            },
-        ];
-        let wire = messages_to_wire(&messages, &make_cache(CacheRetention::Long), "https://api.anthropic.com");
+        let messages = vec![LlmMessage::User { content: vec![LlmContent::Text("hello".into())] }];
+        let wire = messages_to_wire(
+            &messages,
+            &make_cache(CacheRetention::Long),
+            "https://api.anthropic.com",
+        );
         let content = wire[0]["content"].as_array().unwrap();
         // Should have cache_control (from the last-user-message logic)
         assert!(content.last().unwrap().get("cache_control").is_some());
@@ -849,23 +787,22 @@ mod tests {
     #[test]
     fn no_cache_breakpoints_when_disabled() {
         let messages = vec![
-            LlmMessage::User {
-                content: vec![LlmContent::Text("summary".into())],
-            },
-            LlmMessage::Assistant {
-                content: vec![LlmContent::Text("ok".into())],
-            },
-            LlmMessage::User {
-                content: vec![LlmContent::Text("question".into())],
-            },
+            LlmMessage::User { content: vec![LlmContent::Text("summary".into())] },
+            LlmMessage::Assistant { content: vec![LlmContent::Text("ok".into())] },
+            LlmMessage::User { content: vec![LlmContent::Text("question".into())] },
         ];
-        let wire = messages_to_wire(&messages, &make_cache(CacheRetention::None), "https://api.anthropic.com");
+        let wire = messages_to_wire(
+            &messages,
+            &make_cache(CacheRetention::None),
+            "https://api.anthropic.com",
+        );
         for msg in &wire {
             if let Some(content) = msg["content"].as_array() {
                 for block in content {
                     assert!(
                         block.get("cache_control").is_none() || block["cache_control"].is_null(),
-                        "no cache breakpoints when caching disabled: {:?}", block,
+                        "no cache breakpoints when caching disabled: {:?}",
+                        block,
                     );
                 }
             }

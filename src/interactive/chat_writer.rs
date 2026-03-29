@@ -18,9 +18,10 @@ pub struct ChatWriter {
     picker: Option<Vec<String>>,
     // Per-block render cache (interior mutability for use in &self render)
     cache: RefCell<RenderCache>,
-    /// Total rendered lines already evicted to terminal scrollback (absolute offset).
-    /// notify_flushed receives an absolute scrollback_flushed count from the TUI;
-    /// we subtract this to get the delta relative to the current block list.
+    /// Total rendered lines already evicted to terminal scrollback (absolute
+    /// offset). notify_flushed receives an absolute scrollback_flushed
+    /// count from the TUI; we subtract this to get the delta relative to
+    /// the current block list.
     lines_evicted: usize,
 }
 
@@ -53,10 +54,7 @@ impl ChatWriter {
             blocks: RefCell::new(Vec::new()),
             streaming: None,
             picker: None,
-            cache: RefCell::new(RenderCache {
-                block_lines: Vec::new(),
-                width: 0,
-            }),
+            cache: RefCell::new(RenderCache { block_lines: Vec::new(), width: 0 }),
             lines_evicted: 0,
         }
     }
@@ -68,17 +66,19 @@ impl ChatWriter {
         self.lines_evicted = 0;
     }
 
-    /// Reset the eviction baseline. Call whenever the TUI resets scrollback_flushed
-    /// to 0 (e.g. after suspend/resume), so future notify_flushed deltas are correct.
+    /// Reset the eviction baseline. Call whenever the TUI resets
+    /// scrollback_flushed to 0 (e.g. after suspend/resume), so future
+    /// notify_flushed deltas are correct.
     pub fn reset_eviction(&mut self) {
         self.lines_evicted = 0;
     }
 
-    /// Called after the TUI flushes `flushed_lines` lines to terminal scrollback
-    /// (absolute cumulative count since last full redraw).
-    /// Drops source blocks and cached render lines that are fully covered, freeing
-    /// their heap allocation.  Re-render cost is zero because the terminal owns
-    /// the scrollback — these blocks will never be diff-rendered again.
+    /// Called after the TUI flushes `flushed_lines` lines to terminal
+    /// scrollback (absolute cumulative count since last full redraw).
+    /// Drops source blocks and cached render lines that are fully covered,
+    /// freeing their heap allocation.  Re-render cost is zero because the
+    /// terminal owns the scrollback — these blocks will never be
+    /// diff-rendered again.
     pub fn notify_flushed(&mut self, flushed_lines: usize) {
         // Convert absolute TUI count to delta relative to our current block list.
         // lines_evicted tracks how many lines we have already dropped in prior calls.
@@ -106,7 +106,8 @@ impl ChatWriter {
         self.blocks.borrow_mut().drain(..to_drop);
         // Advance the eviction cursor by the lines we just dropped.
         self.lines_evicted += covered;
-        // block_lines and blocks are now in sync again (same length, same offset).
+        // block_lines and blocks are now in sync again (same length, same
+        // offset).
     }
 
     pub fn begin_stream(&mut self) {
@@ -166,9 +167,7 @@ impl ChatWriter {
 
     pub fn push_tool_call(&mut self, name: &str, args: &serde_json::Value) {
         let detail = format_tool_call(name, args);
-        self.blocks
-            .borrow_mut()
-            .push(Block::Styled(vec![format!("{}› {}", theme::DIM, detail)]));
+        self.blocks.borrow_mut().push(Block::Styled(vec![format!("{}› {}", theme::DIM, detail)]));
     }
 
     pub fn push_tool_result(&mut self, content: &str, is_error: bool) {
@@ -179,12 +178,7 @@ impl ChatWriter {
         }
         let total = content.lines().count();
         if total > 30 {
-            lines.push(format!(
-                "{}  ... {} more lines{}",
-                theme::DIM,
-                total - 30,
-                theme::RESET,
-            ));
+            lines.push(format!("{}  ... {} more lines{}", theme::DIM, total - 30, theme::RESET,));
             lines.push(String::new());
         }
         self.blocks.borrow_mut().push(Block::Styled(lines));
@@ -206,12 +200,11 @@ impl ChatWriter {
     }
 
     pub fn streaming_len(&self) -> usize {
-        self.streaming
-            .as_ref()
-            .map_or(0, |s| s.thinking.len() + s.text.len())
+        self.streaming.as_ref().map_or(0, |s| s.thinking.len() + s.text.len())
     }
 
-    /// Set an ephemeral picker overlay (rendered after permanent blocks, not cached).
+    /// Set an ephemeral picker overlay (rendered after permanent blocks, not
+    /// cached).
     pub fn set_picker(&mut self, items: Vec<String>) {
         self.picker = Some(items);
     }
@@ -250,15 +243,7 @@ impl Component for ChatWriter {
         // Live streaming content (never cached — changes every frame)
         if let Some(ref s) = self.streaming {
             if !s.thinking.is_empty() && !s.thinking_committed {
-                for line in s
-                    .thinking
-                    .lines()
-                    .rev()
-                    .take(3)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                {
+                for line in s.thinking.lines().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
                     out.extend(wrap_text_with_ansi(
                         &format!("{}│ {}{}", theme::THINKING, line, theme::RESET),
                         width,
@@ -283,18 +268,14 @@ impl Component for ChatWriter {
 
 fn render_block(block: &Block, width: u16) -> Vec<String> {
     match block {
-        Block::Styled(lines) => lines
-            .iter()
-            .flat_map(|line| wrap_text_with_ansi(line, width))
-            .collect(),
+        Block::Styled(lines) => {
+            lines.iter().flat_map(|line| wrap_text_with_ansi(line, width)).collect()
+        }
         Block::Markdown(src) => Markdown::new(src).render(width),
         Block::Spacer => vec![String::new()],
     }
 }
 
 fn style_thinking(thinking: &str) -> Vec<String> {
-    thinking
-        .lines()
-        .map(|l| format!("{}│ {}{}", theme::THINKING, l, theme::RESET))
-        .collect()
+    thinking.lines().map(|l| format!("{}│ {}{}", theme::THINKING, l, theme::RESET)).collect()
 }

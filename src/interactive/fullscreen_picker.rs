@@ -1,8 +1,9 @@
 /// Full-screen alt-screen picker.
 ///
-/// Callers implement [`FullscreenList`] and pass it to [`run_fullscreen_picker`],
-/// which enters the alt screen, drives its own blocking stdin read loop, and
-/// returns the selected ID (or `None` if the user cancelled).
+/// Callers implement [`FullscreenList`] and pass it to
+/// [`run_fullscreen_picker`], which enters the alt screen, drives its own
+/// blocking stdin read loop, and returns the selected ID (or `None` if the user
+/// cancelled).
 ///
 /// The main TUI is not touched during the picker's lifetime; the alt screen
 /// provides a completely separate canvas. When `run_fullscreen_picker` returns,
@@ -10,8 +11,8 @@
 use std::io::{self, Write};
 use std::mem::MaybeUninit;
 
-use crate::tui::stdin_buffer::{StdinBuffer, StdinEvent};
 use crate::tui::keys;
+use crate::tui::stdin_buffer::{StdinBuffer, StdinEvent};
 
 // ─────────────────────────────── trait ──────────────────────────────────────
 
@@ -102,14 +103,18 @@ pub fn run_fullscreen_picker(list: &mut dyn FullscreenList) -> Option<String> {
                     } else if keys::matches_key(&seq, "down") {
                         list.move_down();
                         needs_redraw = true;
-                    } else if keys::matches_key(&seq, "left") || keys::matches_key(&seq, "page_up") {
+                    } else if keys::matches_key(&seq, "left") || keys::matches_key(&seq, "page_up")
+                    {
                         list.move_page_up();
                         needs_redraw = true;
-                    } else if keys::matches_key(&seq, "right") || keys::matches_key(&seq, "page_down") {
+                    } else if keys::matches_key(&seq, "right")
+                        || keys::matches_key(&seq, "page_down")
+                    {
                         list.move_page_down();
                         needs_redraw = true;
                     } else if list.handle_extra_key(&seq) {
-                        // handle_extra_key has priority (e.g. Ctrl+U for tree filter vs. clear_query)
+                        // handle_extra_key has priority (e.g. Ctrl+U for tree filter vs.
+                        // clear_query)
                         needs_redraw = true;
                     } else if keys::matches_key(&seq, "ctrl+u") {
                         list.clear_query();
@@ -166,22 +171,14 @@ fn render_frame(out: &mut io::Stdout, list: &mut dyn FullscreenList) {
 /// Non-blocking drain of any bytes sitting in stdin.
 fn drain_stdin() {
     let mut buf = [0u8; 256];
-    let mut pfd = libc::pollfd {
-        fd: libc::STDIN_FILENO,
-        events: libc::POLLIN,
-        revents: 0,
-    };
+    let mut pfd = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
     loop {
         let ready = unsafe { libc::poll(&mut pfd, 1, 0) }; // timeout=0: instant
         if ready <= 0 {
             break;
         }
         let n = unsafe {
-            libc::read(
-                libc::STDIN_FILENO,
-                buf.as_mut_ptr() as *mut libc::c_void,
-                buf.len(),
-            )
+            libc::read(libc::STDIN_FILENO, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
         };
         if n <= 0 {
             break;
@@ -206,9 +203,5 @@ fn term_size() -> (u16, u16) {
 fn single_printable(s: &str) -> Option<char> {
     let mut chars = s.chars();
     let ch = chars.next()?;
-    if chars.next().is_none() && !ch.is_control() {
-        Some(ch)
-    } else {
-        None
-    }
+    if chars.next().is_none() && !ch.is_control() { Some(ch) } else { None }
 }

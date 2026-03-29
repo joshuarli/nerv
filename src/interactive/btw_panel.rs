@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use crossbeam_channel as channel;
 
 use crate::agent::agent::Agent;
-use crate::agent::provider::{new_cancel_flag, CancelFlag, ProviderRegistry};
+use crate::agent::provider::{CancelFlag, ProviderRegistry, new_cancel_flag};
 use crate::agent::types::{AgentEvent, AgentMessage, ContentItem, Model, StopReason, StreamDelta};
 use crate::interactive::theme;
 use crate::tui::tui::Component;
@@ -56,7 +56,12 @@ impl BtwPanel {
             rx,
             cancel,
             cost: crate::agent::types::Cost::default(),
-            usage: crate::agent::types::Usage { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+            usage: crate::agent::types::Usage {
+                input: 0,
+                output: 0,
+                cache_read: 0,
+                cache_write: 0,
+            },
             pricing,
         }
     }
@@ -118,7 +123,8 @@ impl BtwPanel {
             return vec!["…".into()];
         }
         let mut lines = wrap_text(&self.response, inner_width);
-        // Keep only the last MAX_CONTENT_LINES lines so the panel doesn't grow unboundedly.
+        // Keep only the last MAX_CONTENT_LINES lines so the panel doesn't grow
+        // unboundedly.
         if lines.len() > MAX_CONTENT_LINES {
             lines = lines[lines.len() - MAX_CONTENT_LINES..].to_vec();
         }
@@ -175,7 +181,11 @@ impl Component for BtwPanel {
             if self.usage.cache_write > 0 {
                 s.push_str(&format!("Wc{} ", fmt_tok(self.usage.cache_write)));
             }
-            s.push_str(&format!("in{} out{}", fmt_tok(self.usage.input), fmt_tok(self.usage.output)));
+            s.push_str(&format!(
+                "in{} out{}",
+                fmt_tok(self.usage.input),
+                fmt_tok(self.usage.output)
+            ));
             if self.cost.total > 0.0 {
                 s.push_str(&format!(" ${}", fmt_cost(self.cost.total)));
             }

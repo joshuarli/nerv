@@ -1,5 +1,6 @@
-use crate::agent::types::{AgentMessage, EffortLevel};
 use serde::{Deserialize, Serialize};
+
+use crate::agent::types::{AgentMessage, EffortLevel};
 
 pub const CURRENT_SESSION_VERSION: u32 = 4;
 
@@ -217,7 +218,8 @@ pub struct SessionTreeNode {
     pub entry_type: String,
     /// First ~80 chars of meaningful content.
     pub summary: String,
-    /// Full raw text (for user messages — placed into editor when selected in /tree).
+    /// Full raw text (for user messages — placed into editor when selected in
+    /// /tree).
     pub raw_text: String,
     pub timestamp: String,
     pub children: Vec<SessionTreeNode>,
@@ -268,9 +270,7 @@ fn rand_u64() -> u64 {
 }
 
 pub fn now_iso() -> String {
-    let d = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let secs = d.as_secs();
     let (year, month, day) = days_to_ymd(secs / 86400);
     let t = secs % 86400;

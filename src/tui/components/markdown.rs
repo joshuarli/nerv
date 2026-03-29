@@ -1,7 +1,8 @@
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+
 use crate::tui::highlight;
 use crate::tui::tui::Component;
 use crate::tui::utils::wrap_text_with_ansi;
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
 /// Theme functions for markdown rendering. Each takes raw text and returns
 /// ANSI-styled output.

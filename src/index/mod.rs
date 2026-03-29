@@ -89,8 +89,8 @@ struct FileEntry {
 /// have been modified since the last scan.
 struct SymbolCache {
     db: Connection,
-    /// Repo root this cache is associated with. Paths stored as relative to this root.
-    /// `None` means absolute paths are used (legacy / non-git).
+    /// Repo root this cache is associated with. Paths stored as relative to
+    /// this root. `None` means absolute paths are used (legacy / non-git).
     repo_root: Option<PathBuf>,
 }
 
@@ -120,29 +120,26 @@ impl SymbolCache {
         )
         .ok()?;
         // Index on mtime for the 30-day eviction DELETE.
-        db.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_cache_mtime ON symbol_cache(mtime);",
-        )
-        .ok();
+        db.execute_batch("CREATE INDEX IF NOT EXISTS idx_cache_mtime ON symbol_cache(mtime);").ok();
         // Evict rows older than 30 days to bound cache growth.
-        let cutoff_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64
+        let cutoff_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
+            as i64
             - 30 * 24 * 3600 * 1000;
         db.execute("DELETE FROM symbol_cache WHERE mtime < ?1", params![cutoff_ms]).ok();
         Some(Self { db, repo_root: None })
     }
 
-    /// Attach a repo root so the cache stores relative paths instead of absolute ones.
-    /// Relative-path keys survive directory renames transparently.
+    /// Attach a repo root so the cache stores relative paths instead of
+    /// absolute ones. Relative-path keys survive directory renames
+    /// transparently.
     fn with_repo_root(mut self, root: PathBuf) -> Self {
         self.repo_root = Some(root);
         self
     }
 
     /// Normalise an absolute path to the key stored in the DB.
-    /// With a `repo_root`, this is relative to the root; otherwise it's the absolute path.
+    /// With a `repo_root`, this is relative to the root; otherwise it's the
+    /// absolute path.
     fn cache_key<'a>(&self, path: &'a Path) -> std::borrow::Cow<'a, Path> {
         if let Some(ref root) = self.repo_root {
             if let Ok(rel) = path.strip_prefix(root) {
@@ -156,7 +153,8 @@ impl SymbolCache {
     fn get(&self, path: &Path, mtime: u128) -> Option<Vec<SymbolDef>> {
         let key = self.cache_key(path);
         let key_str = key.to_string_lossy();
-        let json: String = self.db
+        let json: String = self
+            .db
             .query_row(
                 "SELECT data FROM symbol_cache WHERE path = ?1 AND mtime = ?2",
                 params![key_str.as_ref(), mtime as i64],
@@ -269,11 +267,10 @@ impl SymbolIndex {
         Self::new_inner(SymbolCache::open(repo_dir))
     }
 
-    /// Create with a cache, and attach a repo root so paths are stored relative to it.
-    /// This makes the cache survive directory renames.
+    /// Create with a cache, and attach a repo root so paths are stored relative
+    /// to it. This makes the cache survive directory renames.
     pub fn new_with_cache_and_root(repo_dir: &Path, repo_root: &Path) -> Self {
-        let cache = SymbolCache::open(repo_dir)
-            .map(|c| c.with_repo_root(repo_root.to_path_buf()));
+        let cache = SymbolCache::open(repo_dir).map(|c| c.with_repo_root(repo_root.to_path_buf()));
         Self::new_inner(cache)
     }
 
@@ -288,21 +285,16 @@ impl SymbolIndex {
 
         let queries = [
             Query::new(&rust_lang, RUST_QUERY).expect("valid Rust query"),
-            Query::new(&go_lang,   GO_QUERY).expect("valid Go query"),
-            Query::new(&py_lang,   PYTHON_QUERY).expect("valid Python query"),
-            Query::new(&ts_lang,   TS_QUERY).expect("valid TypeScript query"),
+            Query::new(&go_lang, GO_QUERY).expect("valid Go query"),
+            Query::new(&py_lang, PYTHON_QUERY).expect("valid Python query"),
+            Query::new(&ts_lang, TS_QUERY).expect("valid TypeScript query"),
         ];
 
-        Self {
-            files: HashMap::new(),
-            parser,
-            queries,
-            last_scan: None,
-            cache,
-        }
+        Self { files: HashMap::new(), parser, queries, last_scan: None, cache }
     }
 
-    /// Check whether the index is already up-to-date for all `.rs` files under `root`.
+    /// Check whether the index is already up-to-date for all `.rs` files under
+    /// `root`.
     ///
     /// This is a **read-only** operation: it stats files on disk and compares
     /// their mtimes against what is already indexed, but never mutates `self`.
@@ -316,11 +308,12 @@ impl SymbolIndex {
     /// lock.write().unwrap().index_dir(&cwd);
     /// ```
     ///
-    /// Returns `true` if every `.rs` file under `root` is already indexed at the
-    /// correct mtime — meaning no write lock is needed.
+    /// Returns `true` if every `.rs` file under `root` is already indexed at
+    /// the correct mtime — meaning no write lock is needed.
     ///
-    /// Callers holding an `RwLock<SymbolIndex>` should use this under a read lock
-    /// before deciding whether to escalate to a write lock for [`index_dir`].
+    /// Callers holding an `RwLock<SymbolIndex>` should use this under a read
+    /// lock before deciding whether to escalate to a write lock for
+    /// [`index_dir`].
     pub fn is_fresh(&self, root: &Path) -> bool {
         // Always stat — this is the point of the read-lock fast path.
         // We deliberately do not apply the debounce here; debounce only applies
@@ -349,8 +342,9 @@ impl SymbolIndex {
             .collect()
     }
 
-    /// Index all `.rs` files under `root`, skipping files whose mtime hasn't changed.
-    /// Debounced: no-ops if called within `SCAN_DEBOUNCE` of the last scan.
+    /// Index all `.rs` files under `root`, skipping files whose mtime hasn't
+    /// changed. Debounced: no-ops if called within `SCAN_DEBOUNCE` of the
+    /// last scan.
     ///
     /// Prefer the two-phase pattern (see [`is_fresh`]) when holding an
     /// `RwLock<SymbolIndex>` to avoid taking a write lock on warm invocations.
@@ -367,12 +361,8 @@ impl SymbolIndex {
     pub fn force_index_dir(&mut self, root: &Path) {
         let rs_files = collect_rs_files(root);
         // Remove entries for files that no longer exist, cleaning up cache too.
-        let removed: Vec<PathBuf> = self
-            .files
-            .keys()
-            .filter(|p| !rs_files.contains_key(*p))
-            .cloned()
-            .collect();
+        let removed: Vec<PathBuf> =
+            self.files.keys().filter(|p| !rs_files.contains_key(*p)).cloned().collect();
         for path in removed {
             self.files.remove(&path);
             if let Some(ref cache) = self.cache {
@@ -385,10 +375,7 @@ impl SymbolIndex {
                     continue;
                 }
             }
-            let mtime_ms = mtime
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
+            let mtime_ms = mtime.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
             // Try the on-disk cache before running tree-sitter.
             if let Some(ref cache) = self.cache {
                 if let Some(symbols) = cache.get(&path, mtime_ms) {
@@ -438,10 +425,7 @@ impl SymbolIndex {
                 return;
             }
         };
-        let mtime_ms = mtime
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
+        let mtime_ms = mtime.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
         // Try cache first.
         if let Some(ref cache) = self.cache {
             if let Some(symbols) = cache.get(&canonical, mtime_ms) {
@@ -462,11 +446,17 @@ impl SymbolIndex {
     fn parse_symbols(&mut self, path: &Path, source: &str) -> Vec<SymbolDef> {
         // Select language and query based on file extension.
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let (lang, query_idx, find_parent): (tree_sitter::Language, usize, fn(tree_sitter::Node, &[u8]) -> Option<String>) = match ext {
-            "go"  => (tree_sitter_go::LANGUAGE.into(), 1, find_go_method_parent),
-            "py"  => (tree_sitter_python::LANGUAGE.into(), 2, find_python_method_parent),
-            "ts" | "tsx" => (tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(), 3, find_ts_method_parent),
-            _     => (tree_sitter_rust::LANGUAGE.into(), 0, find_impl_parent), // default: Rust
+        let (lang, query_idx, find_parent): (
+            tree_sitter::Language,
+            usize,
+            fn(tree_sitter::Node, &[u8]) -> Option<String>,
+        ) = match ext {
+            "go" => (tree_sitter_go::LANGUAGE.into(), 1, find_go_method_parent),
+            "py" => (tree_sitter_python::LANGUAGE.into(), 2, find_python_method_parent),
+            "ts" | "tsx" => {
+                (tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(), 3, find_ts_method_parent)
+            }
+            _ => (tree_sitter_rust::LANGUAGE.into(), 0, find_impl_parent), // default: Rust
         };
 
         // Set parser language for this file's extension.
@@ -487,9 +477,12 @@ impl SymbolIndex {
         let mut seen_ranges = std::collections::HashSet::new();
 
         let mut matches = cursor.matches(query, tree.root_node(), source_bytes);
-        while let Some(m) = { matches.advance(); matches.get() } {
+        while let Some(m) = {
+            matches.advance();
+            matches.get()
+        } {
             let name_capture = m.captures.iter().find(|c| c.index == name_idx);
-            let def_capture  = m.captures.iter().find(|c| c.index != name_idx);
+            let def_capture = m.captures.iter().find(|c| c.index != name_idx);
 
             let (name_capture, def_capture) = match (name_capture, def_capture) {
                 (Some(n), Some(d)) => (n, d),
@@ -517,17 +510,11 @@ impl SymbolIndex {
             let end_line = node.end_position().row as u32 + 1;
 
             let start = node.start_byte();
-            let sig_end = source[start..]
-                .find('\n')
-                .map(|i| start + i)
-                .unwrap_or(node.end_byte());
+            let sig_end = source[start..].find('\n').map(|i| start + i).unwrap_or(node.end_byte());
             let signature = source[start..sig_end].trim().to_string();
 
-            let parent = if kind == SymbolKind::Method {
-                find_parent(node, source_bytes)
-            } else {
-                None
-            };
+            let parent =
+                if kind == SymbolKind::Method { find_parent(node, source_bytes) } else { None };
 
             symbols.push(SymbolDef {
                 name: name.into(),
@@ -559,11 +546,7 @@ impl SymbolIndex {
         let mut results: Vec<&SymbolDef> = self
             .files
             .iter()
-            .filter(|(path, _)| {
-                filter_ref
-                    .map(|f| path.starts_with(f))
-                    .unwrap_or(true)
-            })
+            .filter(|(path, _)| filter_ref.map(|f| path.starts_with(f)).unwrap_or(true))
             .flat_map(|(_, entry)| entry.symbols.iter())
             .filter(|sym| {
                 let name = sym.name.to_lowercase();
@@ -595,7 +578,6 @@ impl SymbolIndex {
 
         results
     }
-
 }
 
 /// Walk up from a Rust method node to find the enclosing `impl` block.
@@ -603,12 +585,8 @@ fn find_impl_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let mut current = node.parent();
     while let Some(n) = current {
         if n.kind() == "impl_item" {
-            let trait_part = n
-                .child_by_field_name("trait")
-                .and_then(|t| t.utf8_text(source).ok());
-            let type_part = n
-                .child_by_field_name("type")
-                .and_then(|t| t.utf8_text(source).ok());
+            let trait_part = n.child_by_field_name("trait").and_then(|t| t.utf8_text(source).ok());
+            let type_part = n.child_by_field_name("type").and_then(|t| t.utf8_text(source).ok());
             return match (trait_part, type_part) {
                 (Some(tr), Some(ty)) => Some(format!("impl {} for {}", tr, ty)),
                 (None, Some(ty)) => Some(format!("impl {}", ty)),
@@ -621,7 +599,8 @@ fn find_impl_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
 }
 
 /// Walk up from a Go method_declaration to extract the receiver type name.
-/// The receiver parameter looks like: `(receiver_list (parameter_declaration type: ...))`
+/// The receiver parameter looks like: `(receiver_list (parameter_declaration
+/// type: ...))`
 fn find_go_method_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     // The method_declaration itself has a `receiver` field.
     let recv = node.child_by_field_name("receiver")?;
@@ -650,14 +629,14 @@ fn extract_go_type_name(node: tree_sitter::Node, source: &[u8]) -> Option<String
             None
         }
         "parameter_declaration" => {
-            node.child_by_field_name("type")
-                .and_then(|t| extract_go_type_name(t, source))
+            node.child_by_field_name("type").and_then(|t| extract_go_type_name(t, source))
         }
         _ => None,
     }
 }
 
-/// Walk up from a Python function_definition to find an enclosing class_definition.
+/// Walk up from a Python function_definition to find an enclosing
+/// class_definition.
 fn find_python_method_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let mut current = node.parent();
     while let Some(n) = current {
@@ -672,7 +651,8 @@ fn find_python_method_parent(node: tree_sitter::Node, source: &[u8]) -> Option<S
     None
 }
 
-/// Walk up from a TypeScript method_definition to find the enclosing class_declaration.
+/// Walk up from a TypeScript method_definition to find the enclosing
+/// class_declaration.
 fn find_ts_method_parent(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
     let mut current = node.parent();
     while let Some(n) = current {
@@ -689,15 +669,14 @@ fn find_ts_method_parent(node: tree_sitter::Node, source: &[u8]) -> Option<Strin
 
 const SOURCE_EXTENSIONS: &[&str] = &["rs", "go", "py", "ts", "tsx"];
 
-/// Collect all indexable source files under `root`, respecting .gitignore via `fd`.
+/// Collect all indexable source files under `root`, respecting .gitignore via
+/// `fd`.
 fn collect_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
     // Prefer fd: respects .gitignore by default.
-    let ext_args: Vec<_> = SOURCE_EXTENSIONS
-        .iter()
-        .flat_map(|e| ["--extension", e])
-        .collect();
+    let ext_args: Vec<_> = SOURCE_EXTENSIONS.iter().flat_map(|e| ["--extension", e]).collect();
     let output = std::process::Command::new("fd")
-        .arg("--type").arg("f")
+        .arg("--type")
+        .arg("f")
         .args(&ext_args)
         .arg("--absolute-path")
         .current_dir(root)
@@ -720,10 +699,7 @@ fn collect_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
     }
 
     // Fallback: `git ls-files` also respects .gitignore.
-    let glob_args: Vec<_> = SOURCE_EXTENSIONS
-        .iter()
-        .map(|e| format!("*.{}", e))
-        .collect();
+    let glob_args: Vec<_> = SOURCE_EXTENSIONS.iter().map(|e| format!("*.{}", e)).collect();
     let output = std::process::Command::new("git")
         .args(["ls-files", "--cached", "--others", "--exclude-standard"])
         .args(&glob_args)
@@ -766,7 +742,11 @@ fn walk_dir_recursive(dir: &Path, out: &mut HashMap<PathBuf, SystemTime>) {
                 continue;
             }
             walk_dir_recursive(&path, out);
-        } else if path.extension().and_then(|e| e.to_str()).is_some_and(|e| SOURCE_EXTENSIONS.contains(&e)) {
+        } else if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| SOURCE_EXTENSIONS.contains(&e))
+        {
             if let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) {
                 let path = path.canonicalize().unwrap_or(path);
                 out.insert(path, mtime);
@@ -845,7 +825,8 @@ mod tests {
 
     #[test]
     fn trait_definition() {
-        let syms = parse_source("pub trait AgentTool: Send + Sync {\n    fn name(&self) -> &str;\n}\n");
+        let syms =
+            parse_source("pub trait AgentTool: Send + Sync {\n    fn name(&self) -> &str;\n}\n");
         let tr = syms.iter().find(|s| s.name.as_ref() == "AgentTool").unwrap();
         assert_eq!(tr.kind, SymbolKind::Trait);
     }
@@ -881,11 +862,7 @@ mod tests {
         let syms = index.parse_symbols(Path::new("test.rs"), source);
         index.files.insert(
             PathBuf::from("test.rs"),
-            FileEntry {
-                mtime: SystemTime::UNIX_EPOCH,
-                symbols: syms,
-                source: None,
-            },
+            FileEntry { mtime: SystemTime::UNIX_EPOCH, symbols: syms, source: None },
         );
 
         // Substring match
@@ -1124,18 +1101,13 @@ mod tests {
         // Write a new file, but index_dir should be debounced
         std::fs::write(tmp.path().join("b.rs"), "fn second() {}\n").unwrap();
         index.index_dir(tmp.path());
-        assert_eq!(
-            index.search("second", None, None).len(),
-            0,
-            "debounce should skip the scan"
-        );
+        assert_eq!(index.search("second", None, None).len(), 0, "debounce should skip the scan");
 
         // mark_dirty clears the debounce
         index.mark_dirty();
         index.index_dir(tmp.path());
         assert_eq!(index.search("second", None, None).len(), 1);
     }
-
 
     fn cached_index(dir: &Path) -> SymbolIndex {
         let cache_dir = dir.join(".nerv");
@@ -1241,7 +1213,11 @@ mod tests {
 
         let mut idx2 = cached_index(tmp.path());
         idx2.force_index_dir(tmp.path());
-        assert_eq!(idx2.search("version_one", None, None).len(), 0, "stale cache entry should not persist");
+        assert_eq!(
+            idx2.search("version_one", None, None).len(),
+            0,
+            "stale cache entry should not persist"
+        );
         assert_eq!(idx2.search("version_two", None, None).len(), 1);
     }
 
@@ -1379,7 +1355,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn byte_offsets_point_to_exact_source() {
         // start_byte/end_byte must slice back to the exact symbol text.
@@ -1434,12 +1409,7 @@ mod tests {
         let mut sorted = syms.clone();
         sorted.sort_by_key(|s| s.start_byte);
         for w in sorted.windows(2) {
-            assert!(
-                w[0].end_byte <= w[1].start_byte,
-                "ranges overlap: {:?} and {:?}",
-                w[0],
-                w[1]
-            );
+            assert!(w[0].end_byte <= w[1].start_byte, "ranges overlap: {:?} and {:?}", w[0], w[1]);
         }
         // Each slice must contain only that function's body.
         for sym in &sorted {
@@ -1448,7 +1418,7 @@ mod tests {
         }
         let alpha = sorted.iter().find(|s| s.name.as_ref() == "alpha").unwrap();
         let slice = &source[alpha.start_byte as usize..alpha.end_byte as usize];
-        assert!(!slice.contains("beta"),  "alpha slice bleeds into beta:  {:?}", slice);
+        assert!(!slice.contains("beta"), "alpha slice bleeds into beta:  {:?}", slice);
         assert!(!slice.contains("gamma"), "alpha slice bleeds into gamma: {:?}", slice);
     }
 
@@ -1509,7 +1479,8 @@ mod tests {
 
     #[test]
     fn ts_free_function() {
-        let syms = parse_ts("function greet(name: string): string {\n  return `hello ${name}`;\n}\n");
+        let syms =
+            parse_ts("function greet(name: string): string {\n  return `hello ${name}`;\n}\n");
         assert_eq!(syms.len(), 1);
         assert_eq!(syms[0].name.as_ref(), "greet");
         assert_eq!(syms[0].kind, SymbolKind::Function);

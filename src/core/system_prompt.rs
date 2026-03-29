@@ -1,5 +1,6 @@
-use super::resource_loader::LoadedResources;
 use std::path::Path;
+
+use super::resource_loader::LoadedResources;
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "\
 You are an expert coding agent. You have tools to read, edit, and write files, run shell commands, and search code. Help the user with their coding task.
@@ -30,8 +31,8 @@ Never jump to step 4 when step 2 or 3 would answer the question.
 - When the task is done, stop. Do not add a closing summary unless the user asked a question that needs an answer.";
 
 /// Build the full system prompt by concatenating:
-/// 1. Per-model prompt (~/.nerv/prompts/{model_id}.md) or
-///    global (~/.nerv/system-prompt.md) or compiled default
+/// 1. Per-model prompt (~/.nerv/prompts/{model_id}.md) or global
+///    (~/.nerv/system-prompt.md) or compiled default
 /// 2. Tool list
 /// 3. Project context (AGENTS.md, CLAUDE.md)
 /// 4. Memory

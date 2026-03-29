@@ -12,14 +12,14 @@ use std::sync::{Arc, RwLock};
 use crossbeam_channel as channel;
 
 use crate::agent::agent::Agent;
-use crate::agent::provider::{new_cancel_flag, ProviderRegistry};
+use crate::agent::provider::{ProviderRegistry, new_cancel_flag};
 use crate::agent::types::{
     AgentEvent, AgentMessage, AssistantMessage, ContentBlock, ContentItem, Model, StopReason,
     StreamDelta,
 };
 use crate::interactive::theme;
-use crate::tui::stdin_buffer::{StdinBuffer, StdinEvent};
 use crate::tui::keys;
+use crate::tui::stdin_buffer::{StdinBuffer, StdinEvent};
 
 // ─────────────────────────────── public entry ────────────────────────────────
 
@@ -102,11 +102,7 @@ pub fn run_btw_overlay(
         }
 
         // Block on stdin with a short timeout so we keep draining chunks.
-        let mut pfd = libc::pollfd {
-            fd: libc::STDIN_FILENO,
-            events: libc::POLLIN,
-            revents: 0,
-        };
+        let mut pfd = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
         // 80 ms — fast enough for smooth streaming, low enough CPU
         let ready = unsafe { libc::poll(&mut pfd, 1, 80) };
 
@@ -137,7 +133,8 @@ pub fn run_btw_overlay(
             }
         }
 
-        // If done and there are no more chunks, stay open until user presses a key.
+        // If done and there are no more chunks, stay open until user presses a
+        // key.
     }
 
     let _ = write!(out, "\x1b[?25h\x1b[?1049l");
@@ -157,22 +154,22 @@ pub fn turn_succeeded(messages: &[AgentMessage]) -> bool {
     })
 }
 
-
-
 enum Chunk {
     Text(String),
     Done,
     Error(String),
 }
 
-/// System prompt for the ephemeral btw agent — keeps answers short and tool-free.
+/// System prompt for the ephemeral btw agent — keeps answers short and
+/// tool-free.
 pub const BTW_SYSTEM_PROMPT: &str = "\
 You are a concise assistant helping a developer mid-task. \
 Answer in 1-4 sentences. \
 No markdown headers. \
 No tool use.";
 
-/// Strip all tool-related content from a message snapshot before sending to btw.
+/// Strip all tool-related content from a message snapshot before sending to
+/// btw.
 ///
 /// The btw agent runs without any tools defined.  If we forward tool_use /
 /// tool_result blocks to the Anthropic API, it returns a 400 error because
@@ -180,22 +177,33 @@ No tool use.";
 /// content from each message so btw has the full conversational context without
 /// the tool machinery.
 ///
-/// - `AgentMessage::ToolResult` rows are dropped entirely (they carry no prose).
+/// - `AgentMessage::ToolResult` rows are dropped entirely (they carry no
+///   prose).
 /// - `AgentMessage::Assistant` rows have their `ContentBlock::ToolCall` blocks
 ///   removed; if no text/thinking remains, the message is dropped too.
 /// - `AgentMessage::User` rows are passed through unchanged.
 /// Build a one-line description of a single tool call for context summaries.
 fn tool_call_summary(name: &str, args: &serde_json::Value) -> String {
-    // Show the most useful argument for each tool so the model understands what happened.
+    // Show the most useful argument for each tool so the model understands what
+    // happened.
     let detail = match name {
-        "bash" => args.get("command").and_then(|v| v.as_str())
+        "bash" => args
+            .get("command")
+            .and_then(|v| v.as_str())
             .map(|s| s.char_indices().nth(120).map_or(s, |(i, _)| &s[..i]).to_string()),
-        "read" | "edit" | "write" | "ls" | "find" => args.get("path").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        "grep" => args.get("pattern").and_then(|v| v.as_str()).map(|s| format!(
-            "{:?}{}",
-            s,
-            args.get("path").and_then(|v| v.as_str()).map(|p| format!(" in {p}")).unwrap_or_default()
-        )),
+        "read" | "edit" | "write" | "ls" | "find" => {
+            args.get("path").and_then(|v| v.as_str()).map(|s| s.to_string())
+        }
+        "grep" => args.get("pattern").and_then(|v| v.as_str()).map(|s| {
+            format!(
+                "{:?}{}",
+                s,
+                args.get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|p| format!(" in {p}"))
+                    .unwrap_or_default()
+            )
+        }),
         _ => None,
     };
     match detail {
@@ -207,15 +215,19 @@ fn tool_call_summary(name: &str, args: &serde_json::Value) -> String {
 pub fn strip_tool_content(messages: Vec<AgentMessage>) -> Vec<AgentMessage> {
     // Build a lookup from tool_call_id → first line of tool result text, so we
     // can attach a brief outcome to each tool-call summary.
-    let mut result_snippets: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut result_snippets: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for msg in &messages {
         if let AgentMessage::ToolResult { tool_call_id, content, is_error, .. } = msg {
-            let first_text = content.iter()
-                .find_map(|item| if let ContentItem::Text { text } = item { Some(text.as_str()) } else { None })
+            let first_text = content
+                .iter()
+                .find_map(|item| {
+                    if let ContentItem::Text { text } = item { Some(text.as_str()) } else { None }
+                })
                 .unwrap_or("");
             let first_line = first_text.lines().next().unwrap_or("");
-            let snippet = first_line.char_indices().nth(120)
-                .map_or(first_line, |(i, _)| &first_line[..i]);
+            let snippet =
+                first_line.char_indices().nth(120).map_or(first_line, |(i, _)| &first_line[..i]);
             let prefix = if *is_error { "error: " } else { "" };
             result_snippets.insert(tool_call_id.clone(), format!("{prefix}{snippet}"));
         }
@@ -229,7 +241,8 @@ pub fn strip_tool_content(messages: Vec<AgentMessage>) -> Vec<AgentMessage> {
             AgentMessage::ToolResult { .. } => None,
             AgentMessage::Assistant(a) => {
                 // Collect any real text blocks first.
-                let mut content_out: Vec<ContentBlock> = a.content
+                let mut content_out: Vec<ContentBlock> = a
+                    .content
                     .iter()
                     .filter(|b| matches!(b, ContentBlock::Text { .. }))
                     .cloned()
@@ -237,11 +250,14 @@ pub fn strip_tool_content(messages: Vec<AgentMessage>) -> Vec<AgentMessage> {
 
                 // Summarise tool calls as a single text block so btw understands
                 // what the agent did, without requiring tool definitions in the API call.
-                let tool_summaries: Vec<String> = a.content.iter()
+                let tool_summaries: Vec<String> = a
+                    .content
+                    .iter()
                     .filter_map(|b| {
                         if let ContentBlock::ToolCall { id, name, arguments } = b {
                             let call = tool_call_summary(name, arguments);
-                            let outcome = result_snippets.get(id)
+                            let outcome = result_snippets
+                                .get(id)
                                 .filter(|s| !s.is_empty())
                                 .map(|s| format!(" → {s}"))
                                 .unwrap_or_default();
@@ -253,9 +269,7 @@ pub fn strip_tool_content(messages: Vec<AgentMessage>) -> Vec<AgentMessage> {
                     .collect();
 
                 if !tool_summaries.is_empty() {
-                    content_out.push(ContentBlock::Text {
-                        text: tool_summaries.join("\n"),
-                    });
+                    content_out.push(ContentBlock::Text { text: tool_summaries.join("\n") });
                 }
 
                 if content_out.is_empty() {
@@ -299,23 +313,21 @@ fn stream_btw(
     let tx2 = tx.clone();
     agent.prompt(
         vec![prompt_msg],
-        &move |event| {
-            match event {
-                AgentEvent::MessageUpdate { delta: StreamDelta::Text(text) } => {
-                    let _ = tx2.send(Chunk::Text(text));
-                }
-                AgentEvent::AgentEnd { .. } => {
-                    let _ = tx2.send(Chunk::Done);
-                }
-                AgentEvent::MessageEnd { message } => {
-                    if let crate::agent::types::StopReason::Error { message: ref e } =
-                        message.stop_reason
-                    {
-                        let _ = tx2.send(Chunk::Error(e.clone()));
-                    }
-                }
-                _ => {}
+        &move |event| match event {
+            AgentEvent::MessageUpdate { delta: StreamDelta::Text(text) } => {
+                let _ = tx2.send(Chunk::Text(text));
             }
+            AgentEvent::AgentEnd { .. } => {
+                let _ = tx2.send(Chunk::Done);
+            }
+            AgentEvent::MessageEnd { message } => {
+                if let crate::agent::types::StopReason::Error { message: ref e } =
+                    message.stop_reason
+                {
+                    let _ = tx2.send(Chunk::Error(e.clone()));
+                }
+            }
+            _ => {}
         },
         None,
     );
@@ -325,13 +337,7 @@ fn stream_btw(
 
 // ─────────────────────────────── rendering ───────────────────────────────────
 
-fn render(
-    out: &mut io::Stdout,
-    note: &str,
-    response: &str,
-    done: bool,
-    error: Option<&str>,
-) {
+fn render(out: &mut io::Stdout, note: &str, response: &str, done: bool, error: Option<&str>) {
     let (cols, rows) = term_size();
     let cols = cols as usize;
 
@@ -483,10 +489,7 @@ pub fn pad_right(s: &str, width: usize) -> String {
     let len = s.chars().count();
     if len >= width {
         // Truncate safely at char boundary.
-        s.char_indices()
-            .nth(width)
-            .map_or(s, |(i, _)| &s[..i])
-            .to_string()
+        s.char_indices().nth(width).map_or(s, |(i, _)| &s[..i]).to_string()
     } else {
         let mut out = s.to_string();
         for _ in 0..(width - len) {
@@ -502,11 +505,7 @@ fn push_str(buf: &mut Vec<u8>, s: &str) {
 
 fn drain_stdin() {
     let mut buf = [0u8; 256];
-    let mut pfd = libc::pollfd {
-        fd: libc::STDIN_FILENO,
-        events: libc::POLLIN,
-        revents: 0,
-    };
+    let mut pfd = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
     loop {
         let ready = unsafe { libc::poll(&mut pfd, 1, 0) };
         if ready <= 0 {

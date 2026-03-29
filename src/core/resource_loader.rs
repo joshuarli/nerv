@@ -54,19 +54,13 @@ pub fn load_resources(cwd: &Path, nerv_dir: &Path) -> LoadedResources {
     // 3. System prompt override: ~/.nerv/system-prompt.md
     let system_prompt = load_text_file(&nerv_dir.join("system-prompt.md"));
     if system_prompt.is_some() {
-        crate::log::info(&format!(
-            "loaded {}",
-            nerv_dir.join("system-prompt.md").display()
-        ));
+        crate::log::info(&format!("loaded {}", nerv_dir.join("system-prompt.md").display()));
     }
 
     // 4. Append system prompt: ~/.nerv/append-system-prompt.md
     let mut append_prompts = Vec::new();
     if let Some(content) = load_text_file(&nerv_dir.join("append-system-prompt.md")) {
-        crate::log::info(&format!(
-            "loaded {}",
-            nerv_dir.join("append-system-prompt.md").display()
-        ));
+        crate::log::info(&format!("loaded {}", nerv_dir.join("append-system-prompt.md").display()));
         append_prompts.push(content);
     }
 
@@ -79,13 +73,7 @@ pub fn load_resources(cwd: &Path, nerv_dir: &Path) -> LoadedResources {
     // 6. Skills from ~/.nerv/skills/
     let skills = super::skills::load_skills(&nerv_dir.join("skills"));
 
-    LoadedResources {
-        context_files,
-        system_prompt,
-        append_prompts,
-        memory,
-        skills,
-    }
+    LoadedResources { context_files, system_prompt, append_prompts, memory, skills }
 }
 
 const CONTEXT_FILENAMES: &[&str] = &["AGENTS.md", "CLAUDE.md"];

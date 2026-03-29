@@ -147,9 +147,9 @@ fn is_final_summary_line(s: &str) -> bool {
         && (s.contains(" passed") || s.contains(" failed") || s.contains(" error"))
 }
 
-/// Test separator line: `_____ test_name _____` (at least 5 underscores on each side).
-/// Allows alphanumerics, underscores, brackets, dashes, spaces, dots, and `::` for
-/// parametrized / class-qualified test names.
+/// Test separator line: `_____ test_name _____` (at least 5 underscores on each
+/// side). Allows alphanumerics, underscores, brackets, dashes, spaces, dots,
+/// and `::` for parametrized / class-qualified test names.
 fn is_test_separator(s: &str) -> bool {
     if !s.starts_with('_') {
         return false;

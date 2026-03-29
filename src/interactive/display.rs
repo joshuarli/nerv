@@ -40,22 +40,8 @@ pub fn format_tool_call(name: &str, args: &serde_json::Value) -> String {
             }
             s
         }
-        "edit" => format!(
-            "{}edit{} {}{}{}",
-            tn,
-            r,
-            tp,
-            args["path"].as_str().unwrap_or("?"),
-            r
-        ),
-        "write" => format!(
-            "{}write{} {}{}{}",
-            tn,
-            r,
-            tp,
-            args["path"].as_str().unwrap_or("?"),
-            r
-        ),
+        "edit" => format!("{}edit{} {}{}{}", tn, r, tp, args["path"].as_str().unwrap_or("?"), r),
+        "write" => format!("{}write{} {}{}{}", tn, r, tp, args["path"].as_str().unwrap_or("?"), r),
         "bash" => {
             let cmd = args["command"].as_str().unwrap_or("?");
             format!("{}bash{} {}$ {}{}", tn, r, d, cmd, r)
@@ -65,12 +51,7 @@ pub fn format_tool_call(name: &str, args: &serde_json::Value) -> String {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
             format!("{}grep{} {} {}{}{}", tn, r, pattern, tp, path, r)
         }
-        "find" => format!(
-            "{}find{} {}",
-            tn,
-            r,
-            args["pattern"].as_str().unwrap_or("?")
-        ),
+        "find" => format!("{}find{} {}", tn, r, args["pattern"].as_str().unwrap_or("?")),
         "ls" => format!(
             "{}ls{} {}{}{}",
             tn,

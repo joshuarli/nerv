@@ -1,9 +1,8 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use nerv::index::SymbolIndex;
-
 
 fn pgo_criterion() -> Criterion {
     // For `make pgo-profile`: just hit the hot paths, no statistical rigor needed.
@@ -14,7 +13,9 @@ fn pgo_criterion() -> Criterion {
 }
 
 fn slow() -> Criterion {
-    if std::env::var("PGO_PROFILE").is_ok() { return pgo_criterion(); }
+    if std::env::var("PGO_PROFILE").is_ok() {
+        return pgo_criterion();
+    }
     // Indexing the repo takes longer than a typical microbench
     Criterion::default()
         .warm_up_time(Duration::from_millis(500))
@@ -23,7 +24,9 @@ fn slow() -> Criterion {
 }
 
 fn fast() -> Criterion {
-    if std::env::var("PGO_PROFILE").is_ok() { return pgo_criterion(); }
+    if std::env::var("PGO_PROFILE").is_ok() {
+        return pgo_criterion();
+    }
     Criterion::default()
         .warm_up_time(Duration::from_millis(200))
         .measurement_time(Duration::from_secs(2))
@@ -34,7 +37,6 @@ fn fast() -> Criterion {
 fn src_dir() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src").leak()
 }
-
 
 fn bench_force_index_dir(c: &mut Criterion) {
     let src = src_dir();
@@ -68,7 +70,6 @@ fn bench_incremental_reindex(c: &mut Criterion) {
     });
 }
 
-
 fn bench_symbol_queries(c: &mut Criterion) {
     let src = src_dir();
     let mut idx = SymbolIndex::new();
@@ -78,38 +79,29 @@ fn bench_symbol_queries(c: &mut Criterion) {
 
     // Exact name lookup — common for `symbols` tool calls
     group.bench_function("exact_transform_context", |b| {
-        b.iter(|| {
-            black_box(idx.search(black_box("transform_context"), None, None))
-        });
+        b.iter(|| black_box(idx.search(black_box("transform_context"), None, None)));
     });
 
     // Prefix/substring match — triggers more scanning
     group.bench_function("substring_agent", |b| {
-        b.iter(|| {
-            black_box(idx.search(black_box("agent"), None, None))
-        });
+        b.iter(|| black_box(idx.search(black_box("agent"), None, None)));
     });
 
     // Single-char query — worst case (matches many symbols)
     group.bench_function("substring_single_char", |b| {
-        b.iter(|| {
-            black_box(idx.search(black_box("e"), None, None))
-        });
+        b.iter(|| black_box(idx.search(black_box("e"), None, None)));
     });
 
     // Miss — name that doesn't exist
     group.bench_function("miss_no_match", |b| {
-        b.iter(|| {
-            black_box(idx.search(black_box("xyzzy_no_such_symbol_8472"), None, None))
-        });
+        b.iter(|| black_box(idx.search(black_box("xyzzy_no_such_symbol_8472"), None, None)));
     });
 
     group.finish();
 }
 
-
 fn bench_codemap_render(c: &mut Criterion) {
-    use nerv::index::codemap::{CodemapParams, Depth, render, search, SearchResult};
+    use nerv::index::codemap::{CodemapParams, Depth, SearchResult, render, search};
 
     let src = src_dir();
     let mut idx = SymbolIndex::new();
@@ -126,12 +118,11 @@ fn bench_codemap_render(c: &mut Criterion) {
         };
         let paths: Vec<&Path> = results.iter().map(|s| s.file.as_path()).collect();
         let sources = idx.sources_for(&paths);
-        b.iter(|| {
-            black_box(render(black_box(&results), src, &Depth::Signatures, &sources))
-        });
+        b.iter(|| black_box(render(black_box(&results), src, &Depth::Signatures, &sources)));
     });
 
-    // Full mode, warm cache: sources pre-fetched from index — no disk I/O in render()
+    // Full mode, warm cache: sources pre-fetched from index — no disk I/O in
+    // render()
     group.bench_function("full_all_symbols_warm", |b| {
         let params = CodemapParams { query: "", kind: None, file: None, depth: Depth::Full };
         let results = match search(&idx, &params) {
@@ -140,49 +131,54 @@ fn bench_codemap_render(c: &mut Criterion) {
         };
         let paths: Vec<&Path> = results.iter().map(|s| s.file.as_path()).collect();
         let sources = idx.sources_for(&paths);
-        b.iter(|| {
-            black_box(render(black_box(&results), src, &Depth::Full, &sources))
-        });
+        b.iter(|| black_box(render(black_box(&results), src, &Depth::Full, &sources)));
     });
 
-    // Full mode, cold cache: no pre-fetched sources, render reads files via parallel threads
+    // Full mode, cold cache: no pre-fetched sources, render reads files via
+    // parallel threads
     group.bench_function("full_all_symbols_cold", |b| {
         let params = CodemapParams { query: "", kind: None, file: None, depth: Depth::Full };
         let results = match search(&idx, &params) {
             SearchResult::Found(r) => r,
             _ => panic!("expected results"),
         };
-        let empty: std::collections::HashMap<PathBuf, std::sync::Arc<String>> = std::collections::HashMap::new();
-        b.iter(|| {
-            black_box(render(black_box(&results), src, &Depth::Full, &empty))
-        });
+        let empty: std::collections::HashMap<PathBuf, std::sync::Arc<String>> =
+            std::collections::HashMap::new();
+        b.iter(|| black_box(render(black_box(&results), src, &Depth::Full, &empty)));
     });
 
     // Full mode, warm cache, targeted query (realistic single-symbol lookup)
     group.bench_function("full_transform_context_warm", |b| {
-        let params = CodemapParams { query: "transform_context", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "transform_context",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+        };
         let results = match search(&idx, &params) {
             SearchResult::Found(r) => r,
             _ => panic!("no transform_context found"),
         };
         let paths: Vec<&Path> = results.iter().map(|s| s.file.as_path()).collect();
         let sources = idx.sources_for(&paths);
-        b.iter(|| {
-            black_box(render(black_box(&results), src, &Depth::Full, &sources))
-        });
+        b.iter(|| black_box(render(black_box(&results), src, &Depth::Full, &sources)));
     });
 
     // Full mode, cold cache, targeted query
     group.bench_function("full_transform_context_cold", |b| {
-        let params = CodemapParams { query: "transform_context", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "transform_context",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+        };
         let results = match search(&idx, &params) {
             SearchResult::Found(r) => r,
             _ => panic!("no transform_context found"),
         };
-        let empty: std::collections::HashMap<PathBuf, std::sync::Arc<String>> = std::collections::HashMap::new();
-        b.iter(|| {
-            black_box(render(black_box(&results), src, &Depth::Full, &empty))
-        });
+        let empty: std::collections::HashMap<PathBuf, std::sync::Arc<String>> =
+            std::collections::HashMap::new();
+        b.iter(|| black_box(render(black_box(&results), src, &Depth::Full, &empty)));
     });
 
     group.finish();

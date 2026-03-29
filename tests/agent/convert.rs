@@ -42,9 +42,7 @@ fn tool_result_stays_separate_from_assistant() {
         }),
         AgentMessage::ToolResult {
             tool_call_id: "tc1".into(),
-            content: vec![ContentItem::Text {
-                text: "file contents".into(),
-            }],
+            content: vec![ContentItem::Text { text: "file contents".into() }],
             is_error: false,
             display: None,
             details: None,
@@ -62,16 +60,12 @@ fn transform_context_truncates_old_large_tool_results() {
     let mut msgs = Vec::new();
     for i in 0..15 {
         msgs.push(AgentMessage::User {
-            content: vec![ContentItem::Text {
-                text: format!("msg {}", i),
-            }],
+            content: vec![ContentItem::Text { text: format!("msg {}", i) }],
             timestamp: i as u64,
         });
         msgs.push(AgentMessage::ToolResult {
             tool_call_id: format!("tc{}", i),
-            content: vec![ContentItem::Text {
-                text: "x".repeat(500),
-            }],
+            content: vec![ContentItem::Text { text: "x".repeat(500) }],
             is_error: false,
             display: None,
             details: None,
@@ -91,15 +85,8 @@ fn transform_context_truncates_old_large_tool_results() {
                 _ => None,
             })
             .collect();
-        assert!(
-            text.len() < 500,
-            "old tool result should be truncated, got len {}",
-            text.len()
-        );
-        assert!(
-            text.contains("[truncated"),
-            "should contain truncation marker"
-        );
+        assert!(text.len() < 500, "old tool result should be truncated, got len {}", text.len());
+        assert!(text.contains("[truncated"), "should contain truncation marker");
     }
 
     // Recent tool result (index 21) should be intact
@@ -119,9 +106,7 @@ fn transform_context_truncates_old_large_tool_results() {
 fn transform_context_preserves_small_old_results() {
     let mut msgs: Vec<AgentMessage> = (0..15)
         .map(|i| AgentMessage::User {
-            content: vec![ContentItem::Text {
-                text: format!("m{}", i),
-            }],
+            content: vec![ContentItem::Text { text: format!("m{}", i) }],
             timestamp: i,
         })
         .collect();
@@ -129,9 +114,7 @@ fn transform_context_preserves_small_old_results() {
         1,
         AgentMessage::ToolResult {
             tool_call_id: "tc".into(),
-            content: vec![ContentItem::Text {
-                text: "tiny".into(),
-            }],
+            content: vec![ContentItem::Text { text: "tiny".into() }],
             is_error: false,
             display: None,
             details: None,
@@ -148,10 +131,7 @@ fn transform_context_preserves_small_old_results() {
                 _ => None,
             })
             .collect();
-        assert_eq!(
-            text, "tiny",
-            "small results should be preserved even when old"
-        );
+        assert_eq!(text, "tiny", "small results should be preserved even when old");
     }
 }
 
@@ -159,12 +139,8 @@ fn transform_context_preserves_small_old_results() {
 fn convert_to_llm_preserves_thinking_blocks() {
     let msgs = vec![AgentMessage::Assistant(AssistantMessage {
         content: vec![
-            ContentBlock::Thinking {
-                thinking: "Let me consider...".into(),
-            },
-            ContentBlock::Text {
-                text: "The answer is 42.".into(),
-            },
+            ContentBlock::Thinking { thinking: "Let me consider...".into() },
+            ContentBlock::Text { text: "The answer is 42.".into() },
         ],
         stop_reason: StopReason::EndTurn,
         usage: None,
@@ -179,9 +155,7 @@ fn convert_to_llm_preserves_thinking_blocks() {
                 .any(|c| matches!(c, LlmContent::Thinking(t) if t == "Let me consider..."))
         );
         assert!(
-            content
-                .iter()
-                .any(|c| matches!(c, LlmContent::Text(t) if t == "The answer is 42."))
+            content.iter().any(|c| matches!(c, LlmContent::Text(t) if t == "The answer is 42."))
         );
     } else {
         panic!("expected assistant message");
@@ -195,9 +169,7 @@ fn orphaned_tool_calls_stripped() {
     // tool calls to prevent API errors on retry.
     let msgs = vec![
         AgentMessage::User {
-            content: vec![ContentItem::Text {
-                text: "read foo.txt".into(),
-            }],
+            content: vec![ContentItem::Text { text: "read foo.txt".into() }],
             timestamp: 0,
         },
         // Assistant made a tool call, but was aborted before result came back
@@ -213,9 +185,7 @@ fn orphaned_tool_calls_stripped() {
         }),
         // User sends a new message (no tool result provided)
         AgentMessage::User {
-            content: vec![ContentItem::Text {
-                text: "never mind".into(),
-            }],
+            content: vec![ContentItem::Text { text: "never mind".into() }],
             timestamp: 2,
         },
     ];
@@ -231,9 +201,7 @@ fn orphaned_tool_calls_stripped() {
 fn answered_tool_calls_preserved() {
     let msgs = vec![
         AgentMessage::User {
-            content: vec![ContentItem::Text {
-                text: "read foo.txt".into(),
-            }],
+            content: vec![ContentItem::Text { text: "read foo.txt".into() }],
             timestamp: 0,
         },
         AgentMessage::Assistant(AssistantMessage {
@@ -248,9 +216,7 @@ fn answered_tool_calls_preserved() {
         }),
         AgentMessage::ToolResult {
             tool_call_id: "call_1".into(),
-            content: vec![ContentItem::Text {
-                text: "file contents".into(),
-            }],
+            content: vec![ContentItem::Text { text: "file contents".into() }],
             is_error: false,
             display: None,
             details: None,
@@ -262,11 +228,7 @@ fn answered_tool_calls_preserved() {
     assert_eq!(transformed.len(), 3);
     // Tool call preserved because it has a matching result
     if let AgentMessage::Assistant(a) = &transformed[1] {
-        assert!(
-            a.content
-                .iter()
-                .any(|b| matches!(b, ContentBlock::ToolCall { .. }))
-        );
+        assert!(a.content.iter().any(|b| matches!(b, ContentBlock::ToolCall { .. })));
     } else {
         panic!("expected assistant");
     }
@@ -275,15 +237,10 @@ fn answered_tool_calls_preserved() {
 #[test]
 fn transform_context_passthrough_when_few_messages() {
     let msgs = vec![
-        AgentMessage::User {
-            content: vec![ContentItem::Text { text: "hi".into() }],
-            timestamp: 0,
-        },
+        AgentMessage::User { content: vec![ContentItem::Text { text: "hi".into() }], timestamp: 0 },
         AgentMessage::ToolResult {
             tool_call_id: "tc1".into(),
-            content: vec![ContentItem::Text {
-                text: "x".repeat(500),
-            }],
+            content: vec![ContentItem::Text { text: "x".repeat(500) }],
             is_error: false,
             display: None,
             details: None,

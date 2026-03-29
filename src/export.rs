@@ -91,12 +91,9 @@ pub fn export_session_jsonl(
     nerv_dir: &std::path::Path,
 ) -> Result<String, String> {
     let mut session_manager = crate::session::SessionManager::new(nerv_dir);
-    session_manager
-        .load_session(session_id)
-        .map_err(|e| e.to_string())?;
-    let mut content = session_manager
-        .export_jsonl()
-        .ok_or_else(|| "no session content".to_string())?;
+    session_manager.load_session(session_id).map_err(|e| e.to_string())?;
+    let mut content =
+        session_manager.export_jsonl().ok_or_else(|| "no session content".to_string())?;
 
     // Append session summary line
     let entries = session_manager.entries().to_vec();
@@ -132,14 +129,13 @@ pub fn export_session_html(
     nerv_dir: &std::path::Path,
 ) -> Result<String, String> {
     let mut session_manager = crate::session::SessionManager::new(nerv_dir);
-    session_manager
-        .load_session(session_id)
-        .map_err(|e| e.to_string())?;
+    session_manager.load_session(session_id).map_err(|e| e.to_string())?;
     let entries = session_manager.entries().to_vec();
     render_html_to_file(&entries, path)
 }
 
-/// Export entries from a live session (falls back to agent messages if entries empty).
+/// Export entries from a live session (falls back to agent messages if entries
+/// empty).
 pub fn export_entries_html(
     entries: &[SessionEntry],
     messages: &[AgentMessage],
@@ -183,20 +179,17 @@ fn highlight_diff_html(diff: &str) -> String {
             out.push_str(&html_escape_no_br(content));
             out.push('\n');
         } else {
-            // display:block spans generate their own line break; don't add \n or it creates an
-            // extra blank line between adjacent diff-header / diff-hunk / diff-add / diff-del spans.
-            out.push_str(&format!(
-                "<span class='{}'>{}</span>",
-                cls,
-                html_escape_no_br(content)
-            ));
+            // display:block spans generate their own line break; don't add \n or it creates
+            // an extra blank line between adjacent diff-header / diff-hunk /
+            // diff-add / diff-del spans.
+            out.push_str(&format!("<span class='{}'>{}</span>", cls, html_escape_no_br(content)));
         }
     }
     out
 }
 
 fn highlight_for_html(text: &str) -> String {
-    use crate::tui::highlight::{highlight_line_html, rules_for_lang, HlState};
+    use crate::tui::highlight::{HlState, highlight_line_html, rules_for_lang};
 
     let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
     let lang = if first.starts_with("#!/usr/bin/env python")
@@ -277,26 +270,39 @@ fn args_preview_for(name: &str, arguments: &serde_json::Value, args_str: &str) -
 /// Render numbered file content as syntax-highlighted HTML.
 /// Detects language from the path argument to give better highlighting.
 fn render_file_content_html(content: &str, arguments: &serde_json::Value) -> String {
-    use crate::tui::highlight::{highlight_line_html, rules_for_lang, HlState};
+    use crate::tui::highlight::{HlState, highlight_line_html, rules_for_lang};
 
     let path = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
     let lang = if path.ends_with(".rs") {
         "rust"
     } else if path.ends_with(".py") {
         "python"
-    } else if path.ends_with(".js") || path.ends_with(".ts") || path.ends_with(".jsx") || path.ends_with(".tsx") {
+    } else if path.ends_with(".js")
+        || path.ends_with(".ts")
+        || path.ends_with(".jsx")
+        || path.ends_with(".tsx")
+    {
         "javascript"
     } else if path.ends_with(".sh") || path.ends_with(".bash") {
         "bash"
-    } else if path.ends_with(".toml") || path.ends_with(".json") || path.ends_with(".yaml") || path.ends_with(".yml") {
+    } else if path.ends_with(".toml")
+        || path.ends_with(".json")
+        || path.ends_with(".yaml")
+        || path.ends_with(".yml")
+    {
         "toml"
     } else {
         // Guess from content (same heuristics as highlight_for_html)
         let first = content.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-        if first.contains("fn ") && content.contains("->") { "rust" }
-        else if content.contains("\ndef ") { "python" }
-        else if content.contains("function ") || content.contains("const ") { "javascript" }
-        else { "bash" }
+        if first.contains("fn ") && content.contains("->") {
+            "rust"
+        } else if content.contains("\ndef ") {
+            "python"
+        } else if content.contains("function ") || content.contains("const ") {
+            "javascript"
+        } else {
+            "bash"
+        }
     };
 
     let Some(rules) = rules_for_lang(lang) else {
@@ -326,10 +332,7 @@ fn render_file_content_html(content: &str, arguments: &serde_json::Value) -> Str
     out
 }
 
-fn render_html_to_file(
-    entries: &[SessionEntry],
-    path: &std::path::Path,
-) -> Result<String, String> {
+fn render_html_to_file(entries: &[SessionEntry], path: &std::path::Path) -> Result<String, String> {
     let mut html = String::from(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -407,8 +410,8 @@ function toggleTool(header) {
 "#,
     );
 
-    // Prepass: build lookup maps for tool results so we can inline them into ToolCall divs.
-    // call_id → tool_name (from Assistant messages)
+    // Prepass: build lookup maps for tool results so we can inline them into
+    // ToolCall divs. call_id → tool_name (from Assistant messages)
     let mut call_name: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     // call_id → (display_text, content_text, is_error)
     let mut call_result: std::collections::HashMap<String, (Option<String>, String, bool)> =
@@ -423,9 +426,7 @@ function toggleTool(header) {
                         }
                     }
                 }
-                AgentMessage::ToolResult {
-                    tool_call_id, content, is_error, display, ..
-                } => {
+                AgentMessage::ToolResult { tool_call_id, content, is_error, display, .. } => {
                     let content_text = content
                         .iter()
                         .filter_map(|c| {
@@ -437,18 +438,17 @@ function toggleTool(header) {
                         })
                         .collect::<Vec<_>>()
                         .join("");
-                    call_result.insert(
-                        tool_call_id.clone(),
-                        (display.clone(), content_text, *is_error),
-                    );
+                    call_result
+                        .insert(tool_call_id.clone(), (display.clone(), content_text, *is_error));
                 }
                 _ => {}
             }
         }
     }
 
-    // For edit and read tool calls, we inline the result into the tool-call div and skip the
-    // separate "output" div. Track which call_ids are handled this way.
+    // For edit and read tool calls, we inline the result into the tool-call div and
+    // skip the separate "output" div. Track which call_ids are handled this
+    // way.
     let inlined_calls: std::collections::HashSet<String> = call_name
         .iter()
         .filter(|(id, name)| {
@@ -523,7 +523,10 @@ function toggleTool(header) {
                                                 // content_text = file with line numbers;
                                                 // display is just a terse summary, skip it.
                                                 if !content_text.is_empty() {
-                                                    render_file_content_html(content_text, arguments)
+                                                    render_file_content_html(
+                                                        content_text,
+                                                        arguments,
+                                                    )
                                                 } else if let Some(d) = display {
                                                     highlight_for_html(d)
                                                 } else {
@@ -552,14 +555,15 @@ function toggleTool(header) {
                         if tok.cache_write > 0 {
                             meta.push_str(&format!(" Wc{}", tok.cache_write));
                         }
-                        meta.push_str(&format!(" · {}/{} context", tok.context_used, tok.context_window));
+                        meta.push_str(&format!(
+                            " · {}/{} context",
+                            tok.context_used, tok.context_window
+                        ));
                         html.push_str(&format!("<div class='meta'>{}</div>", meta));
                     }
                     html.push_str("</div>\n");
                 }
-                AgentMessage::ToolResult {
-                    tool_call_id, content, is_error, display, ..
-                } => {
+                AgentMessage::ToolResult { tool_call_id, content, is_error, display, .. } => {
                     // Skip tool results that were already inlined into the tool-call div above.
                     if inlined_calls.contains(tool_call_id) {
                         continue;
@@ -587,11 +591,7 @@ function toggleTool(header) {
                         content_text.clone()
                     };
                     if !display_text.is_empty() && tool_idx > 0 {
-                        let class = if *is_error {
-                            "tool-output"
-                        } else {
-                            "tool-output hidden"
-                        };
+                        let class = if *is_error { "tool-output" } else { "tool-output hidden" };
                         // Unified diffs get syntax-highlighted diff rendering.
                         let rendered = if display_text.starts_with("--- ") {
                             highlight_diff_html(&display_text)
@@ -652,14 +652,9 @@ fn markdown_to_html(markdown: &str) -> String {
 }
 
 fn html_escape_no_br(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('\n', "<br>")
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\n', "<br>")
 }

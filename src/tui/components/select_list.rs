@@ -9,17 +9,11 @@ pub struct SelectItem {
 
 impl SelectItem {
     pub fn item(label: impl Into<String>) -> Self {
-        Self {
-            label: label.into(),
-            selectable: true,
-        }
+        Self { label: label.into(), selectable: true }
     }
 
     pub fn header(label: impl Into<String>) -> Self {
-        Self {
-            label: label.into(),
-            selectable: false,
-        }
+        Self { label: label.into(), selectable: false }
     }
 }
 
