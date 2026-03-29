@@ -92,8 +92,12 @@ impl TUI {
         }
     }
 
-    pub fn request_render(&mut self, _full: bool) {
+    pub fn request_render(&mut self, full: bool) {
         self.render_requested = true;
+        if full {
+            // Clear previous frame so do_render takes the full-repaint path.
+            self.previous_lines.clear();
+        }
     }
 
     pub fn maybe_render(&mut self, root: &dyn Component, fixed_bottom_lines: usize) {
@@ -130,8 +134,7 @@ impl TUI {
 
     pub fn resume(&mut self) {
         self.terminal.restart();
-        self.previous_lines.clear(); // force full repaint after resume
-        self.render_requested = true;
+        self.request_render(true); // force full repaint after resume
     }
 
     fn do_render(&mut self, root: &dyn Component, fixed_bottom_lines: usize) {

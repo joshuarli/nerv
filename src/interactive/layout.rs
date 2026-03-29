@@ -6,10 +6,6 @@ use crate::tui::Component;
 use crate::tui::components::editor::Editor;
 use crate::tui::components::spacer::Spacer;
 
-/// Fixed lines at the bottom (editor + statusbar + footer) that are never
-/// flushed to scrollback.  Queue lines are added on top of this.
-pub const BASE_FIXED_BOTTOM: usize = 10;
-
 pub struct AppLayout {
     spacer_top: Spacer,
     pub chat: ChatWriter,
@@ -18,6 +14,8 @@ pub struct AppLayout {
     pub editor: Editor,
     pub statusbar: StatusBar,
     pub footer: FooterComponent,
+    /// Cached count of fixed-bottom lines from the last render.
+    cached_fixed: std::cell::Cell<usize>,
 }
 
 impl AppLayout {
@@ -29,18 +27,15 @@ impl AppLayout {
             editor,
             statusbar,
             footer,
+            cached_fixed: std::cell::Cell::new(10),
         }
     }
 
-    /// Total lines in the fixed footer, including the nervHud line when the
-    /// HUD is enabled and the btw panel when it is open.
+    /// Total lines in the fixed bottom area (queue + btw panel + editor +
+    /// statusbar + footer).  Updated each time `render()` runs; the value
+    /// is the actual line count from the most recent frame.
     pub fn fixed_bottom_lines(&self) -> usize {
-        let panel = self
-            .btw_panel
-            .as_ref()
-            .map(|p| p.line_count(80)) // 80 is a safe lower-bound; TUI clips anyway
-            .unwrap_or(0);
-        BASE_FIXED_BOTTOM + self.footer.hud_line_count() + panel
+        self.cached_fixed.get()
     }
 
     /// Render just the fixed UI (statusbar queue, btw panel, editor, statusbar, footer).
@@ -68,6 +63,8 @@ impl Component for AppLayout {
         {
             last.push_str(crate::interactive::theme::RESET);
         }
+        // --- fixed bottom area starts here ---
+        let fixed_start = lines.len();
         lines.extend(self.statusbar.render_queue(width));
         // Render the btw panel (if open) between the chat and the editor.
         if let Some(panel) = &self.btw_panel {
@@ -76,6 +73,7 @@ impl Component for AppLayout {
         lines.extend(self.editor.render(width));
         lines.extend(self.statusbar.render(width));
         lines.extend(self.footer.render(width));
+        self.cached_fixed.set(lines.len() - fixed_start);
         lines
     }
 }

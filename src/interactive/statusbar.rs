@@ -1,4 +1,5 @@
 use crate::tui::tui::Component;
+use crate::tui::utils::wrap_text_with_ansi;
 
 const SPINNER_FRAMES: &[&str] = &["┼", "─", "┼", "│"];
 const SPINNER_WORDS: &[&str] = &[
@@ -140,13 +141,13 @@ impl StatusBar {
 }
 
 impl Component for StatusBar {
-    fn render(&self, _width: u16) -> Vec<String> {
+    fn render(&self, width: u16) -> Vec<String> {
         use crate::interactive::theme;
         let mut lines = Vec::new();
         let r = theme::RESET;
 
         if self.streaming {
-            self.render_spinner(&mut lines);
+            self.render_spinner(&mut lines, width);
         } else if let Some(ref info) = self.completed {
             // Completed summary: show both ↑ and ↓ together with tok/s
             let tps = info
@@ -165,8 +166,8 @@ impl Component for StatusBar {
             } else {
                 String::new()
             };
-            if info.interrupted {
-                lines.push(format!(
+            let line = if info.interrupted {
+                format!(
                     "{}⚡ Interrupted{} {}({}{}){}",
                     theme::WARN,
                     r,
@@ -174,9 +175,9 @@ impl Component for StatusBar {
                     fmt_elapsed(info.elapsed),
                     tok,
                     r,
-                ));
+                )
             } else {
-                lines.push(format!(
+                format!(
                     "{}✓ Completed{} {}({}{}){}",
                     theme::SUCCESS,
                     r,
@@ -184,8 +185,9 @@ impl Component for StatusBar {
                     fmt_elapsed(info.elapsed),
                     tok,
                     r,
-                ));
-            }
+                )
+            };
+            lines.extend(wrap_text_with_ansi(&line, width));
         }
 
         lines
@@ -260,7 +262,7 @@ impl StatusBar {
         lines
     }
 
-    fn render_spinner(&self, lines: &mut Vec<String>) {
+    fn render_spinner(&self, lines: &mut Vec<String>, width: u16) {
         use crate::interactive::theme;
         let r = theme::RESET;
         let elapsed = self.start.map(|s| s.elapsed()).unwrap_or_default();
@@ -301,7 +303,7 @@ impl StatusBar {
             String::new()
         };
 
-        lines.push(format!(
+        let line = format!(
             "{}{}{} {}{}… {}({}{}){}",
             theme::ACCENT,
             spinner,
@@ -312,7 +314,8 @@ impl StatusBar {
             fmt_elapsed(elapsed),
             tok,
             r,
-        ));
+        );
+        lines.extend(wrap_text_with_ansi(&line, width));
     }
 
     /// Output tokens per second, measured from first output token to now.

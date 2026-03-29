@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::agent::types::*;
 use crate::interactive::theme;
 use crate::tui::tui::Component;
-use crate::tui::utils::{truncate_to_width, visible_width};
+use crate::tui::utils::{visible_width, wrap_text_with_ansi};
 
 /// Sample the whole-process RSS in kilobytes.
 /// Returns 0 on unsupported platforms or if the syscall fails.
@@ -191,6 +191,9 @@ pub struct FooterComponent {
     rss_kb: Arc<AtomicU64>,
     /// nervHud: recent %CPU (f32 bits stored in u32), written by background thread.
     cpu_pct: Arc<AtomicU32>,
+    /// Cached line count from the last render() call — used by AppLayout to compute
+    /// the fixed bottom line count without re-rendering.
+    cached_line_count: std::cell::Cell<usize>,
 }
 
 impl FooterComponent {
@@ -247,6 +250,7 @@ impl FooterComponent {
             stop_hud: Arc::new(AtomicBool::new(false)),
             rss_kb: Arc::new(AtomicU64::new(0)),
             cpu_pct: Arc::new(AtomicU32::new(0)),
+            cached_line_count: std::cell::Cell::new(5),
         };
 
         // Start HUD pollers immediately if NERV_HUD=1.
@@ -258,9 +262,10 @@ impl FooterComponent {
         this
     }
 
-    /// How many extra lines the nervHud adds to the fixed footer (0 or 1).
-    pub fn hud_line_count(&self) -> usize {
-        if self.hud_enabled { 1 } else { 0 }
+    /// How many lines the footer produced on its last render.
+    /// Used by AppLayout to compute fixed_bottom_lines without re-rendering.
+    pub fn line_count(&self) -> usize {
+        self.cached_line_count.get()
     }
 
     /// Toggle the nervHud line on or off. Starts/stops background poller threads.
@@ -493,7 +498,7 @@ impl Component for FooterComponent {
         };
 
         let mode_right = format!("{}{}", plan_tag, think_right);
-        let line1 = right_align(&pwd_left, &mode_right, w);
+        let line1_lines = right_align(&pwd_left, &mode_right, w);
 
         // Line 3: full-width hexagon progress bar
         let context_pct = if self.context_window > 0 {
@@ -561,7 +566,7 @@ impl Component for FooterComponent {
                 None => format!("{}{}{}", label, self.model_id, r),
             }
         };
-        let line2 = right_align(&session_label, &model, w);
+        let line2_lines = right_align(&session_label, &model, w);
 
         // Line 4 (below hex bar): token counter (left) + cost / api_info (right)
         let compact_tag = format!(
@@ -616,9 +621,12 @@ impl Component for FooterComponent {
 
         // Line 4: centered token counter + cache stats
         let counter_line = format!("{}{}", counter, cache_stats);
-        let counter_width = visible_width(&counter_line) as usize;
-        let counter_pad = w.saturating_sub(counter_width) / 2;
-        let line4 = format!("{}{}", " ".repeat(counter_pad), counter_line);
+        let line4_lines = if visible_width(&counter_line) as usize <= w {
+            let pad = w.saturating_sub(visible_width(&counter_line) as usize) / 2;
+            vec![format!("{}{}", " ".repeat(pad), counter_line)]
+        } else {
+            wrap_text_with_ansi(&counter_line, width)
+        };
 
         // Line 5: centered cost + api call breakdown (always shown)
         let cost_line = if cost.is_empty() {
@@ -626,9 +634,20 @@ impl Component for FooterComponent {
         } else {
             format!("{} {}", cost, api_info)
         };
-        let cost_width = visible_width(&cost_line) as usize;
-        let cost_pad = w.saturating_sub(cost_width) / 2;
-        let line5 = format!("{}{}", " ".repeat(cost_pad), cost_line);
+        let line5_lines = if visible_width(&cost_line) as usize <= w {
+            let pad = w.saturating_sub(visible_width(&cost_line) as usize) / 2;
+            vec![format!("{}{}", " ".repeat(pad), cost_line)]
+        } else {
+            wrap_text_with_ansi(&cost_line, width)
+        };
+
+        // Assemble all lines
+        let mut lines = Vec::new();
+        lines.extend(line1_lines);
+        lines.extend(line2_lines);
+        lines.push(hex_bar);
+        lines.extend(line4_lines);
+        lines.extend(line5_lines);
 
         // nervHud: process RSS + %CPU — shown only when hud is enabled
         if self.hud_enabled {
@@ -646,27 +665,35 @@ impl Component for FooterComponent {
                 cpu,
                 r,
             );
-            vec![line1, line2, hex_bar, line4, line5, hud_line]
-        } else {
-            vec![line1, line2, hex_bar, line4, line5]
+            lines.extend(wrap_text_with_ansi(&hud_line, width));
         }
+
+        self.cached_line_count.set(lines.len());
+        lines
     }
 }
 
-fn right_align(left: &str, right: &str, width: usize) -> String {
+/// Lay out `left` and `right` on one line when they fit; otherwise wrap to
+/// two lines (left on the first, right right-aligned on the second).
+fn right_align(left: &str, right: &str, width: usize) -> Vec<String> {
+    let w = width.max(1) as u16;
     let lw = visible_width(left) as usize;
     let rw = visible_width(right) as usize;
     if lw + 2 + rw <= width {
+        // Both fit on one line with at least 2 chars padding.
         let padding = " ".repeat(width - lw - rw);
-        format!("{}{}{}", left, padding, right)
-    } else if lw + 2 <= width {
-        let avail = width.saturating_sub(lw + 2);
-        let trunc = truncate_to_width(right, avail as u16);
-        let tw = visible_width(&trunc) as usize;
-        let padding = " ".repeat(width.saturating_sub(lw + tw));
-        format!("{}{}{}", left, padding, trunc)
+        vec![format!("{}{}{}", left, padding, right)]
     } else {
-        truncate_to_width(left, width as u16).to_string()
+        // Wrap each side independently.
+        let mut out = wrap_text_with_ansi(left, w);
+        let right_lines = wrap_text_with_ansi(right, w);
+        // Right-align each right-side line.
+        for rl in right_lines {
+            let rlw = visible_width(&rl) as usize;
+            let pad = width.saturating_sub(rlw);
+            out.push(format!("{}{}", " ".repeat(pad), rl));
+        }
+        out
     }
 }
 
