@@ -869,7 +869,6 @@ impl AgentSession {
                     messages: full_history,
                     cost_usd,
                 });
-                self.load_permission_cache();
                 if let Some(pct) = self.apply_saved_compact_threshold() {
                     let _ = event_tx.send(AgentSessionEvent::CompactThresholdChanged { pct });
                 }

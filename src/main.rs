@@ -844,6 +844,7 @@ fn main() {
     };
 
     let mut session = b.session;
+    let initial_tools = session.tool_registry.active_tools();
     if let Some(ref wt) = worktree_path {
         session.set_worktree(wt.clone());
     }
@@ -940,6 +941,7 @@ fn main() {
         cmd_tx,
         model_registry.clone(),
         provider_registry,
+        initial_tools,
         model_registry.default_model(&config).cloned(),
         initial_thinking_level,
         initial_effort_level,
@@ -1454,9 +1456,11 @@ fn launch_picker(
     }
 
     // /btw inline panel: spawn background agent, attach panel to layout, return immediately.
-    if let PickerRequest::BtwOverlay { messages, model, note } = req {
+    if let PickerRequest::BtwOverlay { messages, system_prompt, tools, model, note } = req {
         let panel = nerv::interactive::btw_panel::spawn_btw(
             messages,
+            system_prompt,
+            tools,
             model,
             interactive.provider_registry.clone(),
             note,

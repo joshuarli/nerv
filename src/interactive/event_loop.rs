@@ -29,6 +29,8 @@ pub enum PickerRequest {
     /// Open the /btw ephemeral overlay.
     BtwOverlay {
         messages: Vec<AgentMessage>,
+        system_prompt: String,
+        tools: Vec<std::sync::Arc<dyn crate::agent::agent::AgentTool>>,
         model: Model,
         note: String,
     },
@@ -46,8 +48,10 @@ pub struct InteractiveMode {
     model_registry: Arc<ModelRegistry>,
     /// Shared provider registry — cloned Arc from the session, used by the /btw overlay.
     pub provider_registry: Arc<RwLock<ProviderRegistry>>,
-    /// Snapshot of all session messages as of the last AgentEnd — used by /btw overlay.
+    /// Snapshot of the full agent state as of the last AgentEnd — used by /btw.
     messages_snapshot: Vec<AgentMessage>,
+    system_prompt_snapshot: String,
+    tools_snapshot: Vec<std::sync::Arc<dyn crate::agent::agent::AgentTool>>,
     skills: Vec<crate::core::skills::Skill>,
     repo_root: Option<String>,
     /// Stable repo fingerprint (SHA of initial commit) — rename-safe session filter.
@@ -85,6 +89,7 @@ impl InteractiveMode {
         cmd_tx: channel::Sender<SessionCommand>,
         model_registry: Arc<ModelRegistry>,
         provider_registry: Arc<RwLock<ProviderRegistry>>,
+        tools_snapshot: Vec<std::sync::Arc<dyn crate::agent::agent::AgentTool>>,
         initial_model: Option<Model>,
         initial_thinking: ThinkingLevel,
         initial_effort: Option<EffortLevel>,
@@ -103,6 +108,8 @@ impl InteractiveMode {
             model_registry,
             provider_registry,
             messages_snapshot: Vec::new(),
+            system_prompt_snapshot: String::new(),
+            tools_snapshot,
             skills,
             repo_root,
             repo_id,
@@ -559,13 +566,14 @@ impl InteractiveMode {
                 layout.statusbar.start_streaming();
                 tui.request_render(false);
             }
-            AgentEvent::AgentEnd { messages } => {
+            AgentEvent::AgentEnd { messages, system_prompt } => {
                 // Replace the snapshot with the full history from the agent.
                 // AgentEnd now carries agent.state.messages (everything), not just
                 // new_messages from this turn, so we assign rather than extend.
                 // Skip aborted/errored turns: the snapshot stays at the last good state.
                 if crate::interactive::btw_overlay::turn_succeeded(&messages) {
                     self.messages_snapshot = messages;
+                    self.system_prompt_snapshot = system_prompt;
                 }
                 self.is_streaming = false;
                 layout.chat.cancel_stream();
@@ -858,6 +866,8 @@ impl InteractiveMode {
                     let snap = self.messages_snapshot.clone();
                     return Some(PickerRequest::BtwOverlay {
                         messages: snap,
+                        system_prompt: self.system_prompt_snapshot.clone(),
+                        tools: self.tools_snapshot.clone(),
                         model,
                         note: args.to_string(),
                     });

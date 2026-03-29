@@ -350,6 +350,207 @@ fn snapshot_skips_error_turns() {
     );
 }
 
+// ── cache-hit assumptions ─────────────────────────────────────────────────────
+//
+// stream_btw claims "Anthropic's cache breakpoints match and the prefix is a
+// cache hit".  These tests pin the three specific ways that claim can fail.
+
+use nerv::agent::transform::transform_context;
+
+/// 1. transform_context mutates the messages before every real API request.
+///    The btw call sends raw agent.state.messages without running
+///    transform_context, so the wire content diverges whenever any
+///    transformation would fire.
+#[test]
+fn transform_context_mutates_stale_read_results() {
+    // Build a history where two read calls happen on the same file.
+    // transform_context should mark the first one superseded.
+    let read_call_1 = ContentBlock::ToolCall {
+        id: "r1".into(),
+        name: "read".into(),
+        arguments: serde_json::json!({"path": "foo.rs"}),
+    };
+    let read_call_2 = ContentBlock::ToolCall {
+        id: "r2".into(),
+        name: "read".into(),
+        arguments: serde_json::json!({"path": "foo.rs"}),
+    };
+    let messages = vec![
+        user_msg("start"),
+        AgentMessage::Assistant(AssistantMessage {
+            content: vec![read_call_1],
+            stop_reason: StopReason::ToolUse,
+            usage: Some(Usage::default()),
+            timestamp: 0,
+        }),
+        AgentMessage::ToolResult {
+            tool_call_id: "r1".into(),
+            content: vec![ContentItem::Text { text: "old content".into() }],
+            is_error: false,
+            display: None,
+            timestamp: 0,
+        },
+        AgentMessage::Assistant(AssistantMessage {
+            content: vec![read_call_2],
+            stop_reason: StopReason::ToolUse,
+            usage: Some(Usage::default()),
+            timestamp: 0,
+        }),
+        AgentMessage::ToolResult {
+            tool_call_id: "r2".into(),
+            content: vec![ContentItem::Text { text: "new content".into() }],
+            is_error: false,
+            display: None,
+            timestamp: 0,
+        },
+        user_msg("done"),
+    ];
+
+    let transformed = transform_context(messages.clone(), 200_000, None);
+
+    // Find the first ToolResult (r1) in the transformed output.
+    let r1_transformed = transformed.iter().find_map(|m| {
+        if let AgentMessage::ToolResult { tool_call_id, content, .. } = m {
+            if tool_call_id == "r1" { Some(content.clone()) } else { None }
+        } else { None }
+    });
+    let r1_raw = messages.iter().find_map(|m| {
+        if let AgentMessage::ToolResult { tool_call_id, content, .. } = m {
+            if tool_call_id == "r1" { Some(content.clone()) } else { None }
+        } else { None }
+    });
+
+    let r1_t = r1_transformed.expect("r1 should survive transform");
+    let r1_r = r1_raw.expect("r1 in raw messages");
+
+    // The transformed result should be "[superseded by later call]", not the
+    // original text — proving the wire bytes differ from the raw snapshot.
+    let raw_text = match &r1_r[0] {
+        ContentItem::Text { text } => text.clone(),
+        other => panic!("expected text in raw, got {:?}", other),
+    };
+    let superseded_text = match &r1_t[0] {
+        ContentItem::Text { text } => text.clone(),
+        other => panic!("expected text in transformed, got {:?}", other),
+    };
+    assert_ne!(
+        raw_text, superseded_text,
+        "transform_context should have mutated the first read result to '[superseded]'; \
+         if it matches the raw content the btw call would send the correct bytes by accident, \
+         but for the wrong reason — the transform still runs on real requests and not on btw"
+    );
+    assert!(
+        superseded_text.contains("superseded"),
+        "expected '[superseded by later call]', got: {superseded_text:?}"
+    );
+}
+
+/// 2. Appending to the system prompt changes its bytes.
+///    Anthropic's cache breakpoint 1 is placed on the last content block of
+///    system[], which is the full system prompt string.  A different string
+///    always misses that breakpoint — there is no prefix-match caching.
+#[test]
+fn btw_system_prompt_differs_from_main_agent_system_prompt() {
+    let base = "You are a helpful assistant.";
+    let btw_suffix = "\n\n<btw>The user is asking a side question while the agent works. \
+        Answer concisely in 1-4 sentences without calling any tools.</btw>";
+
+    let btw_prompt = format!("{base}{btw_suffix}");
+
+    // The two strings must be different — that's the only claim we're making.
+    assert_ne!(
+        base, btw_prompt.as_str(),
+        "btw system prompt must differ from the base; \
+         if they match the breakpoint-1 cache hit would be real"
+    );
+
+    // More concretely: the btw prompt is strictly longer.
+    assert!(
+        btw_prompt.len() > base.len(),
+        "btw system prompt should be longer than base"
+    );
+
+    // And the suffix must be non-empty (guard against accidental empty suffix).
+    assert!(
+        !btw_suffix.trim().is_empty(),
+        "btw suffix must not be empty"
+    );
+}
+
+/// 3. The snapshot captured at AgentEnd contains the *full* accumulated history
+///    including all intra-turn tool rounds.  When the btw call sends those same
+///    messages, it appends a new user message at the end — but the main agent's
+///    *next* request will also append its new user message to the same base.
+///    The positions of cache breakpoints (first-user, last-user) therefore
+///    shift relative to what the agent last sent, breaking the last-user
+///    breakpoint alignment.
+///
+///    This test shows that the last-user-message index in the btw request is
+///    different from the last-user-message index in the immediately preceding
+///    agent request — the cache breakpoint lands on a different message.
+#[test]
+fn btw_last_user_breakpoint_lands_on_different_message_than_agent() {
+    // Simulate agent state after one complete tool-using turn.
+    // agent.state.messages at AgentEnd time (= what the snapshot captures):
+    let snapshot = vec![
+        user_msg("initial question"),       // idx 0 — first user (bp4)
+        AgentMessage::Assistant(AssistantMessage {
+            content: vec![
+                ContentBlock::ToolCall {
+                    id: "c1".into(),
+                    name: "bash".into(),
+                    arguments: serde_json::json!({"command": "ls"}),
+                },
+            ],
+            stop_reason: StopReason::ToolUse,
+            usage: Some(Usage::default()),
+            timestamp: 0,
+        }),
+        AgentMessage::ToolResult {
+            tool_call_id: "c1".into(),
+            content: vec![ContentItem::Text { text: "file.txt".into() }],
+            is_error: false,
+            display: None,
+            timestamp: 0,
+        },
+        // The agent's final reply in this turn:
+        AgentMessage::Assistant(AssistantMessage {
+            content: vec![ContentBlock::Text { text: "done".into() }],
+            stop_reason: StopReason::EndTurn,
+            usage: Some(Usage::default()),
+            timestamp: 0,
+        }),
+    ];
+    // The agent's last request had this as the last (and only) user message,
+    // so breakpoint 3 (last-user) was on idx 0.
+    let agent_last_user_idx = snapshot
+        .iter()
+        .rposition(|m| matches!(m, AgentMessage::User { .. }))
+        .expect("at least one user message");
+
+    // The btw call appends a new user message (the /btw note).
+    let mut btw_messages = snapshot.clone();
+    btw_messages.push(user_msg("quick side question"));
+
+    let btw_last_user_idx = btw_messages
+        .iter()
+        .rposition(|m| matches!(m, AgentMessage::User { .. }))
+        .expect("at least one user message");
+
+    // The breakpoints land on different positions → different wire bytes →
+    // cache miss on last-user breakpoint for the new user message.
+    assert_ne!(
+        agent_last_user_idx,
+        btw_last_user_idx,
+        "btw appends a user message, so last-user breakpoint moves; \
+         the agent's cached last-user position no longer matches"
+    );
+
+    // Specifically: btw's last-user is the new note, agent's is the original question.
+    assert_eq!(agent_last_user_idx, 0, "agent: only user message is at idx 0");
+    assert_eq!(btw_last_user_idx, btw_messages.len() - 1, "btw: note is last");
+}
+
 // ── strip_tool_content ────────────────────────────────────────────────────────
 
 use nerv::interactive::btw_overlay::strip_tool_content;

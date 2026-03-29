@@ -244,6 +244,7 @@ pub enum AgentEvent {
     AgentStart,
     AgentEnd {
         messages: Vec<AgentMessage>,
+        system_prompt: String,
     },
     MessageStart {
         message: AgentMessage,

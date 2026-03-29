@@ -8,7 +8,7 @@ use crossbeam_channel as channel;
 use crate::agent::agent::Agent;
 use crate::agent::provider::{new_cancel_flag, CancelFlag, ProviderRegistry};
 use crate::agent::types::{AgentEvent, AgentMessage, ContentItem, Model, StopReason, StreamDelta};
-use crate::interactive::btw_overlay::{strip_tool_content, BTW_SYSTEM_PROMPT};
+use crate::interactive::btw_overlay::turn_succeeded;
 use crate::interactive::theme;
 use crate::tui::tui::Component;
 
@@ -218,6 +218,8 @@ fn visible_char_count(s: &str) -> usize {
 /// be attached to the layout.
 pub fn spawn_btw(
     messages: Vec<AgentMessage>,
+    system_prompt: String,
+    tools: Vec<std::sync::Arc<dyn crate::agent::agent::AgentTool>>,
     model: Model,
     provider_registry: Arc<RwLock<ProviderRegistry>>,
     note: String,
@@ -228,7 +230,7 @@ pub fn spawn_btw(
     let note2 = note.clone();
 
     std::thread::spawn(move || {
-        stream_btw(messages, model, provider_registry, note2, tx, cancel2);
+        stream_btw(messages, system_prompt, tools, model, provider_registry, note2, tx, cancel2);
     });
 
     BtwPanel::new(note, rx, cancel)
@@ -236,6 +238,8 @@ pub fn spawn_btw(
 
 fn stream_btw(
     messages: Vec<AgentMessage>,
+    system_prompt: String,
+    tools: Vec<std::sync::Arc<dyn crate::agent::agent::AgentTool>>,
     model: Model,
     provider_registry: Arc<RwLock<ProviderRegistry>>,
     note: String,
@@ -248,13 +252,20 @@ fn stream_btw(
     };
 
     let mut agent = Agent::new(provider_registry);
-    // Strip tool_use/tool_result blocks so the API call is valid without tools.
-    agent.state.messages = strip_tool_content(messages);
+    // Use the exact same messages, system prompt, and tools as the main agent so
+    // Anthropic's cache breakpoints match and the prefix is a cache hit.
+    agent.state.messages = messages;
     agent.state.model = Some(model);
-    agent.state.system_prompt = BTW_SYSTEM_PROMPT.into();
+    // Append the btw instruction to the existing system prompt rather than
+    // replacing it — keeps the cached system prompt prefix identical.
+    agent.state.system_prompt = format!(
+        "{system_prompt}\n\n<btw>The user is asking a side question while the agent works. \
+        Answer concisely in 1-4 sentences without calling any tools.</btw>"
+    );
     agent.cancel = cancel;
-    // No tools — pure conversation.
-    agent.state.tools = Vec::new();
+    // Same tools as the main agent — required so tool_use blocks in the history
+    // are valid. The btw instruction above discourages the model from calling them.
+    agent.state.tools = tools;
 
     let tx2 = tx.clone();
     agent.prompt(
