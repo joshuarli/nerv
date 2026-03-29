@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use rusqlite::{Connection, params};
+
 use super::types::*;
 use crate::agent::types::{AgentMessage, ContentBlock, ContentItem, ThinkingLevel};
 
@@ -26,7 +28,7 @@ pub struct SessionContext {
 }
 
 pub struct SessionManager {
-    db: sqlite::Connection,
+    db: Connection,
     session_id: Option<String>,
     entries: Vec<SessionEntry>,
     by_id: HashMap<String, usize>,
@@ -38,12 +40,11 @@ impl SessionManager {
     pub fn new(repo_dir: &Path) -> Self {
         let _ = std::fs::create_dir_all(repo_dir);
         let db_path = repo_dir.join("sessions.db");
-        let db = sqlite::open(&db_path).expect("failed to open sessions.db");
+        let db = Connection::open(&db_path).expect("failed to open sessions.db");
 
-        db.execute("PRAGMA journal_mode=WAL").ok();
-        db.execute("PRAGMA synchronous=NORMAL").ok();
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;").ok();
 
-        db.execute(
+        db.execute_batch(
             "CREATE TABLE IF NOT EXISTS sessions (
                 id                TEXT PRIMARY KEY,
                 cwd               TEXT NOT NULL,
@@ -55,44 +56,46 @@ impl SessionManager {
                 compact_threshold REAL,
                 repo_id           TEXT,
                 input_history     TEXT
-            )",
+            );",
         )
         .expect("failed to create sessions table");
 
         // Migrate: add input_history column to existing databases that pre-date it.
-        db.execute(
-            "ALTER TABLE sessions ADD COLUMN input_history TEXT",
+        db.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN input_history TEXT;",
         )
         .ok(); // Ignore error — column already exists on fresh DBs.
 
         // Migrate: add session_config column for per-session config overrides.
-        db.execute(
-            "ALTER TABLE sessions ADD COLUMN session_config TEXT",
+        db.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN session_config TEXT;",
         )
         .ok();
 
-        db.execute(
+        db.execute_batch(
             "CREATE TABLE IF NOT EXISTS entries (
                 id         TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL REFERENCES sessions(id),
                 parent_id  TEXT,
                 seq        INTEGER NOT NULL,
                 data       TEXT NOT NULL
-            )",
+            );",
         )
         .expect("failed to create entries table");
 
-        db.execute("CREATE INDEX IF NOT EXISTS idx_entries_session ON entries(session_id, seq)")
-            .ok();
+        db.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_entries_session ON entries(session_id, seq);",
+        )
+        .ok();
 
-        db.execute(
+        db.execute_batch(
             "CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
                 text,
                 session_id UNINDEXED,
                 entry_id UNINDEXED,
                 role UNINDEXED,
                 tokenize = 'porter unicode61'
-            )",
+            );",
         )
         .expect("failed to create search_index FTS5 table");
 
@@ -118,22 +121,12 @@ impl SessionManager {
         let repo_id = crate::find_repo_root(cwd)
             .and_then(|root| crate::repo_fingerprint(&root));
 
-        let mut stmt = self.db.prepare(
-            "INSERT INTO sessions (id, cwd, created_at, updated_at, worktree, repo_id) VALUES (?, ?, ?, ?, ?, ?)",
+        let worktree_str: Option<String> = worktree.map(|wt| wt.to_string_lossy().to_string());
+
+        self.db.execute(
+            "INSERT INTO sessions (id, cwd, created_at, updated_at, worktree, repo_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, cwd_str, now, now, worktree_str, repo_id],
         )?;
-        stmt.bind((1, id.as_str()))?;
-        stmt.bind((2, cwd_str.as_str()))?;
-        stmt.bind((3, now.as_str()))?;
-        stmt.bind((4, now.as_str()))?;
-        match worktree {
-            Some(wt) => stmt.bind((5, wt.to_string_lossy().as_ref()))?,
-            None => stmt.bind((5, sqlite::Value::Null))?,
-        };
-        match repo_id.as_deref() {
-            Some(rid) => stmt.bind((6, rid))?,
-            None => stmt.bind((6, sqlite::Value::Null))?,
-        };
-        stmt.next()?;
 
         self.session_id = Some(id);
         self.entries.clear();
@@ -146,17 +139,11 @@ impl SessionManager {
 
     pub fn load_session(&mut self, session_id: &str) -> anyhow::Result<SessionContext> {
         // Find full session ID from prefix
-        let full_id = {
-            let mut stmt = self
-                .db
-                .prepare("SELECT id FROM sessions WHERE id LIKE ? LIMIT 1")?;
-            stmt.bind((1, format!("{}%", session_id).as_str()))?;
-            if stmt.next()? == sqlite::State::Row {
-                stmt.read::<String, _>("id")?
-            } else {
-                anyhow::bail!("session not found: {}", session_id);
-            }
-        };
+        let full_id: String = self.db.query_row(
+            "SELECT id FROM sessions WHERE id LIKE ?1 LIMIT 1",
+            params![format!("{}%", session_id)],
+            |row| row.get(0),
+        ).map_err(|_| anyhow::anyhow!("session not found: {}", session_id))?;
 
         self.session_id = Some(full_id.clone());
         self.entries.clear();
@@ -165,14 +152,18 @@ impl SessionManager {
         self.next_seq = 0;
 
         let mut stmt = self.db.prepare(
-            "SELECT id, parent_id, seq, data FROM entries WHERE session_id = ? ORDER BY seq",
+            "SELECT id, parent_id, seq, data FROM entries WHERE session_id = ?1 ORDER BY seq",
         )?;
-        stmt.bind((1, full_id.as_str()))?;
+        let rows = stmt.query_map(params![full_id], |row| {
+            let id: String = row.get(0)?;
+            let _parent_id: Option<String> = row.get(1)?;
+            let seq: i64 = row.get(2)?;
+            let data: String = row.get(3)?;
+            Ok((id, seq, data))
+        })?;
 
-        while stmt.next()? == sqlite::State::Row {
-            let data: String = stmt.read("data")?;
-            let seq: i64 = stmt.read("seq")?;
-
+        for row in rows {
+            let (_id, seq, data) = row?;
             match serde_json::from_str::<SessionEntry>(&data) {
                 Ok(entry) => {
                     let idx = self.entries.len();
@@ -203,15 +194,15 @@ impl SessionManager {
         let entry_id = entry.id().to_string();
         let parent_id = entry.parent_id().map(|s| s.to_string());
 
-        self.db.execute("BEGIN")?;
+        self.db.execute("BEGIN", [])?;
 
         let result = self.append_entry_inner(&session_id, &entry_id, parent_id.as_deref(), &data, &entry);
         if result.is_err() {
-            self.db.execute("ROLLBACK").ok();
+            self.db.execute("ROLLBACK", []).ok();
             return result;
         }
 
-        self.db.execute("COMMIT")?;
+        self.db.execute("COMMIT", [])?;
 
         let idx = self.entries.len();
         self.by_id.insert(entry.id().to_string(), idx);
@@ -230,41 +221,27 @@ impl SessionManager {
         data: &str,
         entry: &SessionEntry,
     ) -> anyhow::Result<()> {
-        let mut stmt = self.db.prepare(
-            "INSERT INTO entries (id, session_id, parent_id, seq, data) VALUES (?, ?, ?, ?, ?)",
+        self.db.execute(
+            "INSERT INTO entries (id, session_id, parent_id, seq, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![entry_id, session_id, parent_id, self.next_seq, data],
         )?;
-        stmt.bind((1, entry_id))?;
-        stmt.bind((2, session_id))?;
-        match parent_id {
-            Some(p) => stmt.bind((3, p))?,
-            None => stmt.bind((3, sqlite::Value::Null))?,
-        };
-        stmt.bind((4, self.next_seq))?;
-        stmt.bind((5, data))?;
-        stmt.next()?;
 
         // Index searchable text in FTS5
         if let Some((text, role)) = extract_searchable_text(entry) {
             if !text.is_empty() {
-                let mut fts_stmt = self.db.prepare(
-                    "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?, ?, ?, ?)",
+                self.db.execute(
+                    "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?1, ?2, ?3, ?4)",
+                    params![text, session_id, entry_id, role],
                 )?;
-                fts_stmt.bind((1, text.as_str()))?;
-                fts_stmt.bind((2, session_id))?;
-                fts_stmt.bind((3, entry_id))?;
-                fts_stmt.bind((4, role))?;
-                fts_stmt.next()?;
             }
         }
 
         // Update session timestamp
         let now = now_iso();
-        let mut stmt = self
-            .db
-            .prepare("UPDATE sessions SET updated_at = ? WHERE id = ?")?;
-        stmt.bind((1, now.as_str()))?;
-        stmt.bind((2, session_id))?;
-        stmt.next()?;
+        self.db.execute(
+            "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
+            params![now, session_id],
+        )?;
 
         // Update preview from first user message
         if self.entries.is_empty()
@@ -282,12 +259,10 @@ impl SessionManager {
                 .chars()
                 .take(80)
                 .collect();
-            let mut stmt = self
-                .db
-                .prepare("UPDATE sessions SET preview = ? WHERE id = ?")?;
-            stmt.bind((1, preview.as_str()))?;
-            stmt.bind((2, session_id))?;
-            stmt.next()?;
+            self.db.execute(
+                "UPDATE sessions SET preview = ?1 WHERE id = ?2",
+                params![preview, session_id],
+            )?;
         }
 
         Ok(())
@@ -342,7 +317,8 @@ impl SessionManager {
             // Build a parameterised IN list
             let placeholders = branch_ids_to_delete
                 .iter()
-                .map(|_| "?")
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 1))
                 .collect::<Vec<_>>()
                 .join(",");
 
@@ -352,16 +328,16 @@ impl SessionManager {
             );
             let mut stmt = self.db.prepare(&fts_sql)?;
             for (i, id) in branch_ids_to_delete.iter().enumerate() {
-                stmt.bind((i + 1, id.as_str()))?;
+                stmt.raw_bind_parameter(i + 1, id.as_str())?;
             }
-            stmt.next()?;
+            stmt.raw_execute()?;
 
             let del_sql = format!("DELETE FROM entries WHERE id IN ({})", placeholders);
             let mut stmt = self.db.prepare(&del_sql)?;
             for (i, id) in branch_ids_to_delete.iter().enumerate() {
-                stmt.bind((i + 1, id.as_str()))?;
+                stmt.raw_bind_parameter(i + 1, id.as_str())?;
             }
-            stmt.next()?;
+            stmt.raw_execute()?;
         }
 
         // Append compaction entry
@@ -420,13 +396,15 @@ impl SessionManager {
 
         let mut stmt = self
             .db
-            .prepare("SELECT seq, data FROM entries WHERE session_id = ? ORDER BY seq")?;
-        stmt.bind((1, session_id.as_str()))?;
+            .prepare("SELECT seq, data FROM entries WHERE session_id = ?1 ORDER BY seq")?;
+        let rows = stmt.query_map(params![session_id], |row| {
+            let seq: i64 = row.get(0)?;
+            let data: String = row.get(1)?;
+            Ok((seq, data))
+        })?;
 
-        while stmt.next()? == sqlite::State::Row {
-            let data: String = stmt.read("data")?;
-            let seq: i64 = stmt.read("seq")?;
-
+        for row in rows {
+            let (seq, data) = row?;
             if let Ok(entry) = serde_json::from_str::<SessionEntry>(&data) {
                 let idx = self.entries.len();
                 self.by_id.insert(entry.id().to_string(), idx);
@@ -564,15 +542,10 @@ impl SessionManager {
     /// Update the worktree and cwd for the current session.
     pub fn update_worktree(&self, cwd: &Path, worktree: &Path) {
         if let Some(ref sid) = self.session_id {
-            if let Ok(mut stmt) = self
-                .db
-                .prepare("UPDATE sessions SET cwd = ?, worktree = ? WHERE id = ?")
-            {
-                stmt.bind((1, cwd.to_string_lossy().as_ref())).ok();
-                stmt.bind((2, worktree.to_string_lossy().as_ref())).ok();
-                stmt.bind((3, sid.as_str())).ok();
-                stmt.next().ok();
-            }
+            self.db.execute(
+                "UPDATE sessions SET cwd = ?1, worktree = ?2 WHERE id = ?3",
+                params![cwd.to_string_lossy().as_ref(), worktree.to_string_lossy().as_ref(), sid],
+            ).ok();
         }
     }
 
@@ -580,14 +553,10 @@ impl SessionManager {
     pub fn save_input_history(&self, history: &[String]) {
         if let Some(ref sid) = self.session_id {
             let json = serde_json::to_string(history).unwrap_or_else(|_| "[]".to_string());
-            if let Ok(mut stmt) = self
-                .db
-                .prepare("UPDATE sessions SET input_history = ? WHERE id = ?")
-            {
-                stmt.bind((1, json.as_str())).ok();
-                stmt.bind((2, sid.as_str())).ok();
-                stmt.next().ok();
-            }
+            self.db.execute(
+                "UPDATE sessions SET input_history = ?1 WHERE id = ?2",
+                params![json, sid],
+            ).ok();
         }
     }
 
@@ -597,80 +566,61 @@ impl SessionManager {
             Some(s) => s,
             None => return Vec::new(),
         };
-        let mut stmt = match self
-            .db
-            .prepare("SELECT input_history FROM sessions WHERE id = ?")
-        {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
-        };
-        stmt.bind((1, sid)).ok();
-        if stmt.next().ok() == Some(sqlite::State::Row) {
-            if let Ok(Some(json)) = stmt.read::<Option<String>, _>("input_history") {
-                serde_json::from_str::<Vec<String>>(&json).unwrap_or_default()
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        }
+        self.db
+            .query_row(
+                "SELECT input_history FROM sessions WHERE id = ?1",
+                params![sid],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
+            .unwrap_or_default()
     }
 
     /// Set the human-readable name for the current session.
     pub fn set_name(&self, name: &str) {
         if let Some(ref sid) = self.session_id {
-            if let Ok(mut stmt) = self
-                .db
-                .prepare("UPDATE sessions SET name = ? WHERE id = ?")
-            {
-                stmt.bind((1, name)).ok();
-                stmt.bind((2, sid.as_str())).ok();
-                stmt.next().ok();
-            }
+            self.db.execute(
+                "UPDATE sessions SET name = ?1 WHERE id = ?2",
+                params![name, sid],
+            ).ok();
         }
     }
 
     /// Return the current name (if any) for the active session.
     pub fn name(&self) -> Option<String> {
         let sid = self.session_id.as_deref()?;
-        let mut stmt = self
-            .db
-            .prepare("SELECT name FROM sessions WHERE id = ?")
-            .ok()?;
-        stmt.bind((1, sid)).ok()?;
-        if stmt.next().ok()? == sqlite::State::Row {
-            stmt.read::<Option<String>, _>("name").ok().flatten()
-        } else {
-            None
-        }
+        self.db
+            .query_row(
+                "SELECT name FROM sessions WHERE id = ?1",
+                params![sid],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
     }
 
     /// Get the auto-compact threshold (fraction 0.0–1.0) for the current session, if set.
     pub fn get_compact_threshold(&self) -> Option<f64> {
         let sid = self.session_id.as_deref()?;
-        let mut stmt = self
-            .db
-            .prepare("SELECT compact_threshold FROM sessions WHERE id = ?")
-            .ok()?;
-        stmt.bind((1, sid)).ok()?;
-        if stmt.next().ok()? == sqlite::State::Row {
-            stmt.read::<Option<f64>, _>("compact_threshold").ok().flatten()
-        } else {
-            None
-        }
+        self.db
+            .query_row(
+                "SELECT compact_threshold FROM sessions WHERE id = ?1",
+                params![sid],
+                |row| row.get::<_, Option<f64>>(0),
+            )
+            .ok()
+            .flatten()
     }
 
     /// Persist the auto-compact threshold for the current session.
     pub fn set_compact_threshold(&self, pct: f64) {
         if let Some(ref sid) = self.session_id {
-            if let Ok(mut stmt) = self
-                .db
-                .prepare("UPDATE sessions SET compact_threshold = ? WHERE id = ?")
-            {
-                stmt.bind((1, pct)).ok();
-                stmt.bind((2, sid.as_str())).ok();
-                stmt.next().ok();
-            }
+            self.db.execute(
+                "UPDATE sessions SET compact_threshold = ?1 WHERE id = ?2",
+                params![pct, sid],
+            ).ok();
         }
     }
 
@@ -680,34 +630,26 @@ impl SessionManager {
             Some(s) => s,
             None => return SessionConfig::default(),
         };
-        let mut stmt = match self.db.prepare("SELECT session_config FROM sessions WHERE id = ?") {
-            Ok(s) => s,
-            Err(_) => return SessionConfig::default(),
-        };
-        stmt.bind((1, sid)).ok();
-        if stmt.next().ok() == Some(sqlite::State::Row) {
-            stmt.read::<Option<String>, _>("session_config")
-                .ok()
-                .flatten()
-                .and_then(|json| serde_json::from_str(&json).ok())
-                .unwrap_or_default()
-        } else {
-            SessionConfig::default()
-        }
+        self.db
+            .query_row(
+                "SELECT session_config FROM sessions WHERE id = ?1",
+                params![sid],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default()
     }
 
     /// Save per-session config overrides to the DB.
     pub fn set_session_config(&self, config: &SessionConfig) {
         if let Some(ref sid) = self.session_id {
             if let Ok(json) = serde_json::to_string(config) {
-                if let Ok(mut stmt) = self
-                    .db
-                    .prepare("UPDATE sessions SET session_config = ? WHERE id = ?")
-                {
-                    stmt.bind((1, json.as_str())).ok();
-                    stmt.bind((2, sid.as_str())).ok();
-                    stmt.next().ok();
-                }
+                self.db.execute(
+                    "UPDATE sessions SET session_config = ?1 WHERE id = ?2",
+                    params![json, sid],
+                ).ok();
             }
         }
     }
@@ -723,34 +665,25 @@ impl SessionManager {
     /// Clear the worktree association for the current session.
     pub fn clear_worktree(&self) {
         if let Some(ref sid) = self.session_id {
-            if let Ok(mut stmt) = self
-                .db
-                .prepare("UPDATE sessions SET worktree = NULL WHERE id = ?")
-            {
-                stmt.bind((1, sid.as_str())).ok();
-                stmt.next().ok();
-            }
+            self.db.execute(
+                "UPDATE sessions SET worktree = NULL WHERE id = ?1",
+                params![sid],
+            ).ok();
         }
     }
 
     /// Get the worktree path for the current session, if any.
     pub fn session_worktree(&self) -> Option<std::path::PathBuf> {
         let sid = self.session_id.as_ref()?;
-        let mut stmt = self
-            .db
-            .prepare("SELECT worktree FROM sessions WHERE id = ?")
-            .ok()?;
-        stmt.bind((1, sid.as_str())).ok()?;
-        if stmt.next().ok()? == sqlite::State::Row {
-            let wt: String = stmt.read("worktree").ok()?;
-            if wt.is_empty() {
-                None
-            } else {
-                Some(std::path::PathBuf::from(wt))
-            }
-        } else {
-            None
-        }
+        let wt: Option<String> = self.db
+            .query_row(
+                "SELECT worktree FROM sessions WHERE id = ?1",
+                params![sid],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        wt.filter(|s| !s.is_empty()).map(std::path::PathBuf::from)
     }
 
     pub fn entry_count(&self) -> usize {
@@ -898,13 +831,13 @@ impl SessionManager {
         let now = now_iso();
 
         // Everything runs inside a transaction; roll back on any error.
-        self.db.execute("BEGIN")?;
+        self.db.execute("BEGIN", [])?;
         let result = self.fork_session_inner(&src_id, &new_id, &now, &branch_ids);
         if result.is_err() {
-            self.db.execute("ROLLBACK").ok();
+            self.db.execute("ROLLBACK", []).ok();
             return result.map(|_| new_id);
         }
-        self.db.execute("COMMIT")?;
+        self.db.execute("COMMIT", [])?;
 
         // Switch to the new session and reload in-memory state.  The entry ids
         // are identical to the source but the owning session_id has changed, so
@@ -925,16 +858,12 @@ impl SessionManager {
         // Copy session metadata row, stamping a fresh id and timestamp.
         // name, cwd, worktree, compact_threshold, repo_id and preview all
         // carry over so the fork looks like the original in /resume.
-        let mut stmt = self.db.prepare(
+        self.db.execute(
             "INSERT INTO sessions (id, cwd, created_at, updated_at, preview, worktree, name, compact_threshold, repo_id)
-             SELECT ?, cwd, ?, ?, preview, worktree, name, compact_threshold, repo_id
-             FROM sessions WHERE id = ?",
+             SELECT ?1, cwd, ?2, ?3, preview, worktree, name, compact_threshold, repo_id
+             FROM sessions WHERE id = ?4",
+            params![new_id, now, now, src_id],
         )?;
-        stmt.bind((1, new_id))?;
-        stmt.bind((2, now))?;
-        stmt.bind((3, now))?;
-        stmt.bind((4, src_id))?;
-        stmt.next()?;
 
         // Assign a fresh entry id for every copied entry.  Entry ids are a
         // PRIMARY KEY across the whole DB (not scoped to session_id), so we
@@ -949,16 +878,11 @@ impl SessionManager {
             let new_entry_id = &id_map[old_id];
 
             // Read the source row.
-            let mut sel = self.db.prepare(
-                "SELECT parent_id, seq, data FROM entries WHERE id = ?",
-            )?;
-            sel.bind((1, old_id.as_str()))?;
-            if sel.next()? != sqlite::State::Row {
-                anyhow::bail!("entry {old_id} not found during fork");
-            }
-            let parent_id_raw: Option<String> = sel.read("parent_id").ok();
-            let seq: i64 = sel.read("seq")?;
-            let data: String = sel.read("data")?;
+            let (parent_id_raw, seq, data): (Option<String>, i64, String) = self.db.query_row(
+                "SELECT parent_id, seq, data FROM entries WHERE id = ?1",
+                params![old_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).map_err(|_| anyhow::anyhow!("entry {old_id} not found during fork"))?;
 
             // Remap parent_id if it was also in this branch (it always is for a
             // linear branch, but be safe).
@@ -978,35 +902,24 @@ impl SessionManager {
                     .map_err(|e| anyhow::anyhow!("serialise fork entry: {e}"))?
             };
 
-            let mut ins = self.db.prepare(
-                "INSERT INTO entries (id, session_id, parent_id, seq, data) VALUES (?, ?, ?, ?, ?)",
+            self.db.execute(
+                "INSERT INTO entries (id, session_id, parent_id, seq, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![new_entry_id, new_id, mapped_parent, seq, patched_data],
             )?;
-            ins.bind((1, new_entry_id.as_str()))?;
-            ins.bind((2, new_id))?;
-            match mapped_parent.as_deref() {
-                Some(p) => ins.bind((3, p))?,
-                None => ins.bind((3, sqlite::Value::Null))?,
-            };
-            ins.bind((4, seq))?;
-            ins.bind((5, patched_data.as_str()))?;
-            ins.next()?;
 
             // Copy search_index rows, updating entry_id to the new id.
-            let mut si_sel = self.db.prepare(
-                "SELECT text, role FROM search_index WHERE entry_id = ?",
+            let mut si_stmt = self.db.prepare(
+                "SELECT text, role FROM search_index WHERE entry_id = ?1",
             )?;
-            si_sel.bind((1, old_id.as_str()))?;
-            while si_sel.next()? == sqlite::State::Row {
-                let text: String = si_sel.read("text")?;
-                let role: String = si_sel.read("role")?;
-                let mut si_ins = self.db.prepare(
-                    "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?, ?, ?, ?)",
+            let si_rows: Vec<(String, String)> = si_stmt
+                .query_map(params![old_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
+            for (text, role) in si_rows {
+                self.db.execute(
+                    "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?1, ?2, ?3, ?4)",
+                    params![text, new_id, new_entry_id, role],
                 )?;
-                si_ins.bind((1, text.as_str()))?;
-                si_ins.bind((2, new_id))?;
-                si_ins.bind((3, new_entry_id.as_str()))?;
-                si_ins.bind((4, role.as_str()))?;
-                si_ins.next()?;
             }
         }
 
@@ -1014,36 +927,26 @@ impl SessionManager {
     }
 
     pub fn has_sessions_for_repo(&self, repo_id: &str) -> bool {
-        let mut stmt = match self
-            .db
-            .prepare("SELECT COUNT(*) FROM sessions WHERE repo_id = ? LIMIT 1")
-        {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
-        if stmt.bind((1, repo_id)).is_err() {
-            return false;
-        }
-        if stmt.next().unwrap_or(sqlite::State::Done) == sqlite::State::Row {
-            let count: i64 = stmt.read(0).unwrap_or(0);
-            count > 0
-        } else {
-            false
-        }
+        self.db
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE repo_id = ?1 LIMIT 1",
+                params![repo_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false)
     }
 
     pub fn repo_id(&self) -> Option<String> {
         let sid = self.session_id.as_deref()?;
-        let mut stmt = self
-            .db
-            .prepare("SELECT repo_id FROM sessions WHERE id = ?")
-            .ok()?;
-        stmt.bind((1, sid)).ok()?;
-        if stmt.next().ok()? == sqlite::State::Row {
-            stmt.read::<Option<String>, _>("repo_id").ok().flatten()
-        } else {
-            None
-        }
+        self.db
+            .query_row(
+                "SELECT repo_id FROM sessions WHERE id = ?1",
+                params![sid],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
     }
 
     pub fn list_sessions(&self) -> Vec<SessionSummary> {
@@ -1054,15 +957,24 @@ impl SessionManager {
             Err(_) => return Vec::new(),
         };
 
+        let rows = match stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+            ))
+        }) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+
         let mut sessions = Vec::new();
-        while stmt.next().unwrap_or(sqlite::State::Done) == sqlite::State::Row {
-            let id: String = stmt.read("id").unwrap_or_default();
-            let cwd: String = stmt.read("cwd").unwrap_or_default();
-            let created_at: String = stmt.read("created_at").unwrap_or_default();
-            let updated_at: String = stmt.read("updated_at").unwrap_or_default();
-            let preview: String = stmt.read("preview").unwrap_or_default();
-            let name: Option<String> = stmt.read("name").unwrap_or(None);
-            let repo_id: Option<String> = stmt.read("repo_id").unwrap_or(None);
+        for row in rows.flatten() {
+            let (id, cwd, created_at, updated_at, preview, name, repo_id) = row;
 
             // Count entries for this session
             let message_count = self.count_entries(&id);
@@ -1110,25 +1022,30 @@ impl SessionManager {
                 role,
                 rank
             FROM search_index
-            WHERE text MATCH ?
+            WHERE text MATCH ?1
             ORDER BY rank
             LIMIT 100",
         ) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        if stmt.bind((1, fts_query.as_str())).is_err() {
-            return Vec::new();
-        }
+
+        let rows: Vec<(String, String, String, f64)> = match stmt.query_map(params![fts_query], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        }) {
+            Ok(r) => r.filter_map(|r| r.ok()).collect(),
+            Err(_) => return Vec::new(),
+        };
 
         // Collect raw hits, dedup by session_id keeping best rank
         let mut best: std::collections::HashMap<String, (String, String, f64)> =
             std::collections::HashMap::new();
-        while stmt.next().unwrap_or(sqlite::State::Done) == sqlite::State::Row {
-            let excerpt: String = stmt.read("excerpt").unwrap_or_default();
-            let session_id: String = stmt.read("session_id").unwrap_or_default();
-            let role: String = stmt.read("role").unwrap_or_default();
-            let rank: f64 = stmt.read("rank").unwrap_or(0.0);
+        for (excerpt, session_id, role, rank) in rows {
             best.entry(session_id)
                 .and_modify(|existing| {
                     if rank < existing.2 {
@@ -1141,22 +1058,14 @@ impl SessionManager {
         // Join with sessions table for metadata
         let mut results: Vec<SearchResult> = Vec::new();
         for (sid, (excerpt, role, rank)) in &best {
-            let mut s = match self
-                .db
-                .prepare("SELECT id, cwd, updated_at FROM sessions WHERE id = ?")
-            {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            if s.bind((1, sid.as_str())).is_err() {
-                continue;
-            }
-            if s.next().unwrap_or(sqlite::State::Done) != sqlite::State::Row {
-                continue;
-            }
-            let id: String = s.read("id").unwrap_or_default();
-            let cwd: String = s.read("cwd").unwrap_or_default();
-            let updated_at: String = s.read("updated_at").unwrap_or_default();
+            let row: Option<(String, String, String)> = self.db
+                .query_row(
+                    "SELECT id, cwd, updated_at FROM sessions WHERE id = ?1",
+                    params![sid],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .ok();
+            let Some((id, cwd, updated_at)) = row else { continue };
             let id_short = if id.len() >= 8 {
                 id[..8].to_string()
             } else {
@@ -1182,19 +1091,14 @@ impl SessionManager {
     }
 
     fn count_entries(&self, session_id: &str) -> u32 {
-        let mut stmt = match self
-            .db
-            .prepare("SELECT COUNT(*) as c FROM entries WHERE session_id = ?")
-        {
-            Ok(s) => s,
-            Err(_) => return 0,
-        };
-        stmt.bind((1, session_id)).ok();
-        if stmt.next().unwrap_or(sqlite::State::Done) == sqlite::State::Row {
-            stmt.read::<i64, _>("c").unwrap_or(0) as u32
-        } else {
-            0
-        }
+        self.db
+            .query_row(
+                "SELECT COUNT(*) FROM entries WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c as u32)
+            .unwrap_or(0)
     }
 
     /// Export the current branch (leaf → root) as JSONL lines.
@@ -1393,52 +1297,42 @@ fn extract_searchable_text(entry: &SessionEntry) -> Option<(String, &'static str
     }
 }
 
-fn backfill_search_index(db: &sqlite::Connection) {
+fn backfill_search_index(db: &Connection) {
     let has_fts: i64 = db
-        .prepare("SELECT COUNT(*) as c FROM search_index")
-        .and_then(|mut s| {
-            s.next()?;
-            s.read::<i64, _>("c")
-        })
+        .query_row("SELECT COUNT(*) FROM search_index", [], |row| row.get(0))
         .unwrap_or(0);
     let has_entries: i64 = db
-        .prepare("SELECT COUNT(*) as c FROM entries")
-        .and_then(|mut s| {
-            s.next()?;
-            s.read::<i64, _>("c")
-        })
+        .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
         .unwrap_or(0);
 
     if has_fts > 0 || has_entries == 0 {
         return;
     }
 
-    db.execute("BEGIN").ok();
+    db.execute_batch("BEGIN").ok();
     let mut stmt = match db.prepare("SELECT id, session_id, data FROM entries ORDER BY session_id, seq") {
         Ok(s) => s,
         Err(_) => return,
     };
-    while stmt.next().unwrap_or(sqlite::State::Done) == sqlite::State::Row {
-        let entry_id: String = stmt.read("id").unwrap_or_default();
-        let session_id: String = stmt.read("session_id").unwrap_or_default();
-        let data: String = stmt.read("data").unwrap_or_default();
+    let rows: Vec<(String, String, String)> = match stmt.query_map([], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    }) {
+        Ok(r) => r.filter_map(|r| r.ok()).collect(),
+        Err(_) => return,
+    };
+    for (entry_id, session_id, data) in rows {
         if let Ok(entry) = serde_json::from_str::<SessionEntry>(&data) {
             if let Some((text, role)) = extract_searchable_text(&entry) {
                 if !text.is_empty() {
-                    if let Ok(mut fts_stmt) = db.prepare(
-                        "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?, ?, ?, ?)",
-                    ) {
-                        fts_stmt.bind((1, text.as_str())).ok();
-                        fts_stmt.bind((2, session_id.as_str())).ok();
-                        fts_stmt.bind((3, entry_id.as_str())).ok();
-                        fts_stmt.bind((4, role)).ok();
-                        fts_stmt.next().ok();
-                    }
+                    db.execute(
+                        "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?1, ?2, ?3, ?4)",
+                        params![text, session_id, entry_id, role],
+                    ).ok();
                 }
             }
         }
     }
-    db.execute("COMMIT").ok();
+    db.execute_batch("COMMIT").ok();
 }
 
 #[cfg(test)]
@@ -1448,11 +1342,10 @@ mod tests {
 
     /// Build an in-memory SessionManager (no on-disk DB).
     fn make_manager() -> SessionManager {
-        let db = sqlite::open(":memory:").expect("in-memory db");
-        db.execute("PRAGMA journal_mode=WAL").ok();
-        db.execute("PRAGMA synchronous=NORMAL").ok();
+        let db = Connection::open_in_memory().expect("in-memory db");
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;").ok();
 
-        db.execute(
+        db.execute_batch(
             "CREATE TABLE IF NOT EXISTS sessions (
                 id                TEXT PRIMARY KEY,
                 cwd               TEXT NOT NULL,
@@ -1463,31 +1356,31 @@ mod tests {
                 name              TEXT,
                 compact_threshold REAL,
                 repo_id           TEXT
-            )",
+            );",
         )
         .unwrap();
-        db.execute(
+        db.execute_batch(
             "CREATE TABLE IF NOT EXISTS entries (
                 id         TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL REFERENCES sessions(id),
                 parent_id  TEXT,
                 seq        INTEGER NOT NULL,
                 data       TEXT NOT NULL
-            )",
+            );",
         )
         .unwrap();
-        db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_entries_session ON entries(session_id, seq)",
+        db.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_entries_session ON entries(session_id, seq);",
         )
         .ok();
-        db.execute(
+        db.execute_batch(
             "CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
                 text,
                 session_id UNINDEXED,
                 entry_id UNINDEXED,
                 role UNINDEXED,
                 tokenize = 'porter unicode61'
-            )",
+            );",
         )
         .unwrap();
 
@@ -1530,28 +1423,24 @@ mod tests {
     fn db_entry_ids(mgr: &SessionManager, session_id: &str) -> Vec<String> {
         let mut stmt = mgr
             .db
-            .prepare("SELECT id FROM entries WHERE session_id = ? ORDER BY seq")
+            .prepare("SELECT id FROM entries WHERE session_id = ?1 ORDER BY seq")
             .unwrap();
-        stmt.bind((1, session_id)).unwrap();
-        let mut ids = Vec::new();
-        while stmt.next().unwrap() == sqlite::State::Row {
-            ids.push(stmt.read::<String, _>("id").unwrap());
-        }
-        ids
+        stmt.query_map(params![session_id], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
     }
 
     /// Count search_index rows for a session.
     fn db_search_count(mgr: &SessionManager, session_id: &str) -> usize {
-        let mut stmt = mgr
-            .db
-            .prepare("SELECT COUNT(*) as c FROM search_index WHERE session_id = ?")
-            .unwrap();
-        stmt.bind((1, session_id)).unwrap();
-        if stmt.next().unwrap() == sqlite::State::Row {
-            stmt.read::<i64, _>("c").unwrap() as usize
-        } else {
-            0
-        }
+        mgr.db
+            .query_row(
+                "SELECT COUNT(*) FROM search_index WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c as usize)
+            .unwrap_or(0)
     }
 
     // ── basic: fork copies entries and creates a new session ──────────────────

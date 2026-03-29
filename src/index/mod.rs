@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use rusqlite::{Connection, params};
 use tree_sitter::{Parser, Query, QueryCursor, StreamingIterator};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -87,13 +88,13 @@ struct FileEntry {
 /// unchanged file is a cache hit, so tree-sitter only runs for files that
 /// have been modified since the last scan.
 struct SymbolCache {
-    db: sqlite::Connection,
+    db: Connection,
     /// Repo root this cache is associated with. Paths stored as relative to this root.
     /// `None` means absolute paths are used (legacy / non-git).
     repo_root: Option<PathBuf>,
 }
 
-// sqlite::Connection wraps a *mut sqlite3 which is not Sync by default, but
+// rusqlite::Connection wraps a *mut sqlite3 which is not Sync by default, but
 // SymbolCache is only ever accessed while the outer RwLock write guard is held,
 // so there is no actual concurrent access. The unsafety is sound.
 unsafe impl Sync for SymbolCache {}
@@ -102,26 +103,25 @@ impl SymbolCache {
     fn open(repo_dir: &Path) -> Option<Self> {
         let _ = std::fs::create_dir_all(repo_dir);
         let path = repo_dir.join("symbol_cache.db");
-        let db = match sqlite::open(&path) {
+        let db = match Connection::open(&path) {
             Ok(db) => db,
             Err(e) => {
                 crate::log::warn(&format!("symbol cache: open failed: {}", e));
                 return None;
             }
         };
-        db.execute("PRAGMA journal_mode=WAL").ok();
-        db.execute("PRAGMA synchronous=NORMAL").ok();
-        db.execute(
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;").ok();
+        db.execute_batch(
             "CREATE TABLE IF NOT EXISTS symbol_cache (
                 path  TEXT NOT NULL,
                 mtime INTEGER NOT NULL,
                 data  TEXT NOT NULL,
                 PRIMARY KEY (path, mtime)
-            )",
+            );",
         )
         .ok()?;
-        db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_cache_path ON symbol_cache(path)",
+        db.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_cache_path ON symbol_cache(path);",
         )
         .ok();
         // Evict rows older than 30 days to bound cache growth.
@@ -130,10 +130,7 @@ impl SymbolCache {
             .unwrap_or_default()
             .as_millis() as i64
             - 30 * 24 * 3600 * 1000;
-        if let Ok(mut stmt) = db.prepare("DELETE FROM symbol_cache WHERE mtime < ?") {
-            stmt.bind((1, cutoff_ms)).ok();
-            stmt.next().ok();
-        }
+        db.execute("DELETE FROM symbol_cache WHERE mtime < ?1", params![cutoff_ms]).ok();
         Some(Self { db, repo_root: None })
     }
 
@@ -159,18 +156,14 @@ impl SymbolCache {
     fn get(&self, path: &Path, mtime: u128) -> Option<Vec<SymbolDef>> {
         let key = self.cache_key(path);
         let key_str = key.to_string_lossy();
-        let mut stmt = self
-            .db
-            .prepare("SELECT data FROM symbol_cache WHERE path = ? AND mtime = ?")
+        let json: String = self.db
+            .query_row(
+                "SELECT data FROM symbol_cache WHERE path = ?1 AND mtime = ?2",
+                params![key_str.as_ref(), mtime as i64],
+                |row| row.get(0),
+            )
             .ok()?;
-        stmt.bind((1, key_str.as_ref())).ok()?;
-        stmt.bind((2, mtime as i64)).ok()?;
-        if stmt.next().ok()? == sqlite::State::Row {
-            let json: String = stmt.read("data").ok()?;
-            serde_json::from_str(&json).ok()
-        } else {
-            None
-        }
+        serde_json::from_str(&json).ok()
     }
 
     /// Store symbols for `path` at `mtime`, evicting any older entries.
@@ -185,20 +178,12 @@ impl SymbolCache {
             }
         };
         // Delete all rows for this path, then insert the fresh one.
-        if let Ok(mut stmt) = self.db.prepare("DELETE FROM symbol_cache WHERE path = ?") {
-            stmt.bind((1, key_str.as_ref())).ok();
-            stmt.next().ok();
-        }
-        if let Ok(mut stmt) = self
-            .db
-            .prepare("INSERT INTO symbol_cache (path, mtime, data) VALUES (?, ?, ?)")
-        {
-            stmt.bind((1, key_str.as_ref())).ok();
-            stmt.bind((2, mtime as i64)).ok();
-            stmt.bind((3, json.as_str())).ok();
-            if let Err(e) = stmt.next() {
-                crate::log::warn(&format!("symbol cache: insert failed for {}: {}", key_str, e));
-            }
+        self.db.execute("DELETE FROM symbol_cache WHERE path = ?1", params![key_str.as_ref()]).ok();
+        if let Err(e) = self.db.execute(
+            "INSERT INTO symbol_cache (path, mtime, data) VALUES (?1, ?2, ?3)",
+            params![key_str.as_ref(), mtime as i64, json],
+        ) {
+            crate::log::warn(&format!("symbol cache: insert failed for {}: {}", key_str, e));
         }
     }
 
@@ -206,10 +191,7 @@ impl SymbolCache {
     fn remove(&self, path: &Path) {
         let key = self.cache_key(path);
         let key_str = key.to_string_lossy();
-        if let Ok(mut stmt) = self.db.prepare("DELETE FROM symbol_cache WHERE path = ?") {
-            stmt.bind((1, key_str.as_ref())).ok();
-            stmt.next().ok();
-        }
+        self.db.execute("DELETE FROM symbol_cache WHERE path = ?1", params![key_str.as_ref()]).ok();
     }
 }
 

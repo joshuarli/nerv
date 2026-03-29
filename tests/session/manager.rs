@@ -764,8 +764,8 @@ fn backfill_indexes_preexisting_entries() {
     }
 
     // Wipe the FTS index to simulate a pre-FTS database
-    let db = sqlite::open(nerv_dir.join("sessions.db")).unwrap();
-    db.execute("DELETE FROM search_index").unwrap();
+    let db = rusqlite::Connection::open(nerv_dir.join("sessions.db")).unwrap();
+    db.execute("DELETE FROM search_index", []).unwrap();
 
     // Reopen — backfill should repopulate
     let mgr = SessionManager::new(&nerv_dir);
