@@ -105,8 +105,8 @@ fn print_top_help() {
     println!("  models                         List all configured models and their status");
     println!("  export <id>                    Export session (HTML + JSONL) to ~/.nerv/exports/");
     println!("  add <hf-repo> <quant>          Download GGUF model from HuggingFace");
-    println!("  load [alias]                   Start llama-gguf (or llama-server) for a local model");
-    println!("  unload                         Stop the running server (Ctrl+C)");
+    println!("  load [alias]                   Start llama-server for a local model");
+    println!("  unload                         Stop running llama-server");
     println!("  codemap <query> [path]         Show symbol implementations matching query");
     println!("  symbols <query> [path]         List symbol definitions matching query");
     println!();
@@ -413,8 +413,7 @@ fn parse_args() -> Cmd {
             if matches!(parser.clone().next(), Ok(Some(Short('h') | Long("help")))) {
                 println!("Usage: nerv load [alias]");
                 println!();
-                println!("Start llama-gguf serve (preferred) or llama-server for a local GGUF model.");
-                println!("Writes a TOML config with smart defaults (GPU, turboquant2-qjl KV cache, context from RAM).");
+                println!("Start llama-server for a local GGUF model.");
                 println!("Replaces this process via exec — Ctrl+C to stop.");
                 std::process::exit(0);
             }
@@ -1752,31 +1751,15 @@ fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
                 std::process::exit(1);
             }
 
-            // Prefer llama-gguf (dev build at ~/d/llama-gguf/target/release/ or $PATH)
-            // over llama-server.  llama-gguf is configured via a TOML file that we generate
-            // with smart defaults (GPU, turboquant2-qjl KV cache, context from available RAM).
-            let (server, server_args): (std::path::PathBuf, Vec<String>) =
-                if let Some(gguf_bin) = find_llama_gguf() {
-                    let config_path = nerv_dir.join(format!("llama-gguf-{}.toml", model.alias));
-                    let args = write_llama_gguf_config(&model, &config_path).unwrap_or_else(|e| {
-                        eprintln!("Failed to write llama-gguf config: {}", e);
-                        std::process::exit(1);
-                    });
-                    (gguf_bin, args)
-                } else if let Some(ls_bin) = find_llama_server() {
-                    (ls_bin, model.server_args())
-                } else {
-                    eprintln!(
-                        "Neither llama-gguf nor llama-server found.\n\
-                         Install llama-gguf: cargo install llama-gguf\n\
-                         Install llama-server: brew install llama.cpp"
-                    );
-                    std::process::exit(1);
-                };
+            let server = find_llama_server().unwrap_or_else(|| {
+                eprintln!("llama-server not found on PATH. Install: brew install llama.cpp");
+                std::process::exit(1);
+            });
 
+            let server_args = model.server_args();
             eprintln!("  {} {}", server.display(), server_args.join(" "));
 
-            // exec — replaces this process with the server
+            // exec — replaces this process with llama-server
             use std::ffi::CString;
             let c_prog = CString::new(server.to_string_lossy().as_bytes()).unwrap();
             let mut c_args: Vec<CString> = vec![c_prog.clone()];
