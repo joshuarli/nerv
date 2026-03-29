@@ -1,4 +1,5 @@
 pub mod btw_overlay;
+pub mod btw_panel;
 pub mod chat_writer;
 pub mod display;
 pub mod event_loop;

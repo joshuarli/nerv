@@ -1188,6 +1188,18 @@ fn main() {
                                 tui.request_render(false); render_frame!(tui, layout);
                                 continue;
                             }
+                            // Dismiss the inline /btw panel on Esc or Enter.
+                            if layout.btw_panel.is_some()
+                                && (keys::matches_key(seq, "escape") || keys::matches_key(seq, "enter"))
+                            {
+                                if let Some(panel) = layout.btw_panel.take() {
+                                    panel.cancel();
+                                }
+                                tui.fixed_bottom = layout.fixed_bottom_lines()
+                                    + layout.statusbar.queue_line_count();
+                                tui.request_render(false); render_frame!(tui, layout);
+                                continue;
+                            }
                             if keys::matches_key(seq, "escape") || keys::matches_key(seq, "ctrl+d") {
                                 cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                                 tui.terminal_mut().stop();
@@ -1266,6 +1278,7 @@ fn main() {
                                             tui.request_render(false); continue;
                                         }
                                         launch_picker(req, &mut interactive, &mut layout, &stdin_paused);
+                                        tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                         tui.request_render(true); render_frame!(tui, layout); continue;
                                     }
                                     if interactive.quit_requested { tui.terminal_mut().stop(); should_quit = true; break; }
@@ -1376,6 +1389,12 @@ fn main() {
                     layout.footer.tick();
                     tui.request_render(false);
                 }
+                // Drain any new text from the inline /btw panel.
+                if let Some(panel) = &mut layout.btw_panel {
+                    if panel.drain() {
+                        tui.request_render(false);
+                    }
+                }
                 render_frame!(tui, layout);
             }
         }
@@ -1400,6 +1419,7 @@ fn process_event(
 ) {
     if let Some(req) = interactive.handle_event(event, layout, tui) {
         launch_picker(req, interactive, layout, stdin_paused);
+        tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
         tui.request_render(true);
         return;
     }
@@ -1433,14 +1453,15 @@ fn launch_picker(
         return;
     }
 
-    // /btw overlay: ephemeral parallel Q&A — handle and return immediately.
+    // /btw inline panel: spawn background agent, attach panel to layout, return immediately.
     if let PickerRequest::BtwOverlay { messages, model, note } = req {
-        nerv::interactive::btw_overlay::run_btw_overlay(
+        let panel = nerv::interactive::btw_panel::spawn_btw(
             messages,
             model,
             interactive.provider_registry.clone(),
             note,
         );
+        layout.btw_panel = Some(panel);
         stdin_paused.store(false, std::sync::atomic::Ordering::SeqCst);
         return;
     }
