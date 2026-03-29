@@ -1,4 +1,6 @@
 use std::io::Read;
+use std::os::unix::io::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -43,15 +45,24 @@ impl AgentTool for BashTool {
     }
     fn execute(&self, input: serde_json::Value, update: UpdateCallback, cancel: &CancelFlag) -> ToolResult {
         let command = input["command"].as_str().unwrap_or("");
-        let mut child = match Command::new(&self.shell)
-            .arg("-euo")
-            .arg("pipefail")
-            .arg("-c")
-            .arg(command)
-            .current_dir(&self.cwd)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
+        let mut child = match unsafe {
+            Command::new(&self.shell)
+                .arg("-euo")
+                .arg("pipefail")
+                .arg("-c")
+                .arg(command)
+                .current_dir(&self.cwd)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                // Start in its own process group so we can kill the entire
+                // tree (cargo, make, etc.) on cancellation — not just the
+                // direct child shell.
+                .pre_exec(|| {
+                    libc::setpgid(0, 0);
+                    Ok(())
+                })
+                .spawn()
+        }
         {
             Ok(c) => c,
             Err(e) => {
@@ -76,13 +87,38 @@ impl AgentTool for BashTool {
 
         let mut output = Vec::new();
         if let Some(mut stdout) = child.stdout.take() {
+            let fd = stdout.as_raw_fd();
             let mut buf = [0u8; 8192];
             loop {
                 // Check cancel flag — if set, kill the child and abort.
                 if cancel.load(Ordering::Relaxed) {
-                    let _ = child.kill();
+                    // Kill the entire process group, not just the shell.
+                    // The child was started with setpgid(0,0) so its pid
+                    // equals its pgid.
+                    let pid = child.id() as i32;
+                    unsafe { libc::kill(-pid, libc::SIGKILL) };
+                    let _ = child.wait();
                     return ToolResult::error("Interrupted");
                 }
+
+                // Poll stdout with a 100ms timeout so we wake up frequently
+                // to check the cancel flag even when the child produces no output
+                // (e.g. long-running builds).
+                let mut pollfd = libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let poll_ret = unsafe { libc::poll(&mut pollfd, 1, 100) };
+                if poll_ret == 0 {
+                    // Timeout — no data yet, loop back to check cancel
+                    continue;
+                }
+                if poll_ret < 0 {
+                    // poll error — break out
+                    break;
+                }
+
                 match stdout.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
