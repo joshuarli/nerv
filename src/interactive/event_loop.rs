@@ -737,6 +737,10 @@ impl InteractiveMode {
             return self.handle_slash_command(&text);
         }
 
+        // Expand inline skill references: `/skillname` tokens within the text
+        // are replaced with the skill's content before sending to the LLM.
+        let text = self.expand_inline_skills(text);
+
         // Bare "plan" enables plan mode
         if text.trim().eq_ignore_ascii_case("plan") && !self.plan_mode {
             self.plan_mode = true;
@@ -777,6 +781,11 @@ impl InteractiveMode {
             self.editing_queue_idx = self.editing_queue_idx.and_then(|i| i.checked_sub(1));
             let _ = self.cmd_tx.send(SessionCommand::Prompt { text: msg });
         }
+    }
+
+    /// Replace `/skillname` tokens inside `text` with the matching skill's content.
+    fn expand_inline_skills(&self, text: String) -> String {
+        expand_inline_skills_impl(text, &self.skills)
     }
 
     fn handle_slash_command(&mut self, text: &str) -> Option<PickerRequest> {
@@ -1232,6 +1241,47 @@ impl InteractiveMode {
     }
 }
 
+/// Replace `/skillname` tokens inside `text` with the matching skill's content.
+/// Tokens are only expanded when preceded by whitespace (or at start of string)
+/// and followed by whitespace, punctuation, or end-of-string — so URLs and paths
+/// like `/usr/bin` are left untouched.
+fn expand_inline_skills_impl(text: String, skills: &[crate::core::skills::Skill]) -> String {
+    if skills.is_empty() || !text.contains('/') {
+        return text;
+    }
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, ch)) = chars.next() {
+        if ch == '/' && (i == 0 || text[..i].ends_with(|c: char| c.is_whitespace())) {
+            // Collect the word after the slash
+            let rest = &text[i + 1..];
+            let word_end = rest
+                .find(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+                .unwrap_or(rest.len());
+            let word = &rest[..word_end];
+            let after = &rest[word_end..];
+            let followed_by_boundary = after.is_empty()
+                || after.starts_with(|c: char| {
+                    // A following '/' means this is a path component (e.g. /usr/bin), not a skill
+                    c != '/' && (c.is_whitespace() || c.is_ascii_punctuation())
+                });
+
+            if followed_by_boundary {
+                if let Some(skill) = skills.iter().find(|s| s.name == word) {
+                    result.push_str(&skill.content);
+                    // Advance the char iterator past the word we consumed
+                    for _ in 0..word.chars().count() {
+                        chars.next();
+                    }
+                    continue;
+                }
+            }
+        }
+        result.push(ch);
+    }
+    result
+}
+
 fn count_tree_nodes(tree: &[crate::session::types::SessionTreeNode]) -> usize {
     tree.iter()
         .map(|n| 1 + count_tree_nodes(&n.children))
@@ -1284,4 +1334,68 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     return Err("clipboard not supported on this platform".into());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand_inline_skills_impl;
+    use crate::core::skills::Skill;
+    use std::path::PathBuf;
+
+    fn skill(name: &str, content: &str) -> Skill {
+        Skill {
+            name: name.to_string(),
+            description: String::new(),
+            file_path: PathBuf::new(),
+            content: content.to_string(),
+        }
+    }
+
+    #[test]
+    fn expands_inline_skill() {
+        let skills = vec![skill("commit", "git commit -v")];
+        let out = expand_inline_skills_impl("update docs and /commit".to_string(), &skills);
+        assert_eq!(out, "update docs and git commit -v");
+    }
+
+    #[test]
+    fn expands_at_start() {
+        let skills = vec![skill("commit", "git commit -v")];
+        let out = expand_inline_skills_impl("/commit the changes".to_string(), &skills);
+        assert_eq!(out, "git commit -v the changes");
+    }
+
+    #[test]
+    fn does_not_expand_url_path() {
+        let skills = vec![skill("usr", "REPLACED")];
+        let out = expand_inline_skills_impl("see /usr/bin/foo".to_string(), &skills);
+        assert_eq!(out, "see /usr/bin/foo");
+    }
+
+    #[test]
+    fn does_not_expand_unknown_skill() {
+        let skills = vec![skill("commit", "git commit -v")];
+        let out = expand_inline_skills_impl("run /deploy please".to_string(), &skills);
+        assert_eq!(out, "run /deploy please");
+    }
+
+    #[test]
+    fn expands_multiple_skills() {
+        let skills = vec![skill("foo", "FOO"), skill("bar", "BAR")];
+        let out = expand_inline_skills_impl("/foo and /bar".to_string(), &skills);
+        assert_eq!(out, "FOO and BAR");
+    }
+
+    #[test]
+    fn no_skills_returns_unchanged() {
+        let out = expand_inline_skills_impl("run /deploy".to_string(), &[]);
+        assert_eq!(out, "run /deploy");
+    }
+
+    #[test]
+    fn expands_before_punctuation() {
+        let skills = vec![skill("commit", "git commit -v")];
+        let out = expand_inline_skills_impl("done? /commit.".to_string(), &skills);
+        assert_eq!(out, "done? git commit -v.");
+    }
 }
