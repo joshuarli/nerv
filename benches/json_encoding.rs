@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use nerv::agent::AnthropicProvider;
 use nerv::agent::convert::{LlmMessage, convert_to_llm};
 use nerv::agent::provider::*;
 use nerv::agent::transform::transform_context;
 use nerv::agent::types::*;
-use nerv::agent::{AnthropicProvider, OpenAICompatProvider};
 
 fn pgo_criterion() -> Criterion {
     // For `make pgo-profile`: just hit the hot paths, no statistical rigor needed.
@@ -46,6 +46,7 @@ fn make_tools(count: usize) -> Vec<WireTool> {
         .collect()
 }
 
+#[allow(dead_code)]
 fn make_conversation(turns: usize) -> Vec<AgentMessage> {
     let mut messages = Vec::with_capacity(turns * 2);
     for i in 0..turns {

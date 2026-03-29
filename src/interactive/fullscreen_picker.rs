@@ -124,11 +124,11 @@ pub fn run_fullscreen_picker(list: &mut dyn FullscreenList) -> Option<String> {
                         needs_redraw = true;
                     } else {
                         // Printable chars (including multi-byte UTF-8).
-                        if let Ok(s) = std::str::from_utf8(&seq) {
-                            if let Some(ch) = single_printable(s) {
-                                list.push_char(ch);
-                                needs_redraw = true;
-                            }
+                        if let Ok(s) = std::str::from_utf8(&seq)
+                            && let Some(ch) = single_printable(s)
+                        {
+                            list.push_char(ch);
+                            needs_redraw = true;
                         }
                     }
                 }

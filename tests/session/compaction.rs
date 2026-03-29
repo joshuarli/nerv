@@ -188,7 +188,7 @@ fn cut_point_keeps_budget_tokens_from_end() {
         cut.first_kept_entry_index
     );
     assert!(
-        cut.first_kept_entry_index <= entries.len() - 1,
+        cut.first_kept_entry_index < entries.len(),
         "cut out of bounds: {}",
         cut.first_kept_entry_index
     );

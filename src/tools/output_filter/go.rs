@@ -145,16 +145,14 @@ fn filter_go_test_json(text: &str) -> Option<String> {
                         entry.current_output.clear();
                     }
                 }
-                "output"
-                    if !output.trim().is_empty() => {
-                        entry.current_output.push(output.trim_end_matches('\n').to_string());
-                    }
-                "pass"
-                    if test.is_some() => {
-                        entry.passed += 1;
-                        entry.current_test = None;
-                        entry.current_output.clear();
-                    }
+                "output" if !output.trim().is_empty() => {
+                    entry.current_output.push(output.trim_end_matches('\n').to_string());
+                }
+                "pass" if test.is_some() => {
+                    entry.passed += 1;
+                    entry.current_test = None;
+                    entry.current_output.clear();
+                }
                 "fail" => {
                     if let Some(t) = test {
                         entry.failed += 1;

@@ -27,7 +27,8 @@ fn filter_jest_output(text: &str) -> Option<String> {
 
     // All passing
     if let (Some(s), Some(t)) = (suites_line, tests_line)
-        && !s.contains("failed") && !t.contains("failed")
+        && !s.contains("failed")
+        && !t.contains("failed")
     {
         return Some(format!("{}\n{}", s.trim(), t.trim()));
     }

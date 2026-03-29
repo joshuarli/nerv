@@ -414,10 +414,10 @@ fn compaction_only_removes_current_branch_entries() {
     // Branch B sentinel should still be in the DB
     let all_entries = mgr.entries();
     let has_b = all_entries.iter().any(|e| {
-        if let nerv::session::SessionEntry::Message(me) = e {
-            if let AgentMessage::Assistant(a) = &me.message {
-                return a.text_content().contains("BRANCH_B_SENTINEL");
-            }
+        if let nerv::session::SessionEntry::Message(me) = e
+            && let AgentMessage::Assistant(a) = &me.message
+        {
+            return a.text_content().contains("BRANCH_B_SENTINEL");
         }
         false
     });
@@ -466,6 +466,7 @@ fn get_tree_linear_session_is_single_chain() {
 
     let tree = mgr.get_tree();
     // One root with a single child chain — each node has at most 1 child
+    #[allow(dead_code)]
     fn max_branch_width(nodes: &[nerv::session::types::SessionTreeNode]) -> usize {
         let mut max = nodes.len();
         for n in nodes {

@@ -78,9 +78,8 @@ impl FullscreenList for ModelPicker {
 
         let mut last_provider = "";
         let mut visual_row = 0usize;
-        let mut model_idx = 0usize;
 
-        for m in &filtered {
+        for (model_idx, m) in filtered.iter().enumerate() {
             // Provider heading
             if m.provider_name != last_provider {
                 if visual_row >= scroll && visual_row - scroll < list_rows {
@@ -125,7 +124,6 @@ impl FullscreenList for ModelPicker {
             }
 
             visual_row += 1;
-            model_idx += 1;
         }
 
         // Fill empty rows

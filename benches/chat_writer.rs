@@ -208,7 +208,7 @@ fn bench_render(c: &mut Criterion) {
     // Cold render: no cache yet — exercises all block rendering paths
     group.bench_function("cold_10_turns", |b| {
         b.iter(|| {
-            let mut w = preloaded_writer(10);
+            let w = preloaded_writer(10);
             // render is &self so we need to call it; clear cache by rebuilding
             black_box(w.render(black_box(120)));
         });
@@ -216,7 +216,7 @@ fn bench_render(c: &mut Criterion) {
 
     // Warm render: cache is hot, only the streaming tail needs work
     group.bench_function("warm_10_turns", |b| {
-        let mut w = preloaded_writer(10);
+        let w = preloaded_writer(10);
         // Prime the cache
         let _ = w.render(120);
         b.iter(|| {
@@ -226,7 +226,7 @@ fn bench_render(c: &mut Criterion) {
 
     // Width-change invalidates the cache — forces full re-render
     group.bench_function("width_change_10_turns", |b| {
-        let mut w = preloaded_writer(10);
+        let w = preloaded_writer(10);
         let _ = w.render(120);
         let mut wide = true;
         b.iter(|| {
@@ -249,7 +249,7 @@ fn bench_render(c: &mut Criterion) {
 
     // Larger history: 30 turns
     group.bench_function("warm_30_turns", |b| {
-        let mut w = preloaded_writer(30);
+        let w = preloaded_writer(30);
         let _ = w.render(120);
         b.iter(|| {
             black_box(w.render(black_box(120)));

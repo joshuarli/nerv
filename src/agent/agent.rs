@@ -568,31 +568,32 @@ impl Agent {
         // Output gate: fires after bash executes (bash.rs has already applied
         // output_filter and stripped truncate_tail). The gate sees the final
         // byte count that will actually enter context.
-        if name == "bash" && !result.is_error
+        if name == "bash"
+            && !result.is_error
             && let Some(ref gate_fn) = self.state.output_gate_fn
             && result.content.len() > OUTPUT_GATE_THRESHOLD_BYTES
         {
-                    let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                    let line_count = result.content.lines().count();
-                    let estimated_tokens = result.content.len() / 4;
-                    let info = OutputGateInfo {
-                        command: command.to_string(),
-                        byte_count: result.content.len(),
-                        line_count,
-                        estimated_tokens,
-                    };
-                    if matches!(gate_fn(info), OutputGateDecision::Deny) {
-                        let hint = format!(
-                            "[output-too-large: {} lines / ~{} tokens]\n\
+            let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let line_count = result.content.lines().count();
+            let estimated_tokens = result.content.len() / 4;
+            let info = OutputGateInfo {
+                command: command.to_string(),
+                byte_count: result.content.len(),
+                line_count,
+                estimated_tokens,
+            };
+            if matches!(gate_fn(info), OutputGateDecision::Deny) {
+                let hint = format!(
+                    "[output-too-large: {} lines / ~{} tokens]\n\
                              Command: {}\n\
                              Output was too large to include in context. Options:\n\
                              - Pipe through grep/awk/sed to filter first: <cmd> | grep pattern\n\
                              - Redirect to a file and use the read tool with offset/limit\n\
                              - Use a more targeted command",
-                            line_count, estimated_tokens, command
-                        );
-                        result = ToolResult { content: hint, details: None, is_error: true };
-                    }
+                    line_count, estimated_tokens, command
+                );
+                result = ToolResult { content: hint, details: None, is_error: true };
+            }
         }
 
         if !result.is_error

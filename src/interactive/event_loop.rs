@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use crossbeam_channel as channel;
@@ -86,11 +86,11 @@ pub struct InteractiveMode {
     /// thread).
     pub allowed_dirs: Arc<Mutex<Vec<PathBuf>>>,
     /// Shared cancel flag — set this to interrupt a running stream immediately.
-    cancel_flag: CancelFlag,
+    pub cancel_flag: CancelFlag,
     /// Shared compact threshold (percent 0–100) — written directly so `/compact
     /// at N` takes effect before the next turn without going through
     /// cmd_tx.
-    compact_threshold_arc: Arc<AtomicU32>,
+    pub compact_threshold_arc: Arc<AtomicU32>,
 }
 
 impl InteractiveMode {
@@ -102,12 +102,6 @@ impl InteractiveMode {
         initial_model: Option<Model>,
         initial_thinking: ThinkingLevel,
         initial_effort: Option<EffortLevel>,
-        skills: Vec<crate::core::skills::Skill>,
-        repo_root: Option<String>,
-        repo_id: Option<String>,
-        allowed_dirs: Arc<Mutex<Vec<PathBuf>>>,
-        cancel_flag: CancelFlag,
-        compact_threshold_arc: Arc<AtomicU32>,
     ) -> Self {
         Self {
             cmd_tx,
@@ -121,9 +115,9 @@ impl InteractiveMode {
             messages_snapshot: Vec::new(),
             system_prompt_snapshot: String::new(),
             tools_snapshot,
-            skills,
-            repo_root,
-            repo_id,
+            skills: Vec::new(),
+            repo_root: None,
+            repo_id: None,
             session_id: None,
             status_message: None,
             status_is_error: false,
@@ -138,9 +132,9 @@ impl InteractiveMode {
             pending_permission_details: None,
             plan_mode: false,
             compact_threshold: 50,
-            allowed_dirs,
-            cancel_flag,
-            compact_threshold_arc,
+            allowed_dirs: Arc::new(Mutex::new(Vec::new())),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
+            compact_threshold_arc: Arc::new(AtomicU32::new(50)),
         }
     }
 
@@ -1101,6 +1095,18 @@ impl InteractiveMode {
         self.repo_id.clone()
     }
 
+    pub fn set_repo_root(&mut self, repo_root: Option<String>) {
+        self.repo_root = repo_root;
+    }
+
+    pub fn set_repo_id(&mut self, repo_id: Option<String>) {
+        self.repo_id = repo_id;
+    }
+
+    pub fn set_skills(&mut self, skills: Vec<crate::core::skills::Skill>) {
+        self.skills = skills;
+    }
+
     pub fn slash_completions(&self) -> Vec<String> {
         let mut cmds = vec![
             "/model".into(),
@@ -1256,15 +1262,13 @@ fn expand_inline_skills_impl(text: String, skills: &[crate::core::skills::Skill]
                     c != '/' && (c.is_whitespace() || c.is_ascii_punctuation())
                 });
 
-            if followed_by_boundary {
-                if let Some(skill) = skills.iter().find(|s| s.name == word) {
-                    result.push_str(&skill.content);
-                    // Advance the char iterator past the word we consumed
-                    for _ in 0..word.chars().count() {
-                        chars.next();
-                    }
-                    continue;
+            if followed_by_boundary && let Some(skill) = skills.iter().find(|s| s.name == word) {
+                result.push_str(&skill.content);
+                // Advance the char iterator past the word we consumed
+                for _ in 0..word.chars().count() {
+                    chars.next();
                 }
+                continue;
             }
         }
         result.push(ch);

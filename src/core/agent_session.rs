@@ -698,21 +698,19 @@ impl AgentSession {
                 // Check for mid-stream auto-compaction on every UsageUpdate.
                 // UsageUpdate fires at message_start with the authoritative input
                 // token count — that's when we learn the context size for this call.
-                if auto_compact && compaction_enabled && context_window > 0
+                if auto_compact
+                    && compaction_enabled
+                    && context_window > 0
                     && let AgentEvent::UsageUpdate { ref usage } = event
                 {
                     // Re-read the shared atomic so `/compact at N` takes effect
                     // even while a stream is in progress.
                     let live_pct = compact_threshold_pct.load(Ordering::Relaxed);
-                    let pct =
-                        if live_pct > 0 { live_pct as f64 / 100.0 } else { threshold_pct };
-                    let context_tokens =
-                        (usage.input + usage.output + usage.cache_read) as usize;
+                    let pct = if live_pct > 0 { live_pct as f64 / 100.0 } else { threshold_pct };
+                    let context_tokens = (usage.input + usage.output + usage.cache_read) as usize;
                     let threshold = (context_window as f64 * pct) as usize;
                     if context_tokens > threshold {
-                        crate::log::info(
-                            "mid-stream auto-compact triggered — cancelling stream",
-                        );
+                        crate::log::info("mid-stream auto-compact triggered — cancelling stream");
                         compaction_triggered.store(true, Ordering::Relaxed);
                         cancel_flag.store(true, Ordering::Relaxed);
                     }
@@ -737,7 +735,8 @@ impl AgentSession {
         // Don't fire when compaction cancelled the stream — we're about to retry.
         if !compaction_triggered.load(Ordering::Relaxed)
             && let Some(last) = last_assistant(&new_messages)
-            && !last.stop_reason.is_error() && !last.stop_reason.is_context_overflow()
+            && !last.stop_reason.is_error()
+            && !last.stop_reason.is_context_overflow()
         {
             let cfg = NervConfig::load(crate::nerv_dir());
             super::notifications::fire(

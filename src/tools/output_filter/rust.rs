@@ -183,9 +183,7 @@ fn extract_rust_test_failures(text: &str) -> Vec<String> {
         }
     }
 
-    if in_test_block
-        && let Some(name) = current_name
-    {
+    if in_test_block && let Some(name) = current_name {
         failures.push(format_test_failure(name, &current_body));
     }
 

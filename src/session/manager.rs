@@ -187,7 +187,6 @@ impl SessionManager {
 
         let data = serde_json::to_string(&entry)?;
         let entry_id = entry.id().to_string();
-        let parent_id = entry.parent_id().map(|s| s.to_string());
 
         let _result = {
             let tx = self.db.transaction()?;
@@ -195,7 +194,6 @@ impl SessionManager {
                 &tx,
                 &session_id,
                 &entry_id,
-                parent_id.as_deref(),
                 &data,
                 &entry,
                 self.next_seq,
@@ -222,12 +220,12 @@ impl SessionManager {
         tx: &rusqlite::Transaction<'_>,
         session_id: &str,
         entry_id: &str,
-        parent_id: Option<&str>,
         data: &str,
         entry: &SessionEntry,
         next_seq: i64,
         is_first: bool,
     ) -> anyhow::Result<()> {
+        let parent_id = entry.parent_id().map(|s| s.to_string());
         tx.execute(
             "INSERT INTO entries (id, session_id, parent_id, seq, data) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![entry_id, session_id, parent_id, next_seq, data],
@@ -249,22 +247,22 @@ impl SessionManager {
             && let SessionEntry::Message(me) = entry
             && let AgentMessage::User { content, .. } = &me.message
         {
-                    let preview: String = content
-                        .iter()
-                        .filter_map(|c| match c {
-                            ContentItem::Text { text } => Some(text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("")
-                        .chars()
-                        .take(80)
-                        .collect();
-                    tx.execute(
-                        "UPDATE sessions SET updated_at = ?1, preview = ?2 WHERE id = ?3",
-                        params![now, preview, session_id],
-                    )?;
-                    return Ok(());
+            let preview: String = content
+                .iter()
+                .filter_map(|c| match c {
+                    ContentItem::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("")
+                .chars()
+                .take(80)
+                .collect();
+            tx.execute(
+                "UPDATE sessions SET updated_at = ?1, preview = ?2 WHERE id = ?3",
+                params![now, preview, session_id],
+            )?;
+            return Ok(());
         }
         tx.execute("UPDATE sessions SET updated_at = ?1 WHERE id = ?2", params![now, session_id])?;
 

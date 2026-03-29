@@ -142,11 +142,11 @@ impl TreeSelector {
         let prev_id = self.nodes.get(self.selected).map(|n| n.entry_id.clone());
         self.nodes = flatten(&self.tree, &self.folded, self.filter);
         // Try to keep selection on the same entry; fall back to clamped position.
-        if let Some(id) = prev_id {
-            if let Some(pos) = self.nodes.iter().position(|n| n.entry_id == id) {
-                self.selected = pos;
-                return;
-            }
+        if let Some(id) = prev_id
+            && let Some(pos) = self.nodes.iter().position(|n| n.entry_id == id)
+        {
+            self.selected = pos;
+            return;
         }
         self.selected = self.selected.min(self.nodes.len().saturating_sub(1));
     }
@@ -521,16 +521,16 @@ fn flatten(
     // has more siblings below. direct_branch_child = true only for immediate
     // children of a multi-child node; flat-chain descendants inherit false so
     // they don't draw a connector.
-    let mut stack: Vec<(&SessionTreeNode, usize, Vec<bool>, bool, Option<String>, bool)> =
-        Vec::new();
+    struct StackEntry<'a>(&'a SessionTreeNode, usize, Vec<bool>, bool, Option<String>, bool);
+    let mut stack: Vec<StackEntry<'_>> = Vec::new();
 
     let roots: Vec<&SessionTreeNode> = tree.iter().collect();
     // Push roots in reverse so we pop them in order (first root = first displayed).
     for (i, root) in roots.iter().enumerate().rev() {
-        stack.push((root, 0, vec![], i != roots.len() - 1, None, false));
+        stack.push(StackEntry(root, 0, vec![], i != roots.len() - 1, None, false));
     }
 
-    while let Some((
+    while let Some(StackEntry(
         node,
         indent,
         ancestors_with_more,
@@ -636,7 +636,7 @@ fn flatten(
         // wrapper).
         for (i, child) in visible_children.iter().enumerate().rev() {
             let is_last_child = i == visible_children.len() - 1;
-            stack.push((
+            stack.push(StackEntry(
                 child,
                 child_indent,
                 child_ancestors.clone(),
@@ -697,7 +697,7 @@ mod tests {
         flatten(tree, &folded, FilterMode::Default)
             .into_iter()
             .map(|n| {
-                let connector = if n.show_connector {
+                if n.show_connector {
                     let continuation: String = n
                         .ancestors_with_more
                         .iter()
@@ -714,8 +714,7 @@ mod tests {
                     format!("{} {}", continuation, n.summary)
                 } else {
                     format!(" {}", n.summary)
-                };
-                connector
+                }
             })
             .collect()
     }

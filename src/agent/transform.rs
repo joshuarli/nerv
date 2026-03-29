@@ -504,8 +504,7 @@ fn find_read_referenced_lines(
                         if edit_path != read_path {
                             continue;
                         }
-                        if let Some(old_str) =
-                            arguments.get("old_string").and_then(|v| v.as_str())
+                        if let Some(old_str) = arguments.get("old_string").and_then(|v| v.as_str())
                         {
                             // Find which lines in the read match this old_string
                             let old_lines: Vec<&str> = old_str.lines().collect();

@@ -111,16 +111,16 @@ impl NervConfig {
             (serde_json::to_value(Self::default()), serde_json::to_value(&existing))
             && let (Some(merged_obj), Some(user_obj)) = (merged.as_object_mut(), user.as_object())
         {
-                // Overwrite each default key with the user's value.
-                for (k, v) in user_obj {
-                    merged_obj.insert(k.clone(), v.clone());
-                }
-                // If any key in merged_obj was absent from the user file, the file
-                // is stale — rewrite it with the complete set.
-                let needs_write = merged_obj.keys().any(|k| !user_obj.contains_key(k));
-                if needs_write {
-                    let _ = write_json(&path, &merged);
-                }
+            // Overwrite each default key with the user's value.
+            for (k, v) in user_obj {
+                merged_obj.insert(k.clone(), v.clone());
+            }
+            // If any key in merged_obj was absent from the user file, the file
+            // is stale — rewrite it with the complete set.
+            let needs_write = merged_obj.keys().any(|k| !user_obj.contains_key(k));
+            if needs_write {
+                let _ = write_json(&path, &merged);
+            }
         }
 
         existing

@@ -20,7 +20,8 @@ pub fn filter_pytest(text: &str) -> Option<String> {
 
     // All passing
     if let Some(sum) = summary
-        && !sum.contains("failed") && !sum.contains("error")
+        && !sum.contains("failed")
+        && !sum.contains("error")
     {
         return Some(sum.trim().to_string());
     }

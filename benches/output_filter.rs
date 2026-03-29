@@ -23,11 +23,10 @@ fn cargo_build_success() -> &'static str {
 }
 
 fn cargo_build_with_ansi() -> String {
-    format!(
-        "\x1b[1m\x1b[32m   Compiling\x1b[0m serde v1.0.0\n\
-         \x1b[1m\x1b[32m   Compiling\x1b[0m nerv v0.1.6\n\
-         \x1b[1m\x1b[32m    Finished\x1b[0m `dev` profile in 2.1s\n"
-    )
+    "\x1b[1m\x1b[32m   Compiling\x1b[0m serde v1.0.0\n\
+     \x1b[1m\x1b[32m   Compiling\x1b[0m nerv v0.1.6\n\
+     \x1b[1m\x1b[32m    Finished\x1b[0m `dev` profile in 2.1s\n"
+        .to_string()
 }
 
 fn cargo_build_error() -> &'static str {

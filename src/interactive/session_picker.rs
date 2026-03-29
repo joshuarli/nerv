@@ -13,6 +13,8 @@ use crate::session::manager::{SearchResult, SessionSummary};
 
 // ─────────────────────────── types ──────────────────────────────────────────
 
+type SearchFn = dyn Fn(&str) -> Vec<SearchResult> + 'static;
+
 enum Mode {
     Browse,
     Search,
@@ -25,7 +27,7 @@ pub struct SessionPicker {
     selected: usize,
     mode: Mode,
     /// Synchronous search callback.
-    search_fn: Box<dyn Fn(&str) -> Vec<SearchResult>>,
+    search_fn: Box<SearchFn>,
     repo_root: Option<String>,
 }
 
@@ -34,7 +36,7 @@ pub struct SessionPicker {
 impl SessionPicker {
     pub fn new(
         sessions: Vec<SessionSummary>,
-        search_fn: Box<dyn Fn(&str) -> Vec<SearchResult>>,
+        search_fn: Box<SearchFn>,
         repo_root: Option<String>,
     ) -> Self {
         Self {

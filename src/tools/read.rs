@@ -92,15 +92,8 @@ impl AgentTool for ReadTool {
             }
             // Range dedup: if this range is fully covered by a previous read, skip.
             let req_start = offset.unwrap_or(1).max(1) - 1;
-            let req_end = if let Some(lim) = limit {
-                req_start + lim
-            } else {
-                entry.line_count
-            };
-            let covered = entry
-                .ranges_served
-                .iter()
-                .any(|&(s, e)| s <= req_start && e >= req_end);
+            let req_end = if let Some(lim) = limit { req_start + lim } else { entry.line_count };
+            let covered = entry.ranges_served.iter().any(|&(s, e)| s <= req_start && e >= req_end);
             if covered {
                 let msg = format!(
                     "[already read {} lines {}-{} \u{2014} use content from earlier in this conversation]",

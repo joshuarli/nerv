@@ -14,14 +14,17 @@ use nerv::errors::ToolError;
 use nerv::session::SessionManager;
 use tempfile::TempDir;
 
+#[expect(dead_code)]
 pub fn noop_update() -> UpdateCallback {
     Arc::new(|_| {})
 }
 
+#[expect(dead_code)]
 pub fn noop_cancel() -> CancelFlag {
     new_cancel_flag()
 }
 
+#[allow(dead_code)]
 pub struct MockProvider {
     responses: std::sync::Mutex<Vec<Vec<ProviderEvent>>>,
     /// Captured wire tools from each request (for verifying tool pruning etc.)
@@ -29,6 +32,7 @@ pub struct MockProvider {
 }
 
 impl MockProvider {
+    #[allow(dead_code)]
     pub fn new(responses: Vec<Vec<ProviderEvent>>) -> Self {
         Self {
             responses: std::sync::Mutex::new(responses),
@@ -55,6 +59,7 @@ impl Provider for MockProvider {
     }
 }
 
+#[allow(dead_code)]
 pub struct EchoTool;
 
 impl AgentTool for EchoTool {
@@ -84,6 +89,7 @@ impl AgentTool for EchoTool {
     }
 }
 
+#[allow(dead_code)]
 pub fn simple_response(text: &str) -> Vec<ProviderEvent> {
     vec![
         ProviderEvent::UsageUpdate(Usage { input: 100, output: 20, ..Default::default() }),
@@ -95,6 +101,7 @@ pub fn simple_response(text: &str) -> Vec<ProviderEvent> {
     ]
 }
 
+#[allow(dead_code)]
 pub fn tool_call_response(tool_id: &str, tool_name: &str, args: &str) -> Vec<ProviderEvent> {
     vec![
         ProviderEvent::ToolCallStart { id: tool_id.to_string(), name: tool_name.to_string() },
@@ -107,6 +114,7 @@ pub fn tool_call_response(tool_id: &str, tool_name: &str, args: &str) -> Vec<Pro
     ]
 }
 
+#[allow(dead_code)]
 pub fn error_response(msg: &str) -> Vec<ProviderEvent> {
     vec![ProviderEvent::MessageStop {
         stop_reason: StopReason::Error { message: msg.to_string() },
@@ -114,6 +122,7 @@ pub fn error_response(msg: &str) -> Vec<ProviderEvent> {
     }]
 }
 
+#[allow(dead_code)]
 pub fn thinking_then_text(thinking: &str, text: &str) -> Vec<ProviderEvent> {
     vec![
         ProviderEvent::ThinkingDelta(thinking.to_string()),
@@ -125,6 +134,7 @@ pub fn thinking_then_text(thinking: &str, text: &str) -> Vec<ProviderEvent> {
     ]
 }
 
+#[allow(dead_code)]
 pub fn chunked_response(chunks: &[&str]) -> Vec<ProviderEvent> {
     let mut events: Vec<ProviderEvent> =
         chunks.iter().map(|c| ProviderEvent::TextDelta(c.to_string())).collect();
@@ -135,6 +145,7 @@ pub fn chunked_response(chunks: &[&str]) -> Vec<ProviderEvent> {
     events
 }
 
+#[allow(dead_code)]
 pub fn test_model() -> Model {
     Model {
         id: "test-model".into(),
@@ -149,6 +160,7 @@ pub fn test_model() -> Model {
     }
 }
 
+#[allow(dead_code)]
 pub fn empty_resources() -> LoadedResources {
     LoadedResources {
         context_files: Vec::new(),
@@ -159,6 +171,7 @@ pub fn empty_resources() -> LoadedResources {
     }
 }
 
+#[allow(dead_code)]
 /// Create a mock AgentSession with canned provider responses.
 pub fn mock_session(
     responses: Vec<Vec<ProviderEvent>>,

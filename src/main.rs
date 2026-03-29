@@ -905,7 +905,7 @@ fn main() {
             std::process::exit(1);
         });
         let prefix = &nerv::session::types::gen_session_id()[..8];
-        match nerv::worktree::create_worktree(&repo_root, &nerv_dir, &branch, prefix) {
+        match nerv::worktree::create_worktree(&repo_root, nerv_dir, &branch, prefix) {
             Ok(wt) => {
                 cwd = wt.clone();
                 worktree_path = Some(wt);
@@ -940,13 +940,13 @@ fn main() {
 
     let b = nerv::bootstrap::bootstrap(
         &cwd,
-        &nerv_dir,
+        nerv_dir,
         nerv::bootstrap::BootstrapOptions { memory: true, permissions: true, talk_mode },
     );
     let config = b.config;
     let model_registry = b.model_registry;
-    let cancel_flag = b.cancel_flag;
     let skills = b.resources.skills.clone();
+    let cancel_flag = b.cancel_flag;
 
     // Token cost breakdown for startup display
     let loaded_files: Vec<(String, usize)> = b
@@ -991,9 +991,6 @@ fn main() {
     // Capture initial state before session is moved to its thread
     let initial_thinking_level = session.agent.state.thinking_level;
     let initial_effort_level = session.agent.state.effort_level;
-    // Clone the allowed_dirs Arc so the main thread (UI) can add entries while
-    // the session thread's permission_fn reads them.
-    let allowed_dirs = session.allowed_dirs.clone();
     // Clone compact_threshold_arc so the main thread can write it directly for
     // immediate effect without waiting for SetCompactThreshold through cmd_tx.
     let compact_threshold_arc = session.compact_threshold_pct.clone();
@@ -1086,13 +1083,12 @@ fn main() {
         model_registry.default_model(&config).cloned(),
         initial_thinking_level,
         initial_effort_level,
-        skills,
-        repo_root,
-        repo_id,
-        allowed_dirs,
-        cancel_flag.clone(),
-        compact_threshold_arc,
     );
+    interactive.set_repo_root(repo_root);
+    interactive.set_repo_id(repo_id);
+    interactive.set_skills(skills);
+    interactive.cancel_flag = cancel_flag.clone();
+    interactive.compact_threshold_arc = compact_threshold_arc;
 
     layout.editor.set_completions(interactive.slash_completions());
 
@@ -1257,20 +1253,20 @@ fn main() {
                                 // 'a' / 'A' — allow the entire directory containing the path
                                 if seq == b"a" || seq == b"A" {
                                     // Extract path from pending details and find its parent dir.
-                                    if let Some((tool, ref args)) = interactive.pending_permission_details.clone() {
-                                        if let Some(path_str) = nerv::core::permissions::path_for_args(&tool, &args) {
-                                            let path = std::path::PathBuf::from(&path_str);
-                                            let dir = if path.is_dir() {
-                                                path.clone()
-                                            } else {
-                                                path.parent().map(|p| p.to_path_buf()).unwrap_or(path)
-                                            };
-                                            interactive.allowed_dirs.lock().unwrap().push(dir.clone());
-                                            layout.chat.push_styled(
-                                                nerv::interactive::theme::SUCCESS,
-                                                &format!("  → allowed dir: {}", dir.display()),
-                                            );
-                                        }
+                                    if let Some((tool, ref args)) = interactive.pending_permission_details.clone()
+                                        && let Some(path_str) = nerv::core::permissions::path_for_args(&tool, args)
+                                    {
+                                        let path = std::path::PathBuf::from(&path_str);
+                                        let dir = if path.is_dir() {
+                                            path.clone()
+                                        } else {
+                                            path.parent().map(|p| p.to_path_buf()).unwrap_or(path)
+                                        };
+                                        interactive.allowed_dirs.lock().unwrap().push(dir.clone());
+                                        layout.chat.push_styled(
+                                            nerv::interactive::theme::SUCCESS,
+                                            &format!("  → allowed dir: {}", dir.display()),
+                                        );
                                     }
                                     if let Some(tx) = interactive.pending_permission.take() {
                                         let _ = tx.send(true);
@@ -1516,10 +1512,10 @@ fn main() {
                     tui.request_render(false);
                 }
                 // Drain any new text from the inline /btw panel.
-                if let Some(panel) = &mut layout.btw_panel {
-                    if panel.drain() {
-                        tui.request_render(false);
-                    }
+                if let Some(panel) = &mut layout.btw_panel
+                    && panel.drain()
+                {
+                    tui.request_render(false);
                 }
                 render_frame!(tui, layout);
             }
@@ -1605,7 +1601,8 @@ fn launch_picker(
         PickerRequest::SessionPicker { sessions, repo_root } => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let repo_dir = nerv::repo_data_dir(&cwd);
-            let search_fn: Box<dyn Fn(&str) -> Vec<nerv::session::manager::SearchResult>> = {
+            type SearchFn = dyn Fn(&str) -> Vec<nerv::session::manager::SearchResult>;
+            let search_fn: Box<SearchFn> = {
                 Box::new(move |q: &str| {
                     let mgr = nerv::session::manager::SessionManager::new(&repo_dir);
                     mgr.search_sessions(q)
@@ -2134,7 +2131,7 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let b = nerv::bootstrap::bootstrap(
         &cwd,
-        &nerv_dir,
+        nerv_dir,
         nerv::bootstrap::BootstrapOptions { memory: false, permissions: false, talk_mode: false },
     );
     for warning in &b.config_warnings {
@@ -2236,11 +2233,9 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
                         eprintln!("\n── turn {} {}", m.turns, "─".repeat(40));
                     }
                 }
-                AgentEvent::MessageUpdate { delta } if m.verbose => {
-                    if let StreamDelta::Text(s) = delta {
-                        m.in_text = true;
-                        eprint!("{}", s);
-                    }
+                AgentEvent::MessageUpdate { delta: StreamDelta::Text(s), .. } if m.verbose => {
+                    m.in_text = true;
+                    eprint!("{}", s);
                 }
                 AgentEvent::ToolExecutionStart { name, args, .. } => {
                     if m.in_text {
@@ -2266,8 +2261,7 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
                         if m.verbose {
                             let summary = result
                                 .display
-                                .as_ref()
-                                .map(|s| s.as_str())
+                                .as_deref()
                                 .unwrap_or_else(|| result.content.lines().next().unwrap_or(""));
                             if summary.is_empty() || summary.len() > 120 {
                                 eprintln!("{} ({}ms)", status, ms);
@@ -2327,7 +2321,7 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
                 None
             }
         })
-        .last()
+        .next_back()
         .unwrap_or_default();
 
     // Build message trace for debugging
