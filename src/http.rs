@@ -1,9 +1,10 @@
 //! Shared HTTP client with TLS configured correctly.
 //!
-//! Uses native-tls (SecureTransport on macOS, OpenSSL on Linux), which
-//! delegates certificate trust to the system CA store. The `native-tls`
-//! feature also pulls in `webpki-root-certs` as a fallback root store —
-//! there's no supported way to drop that without forking ureq's connector.
+//! Uses native-tls (SecureTransport on macOS, OpenSSL on Linux) with
+//! `RootCerts::PlatformVerifier`, which delegates certificate trust entirely
+//! to the OS trust store. The `native-tls` feature still compiles in the
+//! `webpki-root-certs` bundle (ureq hardwires the dep), but we never load
+//! it — `PlatformVerifier` bypasses it at runtime.
 
 use std::sync::OnceLock;
 
@@ -15,6 +16,7 @@ pub fn agent() -> &'static ureq::Agent {
     AGENT.get_or_init(|| {
         let tls = ureq::tls::TlsConfig::builder()
             .provider(ureq::tls::TlsProvider::NativeTls)
+            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
             .build();
         ureq::Agent::config_builder()
             .tls_config(tls)
