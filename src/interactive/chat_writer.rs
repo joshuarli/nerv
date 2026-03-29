@@ -32,8 +32,6 @@ struct RenderCache {
 enum Block {
     Styled(Vec<String>),
     Markdown(String),
-    /// Source freed after first render; lines stored for resize fallback.
-    Rendered(Vec<String>),
     Spacer,
 }
 
@@ -237,8 +235,7 @@ impl Component for ChatWriter {
         let mut out = Vec::new();
 
         // Render only new blocks (cache hit for existing ones).
-        // After caching a Markdown block, replace it with Block::Rendered to free
-        // the raw source string — the rendered lines in block_lines are canonical now.
+        // Source blocks are kept so resize can re-render at the new width.
         let blocks_len = self.blocks.borrow().len();
         for i in 0..blocks_len {
             if i < cache.block_lines.len() {
@@ -247,11 +244,6 @@ impl Component for ChatWriter {
                 let rendered = render_block(&self.blocks.borrow()[i], width);
                 out.extend_from_slice(&rendered);
                 cache.block_lines.push(rendered);
-                // Free the Markdown source now that the rendered lines are cached.
-                let mut blocks = self.blocks.borrow_mut();
-                if matches!(blocks[i], Block::Markdown(_)) {
-                    blocks[i] = Block::Rendered(cache.block_lines[i].clone());
-                }
             }
         }
 
@@ -296,10 +288,6 @@ fn render_block(block: &Block, width: u16) -> Vec<String> {
             .flat_map(|line| wrap_text_with_ansi(line, width))
             .collect(),
         Block::Markdown(src) => Markdown::new(src).render(width),
-        // Source was freed after first render; return stored lines verbatim.
-        // If the terminal width changed these won't reflow, but notify_flushed
-        // will drop them entirely before they accumulate.
-        Block::Rendered(lines) => lines.clone(),
         Block::Spacer => vec![String::new()],
     }
 }
