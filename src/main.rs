@@ -882,7 +882,7 @@ fn main() {
     footer.set_effort(initial_effort_level);
 
     let mut layout = AppLayout::new(Editor::new(), StatusBar::new(), footer);
-    tui.fixed_bottom = nerv::interactive::layout::fixed_bottom_lines(); // editor + statusbar + footer (+hud if NERV_DEBUG=1)
+    tui.fixed_bottom = layout.fixed_bottom_lines(); // editor + statusbar + footer (+hud if NERV_HUD=1 or toggled on)
 
     let dim = nerv::interactive::theme::DIM;
     if !talk_mode {
@@ -1254,6 +1254,17 @@ fn main() {
                                 if !text.is_empty() {
                                     let req = interactive.handle_submit(text);
                                     if let Some(req) = req {
+                                        // ToggleHud is lightweight — handle inline without pausing stdin.
+                                        if matches!(req, nerv::interactive::event_loop::PickerRequest::ToggleHud) {
+                                            let on = layout.footer.toggle_hud();
+                                            interactive.status_message = Some(if on { "HUD on".into() } else { "HUD off".into() });
+                                            interactive.refresh_footer(&mut layout.footer);
+                                            if let Some(msg) = interactive.status_message.take() {
+                                                push_status(&mut layout, &msg, interactive.status_is_error);
+                                            }
+                                            tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
+                                            tui.request_render(false); continue;
+                                        }
                                         launch_picker(req, &mut interactive, &mut layout, &stdin_paused);
                                         tui.request_render(true); render_frame!(tui, layout); continue;
                                     }
@@ -1264,7 +1275,7 @@ fn main() {
                                     }
                                     layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
                                     layout.statusbar.render_queue(tui.width());
-                                    tui.fixed_bottom = nerv::interactive::layout::fixed_bottom_lines() + layout.statusbar.queue_line_count();
+                                    tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                 }
                                 tui.request_render(false); continue;
                             }
@@ -1278,7 +1289,7 @@ fn main() {
                                     layout.editor.set_text(&text);
                                     layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
                                     layout.statusbar.render_queue(tui.width());
-                                    tui.fixed_bottom = nerv::interactive::layout::fixed_bottom_lines() + layout.statusbar.queue_line_count();
+                                    tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                     tui.request_render(false); render_frame!(tui, layout); continue;
                                 }
                             }
@@ -1290,7 +1301,7 @@ fn main() {
                                 layout.editor.set_text(&msg);
                                 layout.statusbar.set_queue(&interactive.pending_messages, None);
                                 layout.statusbar.render_queue(tui.width());
-                                tui.fixed_bottom = nerv::interactive::layout::fixed_bottom_lines() + layout.statusbar.queue_line_count();
+                                tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                 tui.request_render(false); render_frame!(tui, layout); continue;
                             }
                             if keys::matches_key(seq, "down") && interactive.editing_queue_idx.is_some() {
@@ -1302,7 +1313,7 @@ fn main() {
                                     layout.editor.set_text(&text);
                                     layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
                                     layout.statusbar.render_queue(tui.width());
-                                    tui.fixed_bottom = nerv::interactive::layout::fixed_bottom_lines() + layout.statusbar.queue_line_count();
+                                    tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                     tui.request_render(false); render_frame!(tui, layout); continue;
                                 }
                             }
@@ -1313,7 +1324,7 @@ fn main() {
                                 layout.editor.clear();
                                 layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
                                 layout.statusbar.render_queue(tui.width());
-                                tui.fixed_bottom = nerv::interactive::layout::fixed_bottom_lines() + layout.statusbar.queue_line_count();
+                                tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                 tui.request_render(false); render_frame!(tui, layout); continue;
                             }
                             // History navigation: up/down when not streaming and editor is empty
@@ -1415,6 +1426,13 @@ fn launch_picker(
     stdin_paused.store(true, std::sync::atomic::Ordering::SeqCst);
     std::thread::sleep(std::time::Duration::from_millis(150));
 
+    // ToggleHud is handled inline at the call site; this path is unreachable but
+    // must be present for exhaustive pattern matching.
+    if matches!(req, PickerRequest::ToggleHud) {
+        stdin_paused.store(false, std::sync::atomic::Ordering::SeqCst);
+        return;
+    }
+
     // /btw overlay: ephemeral parallel Q&A — handle and return immediately.
     if let PickerRequest::BtwOverlay { messages, model, note } = req {
         nerv::interactive::btw_overlay::run_btw_overlay(
@@ -1472,8 +1490,9 @@ fn launch_picker(
                 .map(PickResult::Model)
                 .unwrap_or(PickResult::None)
         }
-        // BtwOverlay is handled above with an early return; this arm is unreachable.
+        // BtwOverlay and ToggleHud are handled above with early returns; these arms are unreachable.
         PickerRequest::BtwOverlay { .. } => PickResult::None,
+        PickerRequest::ToggleHud => PickResult::None,
     };
 
     stdin_paused.store(false, std::sync::atomic::Ordering::SeqCst);

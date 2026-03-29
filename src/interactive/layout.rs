@@ -9,11 +9,6 @@ use crate::tui::components::spacer::Spacer;
 /// flushed to scrollback.  Queue lines are added on top of this.
 pub const BASE_FIXED_BOTTOM: usize = 10;
 
-/// Total lines in the fixed footer, including the nervHud line when NERV_DEBUG=1.
-pub fn fixed_bottom_lines() -> usize {
-    BASE_FIXED_BOTTOM + crate::interactive::footer::hud_line_count()
-}
-
 pub struct AppLayout {
     spacer_top: Spacer,
     pub chat: ChatWriter,
@@ -31,6 +26,11 @@ impl AppLayout {
             statusbar,
             footer,
         }
+    }
+
+    /// Total lines in the fixed footer, including the nervHud line when the HUD is enabled.
+    pub fn fixed_bottom_lines(&self) -> usize {
+        BASE_FIXED_BOTTOM + self.footer.hud_line_count()
     }
 }
 

@@ -1,20 +1,10 @@
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::agent::types::*;
 use crate::interactive::theme;
 use crate::tui::tui::Component;
 use crate::tui::utils::{truncate_to_width, visible_width};
-
-/// Returns `true` when the `NERV_DEBUG` environment variable is set to `1`.
-pub fn nerv_debug() -> bool {
-    std::env::var("NERV_DEBUG").as_deref() == Ok("1")
-}
-
-/// How many extra lines the nervHud adds to the fixed footer (0 or 1).
-pub fn hud_line_count() -> usize {
-    if nerv_debug() { 1 } else { 0 }
-}
 
 /// Sample the whole-process RSS in kilobytes.
 /// Returns 0 on unsupported platforms or if the syscall fails.
@@ -193,11 +183,13 @@ pub struct FooterComponent {
     total_cache_write: u64,
     /// Number of API calls made in this session.
     api_calls: u32,
+    /// nervHud: whether the HUD line is currently shown.
+    hud_enabled: bool,
+    /// nervHud: stop flag shared with background poller threads; set to `true` to kill them.
+    stop_hud: Arc<AtomicBool>,
     /// nervHud: current process RSS in KiB, written by a background thread.
-    /// Only displayed when `NERV_DEBUG=1`.
     rss_kb: Arc<AtomicU64>,
     /// nervHud: recent %CPU (f32 bits stored in u32), written by background thread.
-    /// Only displayed when `NERV_DEBUG=1`.
     cpu_pct: Arc<AtomicU32>,
 }
 
@@ -228,7 +220,7 @@ impl FooterComponent {
                 }
             });
 
-        Self {
+        let mut this = Self {
             cwd: Self::abbrev_cwd(cwd),
             git_branch,
             session_id: None,
@@ -251,48 +243,78 @@ impl FooterComponent {
             total_cache_read: 0,
             total_cache_write: 0,
             api_calls: 0,
-            rss_kb: {
-                let cell = Arc::new(AtomicU64::new(0));
-                if nerv_debug() {
-                    // nervHud background poller: sample RSS + %CPU every 500 ms.
-                    let rss_cell = cell.clone();
-                    std::thread::Builder::new()
-                        .name("nerv-hud".into())
-                        .spawn(move || loop {
-                            rss_cell.store(sample_rss_kb(), Ordering::Relaxed);
-                            std::thread::sleep(std::time::Duration::from_millis(500));
-                        })
-                        .ok();
-                }
-                cell
-            },
-            cpu_pct: {
-                let cell = Arc::new(AtomicU32::new(0));
-                if nerv_debug() {
-                    // CPU% poller: two samples 500 ms apart → delta CPU time / wall time.
-                    let cpu_cell = cell.clone();
-                    std::thread::Builder::new()
-                        .name("nerv-hud-cpu".into())
-                        .spawn(move || {
-                            let mut prev_us = sample_cpu_time_us();
-                            let mut prev_wall = std::time::Instant::now();
-                            loop {
-                                std::thread::sleep(std::time::Duration::from_millis(500));
-                                let cur_us   = sample_cpu_time_us();
-                                let cur_wall = std::time::Instant::now();
-                                let cpu_delta  = cur_us.saturating_sub(prev_us) as f64;
-                                let wall_delta = cur_wall.duration_since(prev_wall).as_micros() as f64;
-                                let pct = if wall_delta > 0.0 { (cpu_delta / wall_delta) * 100.0 } else { 0.0 };
-                                cpu_cell.store((pct as f32).to_bits(), Ordering::Relaxed);
-                                prev_us   = cur_us;
-                                prev_wall = cur_wall;
-                            }
-                        })
-                        .ok();
-                }
-                cell
-            },
+            hud_enabled: false,
+            stop_hud: Arc::new(AtomicBool::new(false)),
+            rss_kb: Arc::new(AtomicU64::new(0)),
+            cpu_pct: Arc::new(AtomicU32::new(0)),
+        };
+
+        // Start HUD pollers immediately if NERV_HUD=1.
+        if std::env::var("NERV_HUD").as_deref() == Ok("1") {
+            this.start_hud_threads();
+            this.hud_enabled = true;
         }
+
+        this
+    }
+
+    /// How many extra lines the nervHud adds to the fixed footer (0 or 1).
+    pub fn hud_line_count(&self) -> usize {
+        if self.hud_enabled { 1 } else { 0 }
+    }
+
+    /// Toggle the nervHud line on or off. Starts/stops background poller threads.
+    /// Returns the new enabled state.
+    pub fn toggle_hud(&mut self) -> bool {
+        if self.hud_enabled {
+            // Signal the existing threads to exit.
+            self.stop_hud.store(true, Ordering::Relaxed);
+            // Replace the stop flag so a future enable gets a fresh one.
+            self.stop_hud = Arc::new(AtomicBool::new(false));
+            self.hud_enabled = false;
+        } else {
+            self.start_hud_threads();
+            self.hud_enabled = true;
+        }
+        self.hud_enabled
+    }
+
+    /// Spawn the RSS + CPU background poller threads.
+    fn start_hud_threads(&mut self) {
+        // RSS poller: sample every 500 ms until stop flag is set.
+        let rss_cell = self.rss_kb.clone();
+        let stop = self.stop_hud.clone();
+        std::thread::Builder::new()
+            .name("nerv-hud".into())
+            .spawn(move || loop {
+                if stop.load(Ordering::Relaxed) { break; }
+                rss_cell.store(sample_rss_kb(), Ordering::Relaxed);
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            })
+            .ok();
+
+        // CPU% poller: two samples 500 ms apart → delta CPU time / wall time.
+        let cpu_cell = self.cpu_pct.clone();
+        let stop = self.stop_hud.clone();
+        std::thread::Builder::new()
+            .name("nerv-hud-cpu".into())
+            .spawn(move || {
+                let mut prev_us = sample_cpu_time_us();
+                let mut prev_wall = std::time::Instant::now();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if stop.load(Ordering::Relaxed) { break; }
+                    let cur_us   = sample_cpu_time_us();
+                    let cur_wall = std::time::Instant::now();
+                    let cpu_delta  = cur_us.saturating_sub(prev_us) as f64;
+                    let wall_delta = cur_wall.duration_since(prev_wall).as_micros() as f64;
+                    let pct = if wall_delta > 0.0 { (cpu_delta / wall_delta) * 100.0 } else { 0.0 };
+                    cpu_cell.store((pct as f32).to_bits(), Ordering::Relaxed);
+                    prev_us   = cur_us;
+                    prev_wall = cur_wall;
+                }
+            })
+            .ok();
     }
 
     pub fn set_cwd(&mut self, cwd: &str) {
@@ -595,8 +617,8 @@ impl Component for FooterComponent {
         let cost_pad = w.saturating_sub(cost_width) / 2;
         let line5 = format!("{}{}", " ".repeat(cost_pad), cost_line);
 
-        // nervHud: process RSS + %CPU — shown only when NERV_DEBUG=1
-        if nerv_debug() {
+        // nervHud: process RSS + %CPU — shown only when hud is enabled
+        if self.hud_enabled {
             let rss = self.rss_kb.load(Ordering::Relaxed);
             let rss_str = if rss >= 1024 {
                 format!("{:.1} MB", rss as f64 / 1024.0)

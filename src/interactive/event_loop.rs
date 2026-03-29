@@ -32,6 +32,8 @@ pub enum PickerRequest {
         model: Model,
         note: String,
     },
+    /// Toggle the nervHud line on/off.
+    ToggleHud,
 }
 
 pub struct InteractiveMode {
@@ -575,7 +577,7 @@ impl InteractiveMode {
                 layout
                     .statusbar
                     .set_queue(&self.pending_messages, self.editing_queue_idx);
-                tui.fixed_bottom = super::layout::fixed_bottom_lines()
+                tui.fixed_bottom = layout.fixed_bottom_lines()
                     + layout.statusbar.queue_line_count();
                 tui.request_render(false);
             }
@@ -867,6 +869,9 @@ impl InteractiveMode {
                 self.plan_mode = enabled;
                 let _ = self.cmd_tx.try_send(SessionCommand::SetPlanMode { enabled });
             }
+            "/hud" => {
+                return Some(PickerRequest::ToggleHud);
+            }
             "/session" => {
                 // Open full-screen session picker.
                 let _ = self.cmd_tx.send(SessionCommand::ListSessions {
@@ -969,6 +974,7 @@ impl InteractiveMode {
                      /wt merge       — merge worktree back and clean up\n\
                      /btw <note>     — add background context; model acknowledges briefly\n\
                      /plan           — toggle plan mode (read-only research)\n\
+                     /hud            — toggle nervHud (RSS/CPU stats)\n\
                      /fork           — fork session into a new independent copy\n\
                      /new            — start new session\n\
                      /quit           — quit nerv\n\
@@ -1061,6 +1067,7 @@ impl InteractiveMode {
             "/resume".into(),
             "/tree".into(),
             "/plan".into(),
+            "/hud".into(),
             "/btw".into(),
             "/fork".into(),
             "/wt".into(),
