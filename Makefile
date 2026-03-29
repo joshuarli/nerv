@@ -25,8 +25,8 @@ release:
 # No build-std or -Cpanic=immediate-abort here: the profiler runtime needs unwinding.
 pgo-profile:
 	rm -rf $(PGO_DIR) && mkdir -p $(PGO_DIR)
-	RUSTFLAGS="-Cprofile-generate=$(PGO_DIR)" \
-	cargo bench -- --sample-size 10 --warm-up-time 1 --measurement-time 2
+	RUSTFLAGS="-Cprofile-generate=$(PGO_DIR)" PGO_PROFILE=1 \
+	cargo bench --bench chat_writer --bench highlight --bench index --bench json_encoding --bench tools
 	$(LLVM_PROFDATA) merge -o $(PGO_MERGED) $(PGO_DIR)
 
 # PGO-optimized release: uses gathered profiles + all aggressive flags.
@@ -65,7 +65,7 @@ install-prompts:
 	@echo "Prompts installed to ~/.nerv/prompts/"
 
 bench:
-	cargo bench --bench startup
+	cargo bench --bench index --bench tools --bench json_encoding --bench chat_writer --bench highlight
 
 install: release-pgo install-skills install-prompts
 	cp target/$(TARGET)/release/$(NAME) ~/usr/bin/$(NAME)

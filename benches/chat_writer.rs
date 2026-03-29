@@ -4,7 +4,17 @@ use std::time::Duration;
 use nerv::interactive::chat_writer::ChatWriter;
 use nerv::tui::tui::Component;
 
+
+fn pgo_criterion() -> Criterion {
+    // For `make pgo-profile`: just hit the hot paths, no statistical rigor needed.
+    Criterion::default()
+        .warm_up_time(Duration::from_millis(1))
+        .measurement_time(Duration::from_millis(10))
+        .sample_size(10)
+}
+
 fn fast() -> Criterion {
+    if std::env::var("PGO_PROFILE").is_ok() { return pgo_criterion(); }
     Criterion::default()
         .warm_up_time(Duration::from_millis(200))
         .measurement_time(Duration::from_secs(2))

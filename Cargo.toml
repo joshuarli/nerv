@@ -29,23 +29,11 @@ tempfile = "3"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
-name = "startup"
-harness = false
-
-[[bench]]
-name = "render"
-harness = false
-
-[[bench]]
 name = "json_encoding"
 harness = false
 
 [[bench]]
 name = "tools"
-harness = false
-
-[[bench]]
-name = "sse_parsing"
 harness = false
 
 [[bench]]

@@ -7,7 +7,17 @@ use nerv::agent::provider::*;
 use nerv::agent::types::*;
 use nerv::agent::{AnthropicProvider, OpenAICompatProvider};
 
+
+fn pgo_criterion() -> Criterion {
+    // For `make pgo-profile`: just hit the hot paths, no statistical rigor needed.
+    Criterion::default()
+        .warm_up_time(Duration::from_millis(1))
+        .measurement_time(Duration::from_millis(10))
+        .sample_size(10)
+}
+
 fn fast() -> Criterion {
+    if std::env::var("PGO_PROFILE").is_ok() { return pgo_criterion(); }
     Criterion::default()
         .warm_up_time(Duration::from_millis(200))
         .measurement_time(Duration::from_secs(2))
@@ -135,23 +145,6 @@ fn make_completion_request(
 // Benchmarks
 // ---------------------------------------------------------------------------
 
-fn bench_convert_to_llm(c: &mut Criterion) {
-    let mut group = c.benchmark_group("convert_to_llm");
-    for turns in [5, 20, 50, 100, 200] {
-        let messages = make_conversation(turns);
-        group.bench_with_input(BenchmarkId::new("text_only", turns), &turns, |b, _| {
-            b.iter(|| black_box(convert_to_llm(&messages)));
-        });
-    }
-    for turns in [5, 20, 50, 100, 200] {
-        let messages = make_conversation_with_tools(turns);
-        group.bench_with_input(BenchmarkId::new("with_tools", turns), &turns, |b, _| {
-            b.iter(|| black_box(convert_to_llm(&messages)));
-        });
-    }
-    group.finish();
-}
-
 fn bench_transform_context(c: &mut Criterion) {
     let mut group = c.benchmark_group("transform_context");
     // 100 and 200 turns exercise the stale-truncation and dedup optimisations
@@ -160,66 +153,6 @@ fn bench_transform_context(c: &mut Criterion) {
         let messages = make_conversation_with_tools(turns);
         group.bench_with_input(BenchmarkId::new("turns", turns), &turns, |b, _| {
             b.iter(|| black_box(transform_context(messages.clone(), 200_000, None)));
-        });
-    }
-    group.finish();
-}
-
-fn bench_anthropic_body(c: &mut Criterion) {
-    let provider = AnthropicProvider::new("sk-test".into());
-    let system = make_system_prompt(2000);
-    let tools = make_tools(8);
-
-    let mut group = c.benchmark_group("anthropic_build_body");
-    for turns in [1, 5, 20, 50] {
-        let messages = make_conversation_with_tools(turns);
-        let llm = convert_to_llm(&messages);
-        let req = make_completion_request(&system, &llm, &tools);
-        group.bench_with_input(BenchmarkId::new("turns", turns), &turns, |b, _| {
-            b.iter(|| black_box(provider.build_request_body(&req)));
-        });
-    }
-    group.finish();
-}
-
-fn bench_openai_body(c: &mut Criterion) {
-    let provider =
-        OpenAICompatProvider::new("local".into(), "http://localhost:1234/v1".into(), None);
-    let system = make_system_prompt(2000);
-    let tools = make_tools(8);
-
-    let mut group = c.benchmark_group("openai_build_body");
-    for turns in [1, 5, 20, 50] {
-        let messages = make_conversation_with_tools(turns);
-        let llm = convert_to_llm(&messages);
-        let req = make_completion_request(&system, &llm, &tools);
-        group.bench_with_input(BenchmarkId::new("turns", turns), &turns, |b, _| {
-            b.iter(|| black_box(provider.build_request_body(&req)));
-        });
-    }
-    group.finish();
-}
-
-fn bench_json_serialize(c: &mut Criterion) {
-    let provider = AnthropicProvider::new("sk-test".into());
-    let system = make_system_prompt(2000);
-    let tools = make_tools(8);
-
-    let mut group = c.benchmark_group("json_serialize");
-    for turns in [1, 5, 20, 50] {
-        let messages = make_conversation_with_tools(turns);
-        let llm = convert_to_llm(&messages);
-        let req = make_completion_request(&system, &llm, &tools);
-        let body = provider.build_request_body(&req);
-
-        // Benchmark just the serde_json::to_string step
-        group.bench_with_input(BenchmarkId::new("to_string", turns), &turns, |b, _| {
-            b.iter(|| black_box(serde_json::to_string(&body).unwrap()));
-        });
-
-        // Benchmark to_vec (bytes) for comparison
-        group.bench_with_input(BenchmarkId::new("to_vec", turns), &turns, |b, _| {
-            b.iter(|| black_box(serde_json::to_vec(&body).unwrap()));
         });
     }
     group.finish();
@@ -252,11 +185,7 @@ criterion_group! {
     name = benches;
     config = fast();
     targets =
-        bench_convert_to_llm,
         bench_transform_context,
-        bench_anthropic_body,
-        bench_openai_body,
-        bench_json_serialize,
         bench_full_pipeline,
 }
 criterion_main!(benches);
