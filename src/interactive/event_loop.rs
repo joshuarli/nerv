@@ -808,7 +808,9 @@ impl InteractiveMode {
 
         match command {
             "/compact" => {
-                // `/compact at 70` — set session threshold; `/compact` — compact now
+                // `/compact at 70` — set session threshold
+                // `/compact on` / `/compact off` — toggle auto-compact
+                // `/compact` (no args) — compact now
                 if let Some(rest) = args.strip_prefix("at ") {
                     if let Ok(pct) = rest.trim().parse::<u8>() {
                         self.compact_threshold = pct;
@@ -824,7 +826,11 @@ impl InteractiveMode {
                         self.status_message =
                             Some("Usage: /compact at <1-100>".into());
                     }
-                } else {
+                } else if args == "off" || args == "false" || args == "0" {
+                    let _ = self.cmd_tx.send(SessionCommand::SetAutoCompact { enabled: false });
+                } else if args == "on" || args == "true" || args == "1" {
+                    let _ = self.cmd_tx.send(SessionCommand::SetAutoCompact { enabled: true });
+                } else if args.is_empty() {
                     // Interrupt any running stream immediately so the session thread
                     // can pick up the Compact command without waiting for it to finish.
                     self.cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -832,6 +838,10 @@ impl InteractiveMode {
                     let _ = self.cmd_tx.send(SessionCommand::Compact {
                         custom_instructions: None,
                     });
+                } else {
+                    self.status_message = Some(
+                        "Usage: /compact [on|off|at <1-100>]".into(),
+                    );
                 }
             }
             "/model" => {
@@ -1037,7 +1047,8 @@ impl InteractiveMode {
                      /effort [low|medium|high|max] — set adaptive effort level (^E to cycle)\n\
                      /login [provider] — OAuth login (default: anthropic)\n\
                      /logout [provider] — remove stored credentials\n\
-                     /compact        — compact context now
+                     /compact        — compact context now\n\
+                     /compact on|off — toggle auto-compact for this session\n\
                      /compact at N   — set auto-compact threshold to N% for this session\n\
                      /session        — browse and resume sessions\n\
                      /export          — export session to ~/.nerv/exports/ (html + jsonl)\n\

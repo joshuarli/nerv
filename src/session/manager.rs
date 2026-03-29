@@ -21,6 +21,8 @@ pub struct SessionContext {
     pub api_calls: u32,
     /// All user-typed prompts ever submitted in this session, oldest first.
     pub input_history: Vec<String>,
+    /// Per-session config overrides (model, thinking, effort, auto_compact, compaction_model).
+    pub session_config: SessionConfig,
 }
 
 pub struct SessionManager {
@@ -62,6 +64,12 @@ impl SessionManager {
             "ALTER TABLE sessions ADD COLUMN input_history TEXT",
         )
         .ok(); // Ignore error — column already exists on fresh DBs.
+
+        // Migrate: add session_config column for per-session config overrides.
+        db.execute(
+            "ALTER TABLE sessions ADD COLUMN session_config TEXT",
+        )
+        .ok();
 
         db.execute(
             "CREATE TABLE IF NOT EXISTS entries (
@@ -537,6 +545,7 @@ impl SessionManager {
             total_output,
             api_calls,
             input_history: self.load_input_history(),
+            session_config: self.get_session_config(),
         }
     }
 
@@ -663,6 +672,52 @@ impl SessionManager {
                 stmt.next().ok();
             }
         }
+    }
+
+    /// Load per-session config overrides from the DB.
+    pub fn get_session_config(&self) -> SessionConfig {
+        let sid = match self.session_id.as_deref() {
+            Some(s) => s,
+            None => return SessionConfig::default(),
+        };
+        let mut stmt = match self.db.prepare("SELECT session_config FROM sessions WHERE id = ?") {
+            Ok(s) => s,
+            Err(_) => return SessionConfig::default(),
+        };
+        stmt.bind((1, sid)).ok();
+        if stmt.next().ok() == Some(sqlite::State::Row) {
+            stmt.read::<Option<String>, _>("session_config")
+                .ok()
+                .flatten()
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .unwrap_or_default()
+        } else {
+            SessionConfig::default()
+        }
+    }
+
+    /// Save per-session config overrides to the DB.
+    pub fn set_session_config(&self, config: &SessionConfig) {
+        if let Some(ref sid) = self.session_id {
+            if let Ok(json) = serde_json::to_string(config) {
+                if let Ok(mut stmt) = self
+                    .db
+                    .prepare("UPDATE sessions SET session_config = ? WHERE id = ?")
+                {
+                    stmt.bind((1, json.as_str())).ok();
+                    stmt.bind((2, sid.as_str())).ok();
+                    stmt.next().ok();
+                }
+            }
+        }
+    }
+
+    /// Update a single field of the per-session config. Reads current, applies the
+    /// closure, writes back. This is safe because the session thread is the only writer.
+    pub fn update_session_config<F: FnOnce(&mut SessionConfig)>(&self, f: F) {
+        let mut cfg = self.get_session_config();
+        f(&mut cfg);
+        self.set_session_config(&cfg);
     }
 
     /// Clear the worktree association for the current session.

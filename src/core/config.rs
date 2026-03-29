@@ -12,7 +12,7 @@ pub struct NervConfig {
     #[serde(default)]
     pub custom_providers: Vec<CustomProviderConfig>,
     pub default_model: Option<String>,
-    pub default_thinking_level: Option<bool>,
+    pub default_thinking: Option<bool>,
     pub default_effort_level: Option<EffortLevel>,
     pub auto_compact: Option<bool>,
     /// Model used for background compaction summarisation.
@@ -44,18 +44,44 @@ pub struct CustomModelConfig {
     pub reasoning: Option<bool>,
 }
 
+/// Built-in default headers for each provider, applied before user overrides.
+fn builtin_default_headers() -> std::collections::HashMap<String, std::collections::HashMap<String, String>> {
+    let mut anthropic = std::collections::HashMap::new();
+    anthropic.insert("anthropic-beta".to_string(), "claude-code-20250219,oauth-2025-04-20".to_string());
+    anthropic.insert("user-agent".to_string(), "claude-cli/1.0.0".to_string());
+    anthropic.insert("x-app".to_string(), "cli".to_string());
+    let mut map = std::collections::HashMap::new();
+    map.insert("anthropic".to_string(), anthropic);
+    map
+}
+
 impl Default for NervConfig {
     fn default() -> Self {
         Self {
             custom_providers: Vec::new(),
             default_model: None,
-            default_thinking_level: Some(true),
+            default_thinking: Some(true),
             default_effort_level: Some(EffortLevel::Medium),
             auto_compact: Some(true),
             compaction_model: Some("claude-haiku-4-5".to_string()),
-            headers: std::collections::HashMap::new(),
+            headers: builtin_default_headers(),
             notifications: Vec::new(),
         }
+    }
+}
+
+impl NervConfig {
+    /// Returns effective headers for a provider: built-in defaults overridden by user config.
+    pub fn effective_headers(&self, provider: &str) -> Vec<(String, String)> {
+        let defaults = builtin_default_headers();
+        let mut merged: std::collections::HashMap<String, String> = defaults
+            .get(provider)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(user) = self.headers.get(provider) {
+            merged.extend(user.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        merged.into_iter().collect()
     }
 }
 

@@ -159,7 +159,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     session.talk_mode = opts.talk_mode;
 
     // Apply default thinking level from config (true = on, false = off).
-    if let Some(enabled) = config.default_thinking_level {
+    if let Some(enabled) = config.default_thinking {
         use crate::agent::types::ThinkingLevel;
         session.agent.state.thinking_level = if enabled { ThinkingLevel::On } else { ThinkingLevel::Off };
     }
@@ -167,6 +167,11 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     // Apply default effort level from config ("low", "medium", "high", "max").
     if let Some(effort) = config.default_effort_level {
         session.agent.state.effort_level = Some(effort);
+    }
+
+    // Apply auto_compact setting from config (default: true).
+    if let Some(enabled) = config.auto_compact {
+        session.auto_compact = enabled;
     }
 
     // Validate configured model ids against the known model list.

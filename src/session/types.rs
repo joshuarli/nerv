@@ -1,4 +1,4 @@
-use crate::agent::types::AgentMessage;
+use crate::agent::types::{AgentMessage, EffortLevel};
 use serde::{Deserialize, Serialize};
 
 pub const CURRENT_SESSION_VERSION: u32 = 4;
@@ -196,6 +196,17 @@ pub struct PermissionAcceptEntry {
     pub tool: String,
     /// Arguments to the tool (serialized as JSON for consistency)
     pub args: String,
+}
+
+/// Per-session config overrides. Stored as a JSON blob in the sessions table.
+/// `None` fields fall back to the global `NervConfig` default.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionConfig {
+    pub default_model: Option<String>,
+    pub default_thinking: Option<bool>,
+    pub default_effort_level: Option<EffortLevel>,
+    pub auto_compact: Option<bool>,
+    pub compaction_model: Option<String>,
 }
 
 /// Tree node for `SessionManager::get_tree()`.

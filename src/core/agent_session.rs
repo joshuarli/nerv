@@ -145,6 +145,7 @@ pub enum SessionCommand {
     SetEffortLevel { level: Option<EffortLevel> },
     Compact { custom_instructions: Option<String> },
     SetCompactThreshold { pct: u8 },
+    SetAutoCompact { enabled: bool },
     Export,
     Login { provider: String },
     ListSessions { repo_root: Option<String>, repo_id: Option<String> },
@@ -192,6 +193,8 @@ pub struct AgentSession {
     pub talk_mode: bool,
     /// True once the session has been given an auto-generated name, to avoid re-naming.
     session_named: bool,
+    /// Whether automatic threshold-based compaction is enabled for this session.
+    pub auto_compact: bool,
 }
 
 impl AgentSession {
@@ -221,6 +224,7 @@ impl AgentSession {
             plan_mode: false,
             talk_mode: false,
             session_named: false,
+            auto_compact: true,
         }
     }
 
@@ -452,7 +456,8 @@ impl AgentSession {
         }
 
         // Threshold-based auto-compaction (proactive, before we hit the wall)
-        if let Some(last) = last_assistant(&new_messages)
+        if self.auto_compact
+            && let Some(last) = last_assistant(&new_messages)
             && !last.stop_reason.is_error()
             && let Some(ref usage) = last.usage
             && let Some(ref model) = self.agent.state.model
@@ -797,11 +802,10 @@ impl AgentSession {
             let _ = event_tx.send(AgentSessionEvent::ModelChanged {
                 model: model.clone(),
             });
-            // Persist as default for next startup
-            let nerv_dir = crate::nerv_dir();
-            let mut cfg = super::config::NervConfig::load(nerv_dir);
-            cfg.default_model = Some(model_id.to_string());
-            let _ = cfg.save(nerv_dir);
+            // Persist as session-level override
+            self.session_manager.update_session_config(|cfg| {
+                cfg.default_model = Some(model_id.to_string());
+            });
         }
     }
 
@@ -813,6 +817,10 @@ impl AgentSession {
         self.agent.state.thinking_level = level;
         let _ = self.session_manager.append_thinking_level_change(level);
         let _ = event_tx.send(AgentSessionEvent::ThinkingLevelChanged { level });
+        // Persist as session-level override
+        self.session_manager.update_session_config(|cfg| {
+            cfg.default_thinking = Some(level == ThinkingLevel::On);
+        });
     }
 
     pub fn abort(&self) {
@@ -925,6 +933,18 @@ impl AgentSession {
                 if let Some(pct) = self.apply_saved_compact_threshold() {
                     let _ = event_tx.send(AgentSessionEvent::CompactThresholdChanged { pct });
                 }
+
+                // Restore per-session config overrides
+                let scfg = ctx.session_config;
+                if let Some(effort) = scfg.default_effort_level {
+                    self.agent.state.effort_level = Some(effort);
+                    let _ = event_tx.send(AgentSessionEvent::EffortLevelChanged {
+                        level: Some(effort),
+                    });
+                }
+                if let Some(enabled) = scfg.auto_compact {
+                    self.auto_compact = enabled;
+                }
                 // Don't re-name sessions that were already named (or have a preview we could use).
                 // We consider any loaded session as already handled.
                 self.session_named = true;
@@ -1025,11 +1045,7 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
 
                     // Register the provider (OAuth uses Bearer auth)
                     let nerv_config = super::config::NervConfig::load(nerv_dir);
-                    let extra_headers: Vec<(String, String)> = nerv_config
-                        .headers
-                        .get("anthropic")
-                        .map(|h| h.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-                        .unwrap_or_default();
+                    let extra_headers: Vec<(String, String)> = nerv_config.effective_headers("anthropic");
                     let provider = std::sync::Arc::new(
                         crate::agent::AnthropicProvider::new_oauth(api_key)
                             .with_headers(extra_headers),
@@ -1147,6 +1163,10 @@ pub fn session_task(
             }
             SessionCommand::SetEffortLevel { level } => {
                 session.agent.state.effort_level = level;
+                // Persist as session-level override
+                session.session_manager.update_session_config(|cfg| {
+                    cfg.default_effort_level = level;
+                });
                 let _ = event_tx.send(AgentSessionEvent::EffortLevelChanged { level });
             }
             SessionCommand::SetPlanMode { enabled } => {
@@ -1187,6 +1207,17 @@ pub fn session_task(
                 let _ = event_tx.send(AgentSessionEvent::CompactThresholdChanged { pct });
                 let _ = event_tx.send(AgentSessionEvent::Status {
                     message: format!("Auto-compact threshold set to {}%.", pct),
+                    is_error: false,
+                });
+            }
+            SessionCommand::SetAutoCompact { enabled } => {
+                session.auto_compact = enabled;
+                session.session_manager.update_session_config(|cfg| {
+                    cfg.auto_compact = Some(enabled);
+                });
+                let label = if enabled { "on" } else { "off" };
+                let _ = event_tx.send(AgentSessionEvent::Status {
+                    message: format!("Auto-compact {}.", label),
                     is_error: false,
                 });
             }

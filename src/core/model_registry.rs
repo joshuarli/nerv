@@ -30,11 +30,7 @@ impl ModelRegistry {
 
         // Register Anthropic provider if auth is available
         let is_oauth = auth.is_oauth("anthropic");
-        let extra_headers: Vec<(String, String)> = config
-            .headers
-            .get("anthropic")
-            .map(|h| h.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_default();
+        let extra_headers: Vec<(String, String)> = config.effective_headers("anthropic");
         if let Some(api_key) = auth.api_key("anthropic") {
             let provider = if is_oauth {
                 AnthropicProvider::new_oauth(api_key)
