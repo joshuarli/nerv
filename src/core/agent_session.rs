@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
@@ -196,6 +196,9 @@ pub struct AgentSession {
     session_named: bool,
     /// Whether automatic threshold-based compaction is enabled for this session.
     pub auto_compact: bool,
+    /// Set by the UsageUpdate callback when mid-stream compaction triggers.
+    /// Checked after prompt() returns to decide whether to compact + retry.
+    compaction_triggered: Arc<AtomicBool>,
 }
 
 impl AgentSession {
@@ -212,7 +215,7 @@ impl AgentSession {
             session_manager,
             tool_registry,
             compaction_settings: CompactionSettings::default(),
-            compact_threshold_pct: Arc::new(AtomicU32::new(80)),
+            compact_threshold_pct: Arc::new(AtomicU32::new(50)),
             model_registry,
             resources,
             cwd,
@@ -226,6 +229,7 @@ impl AgentSession {
             talk_mode: false,
             session_named: false,
             auto_compact: true,
+            compaction_triggered: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -284,7 +288,74 @@ impl AgentSession {
 
         self.prepare_callbacks(event_tx);
 
+        // Reset in case a previous prompt left it set (e.g. abort during compaction).
+        self.compaction_triggered.store(false, Ordering::Relaxed);
         let new_messages = self.run_agent_prompt(vec![user_msg], event_tx);
+
+        // Mid-stream auto-compaction: the on_event callback detected the context
+        // exceeded the threshold and cancelled the stream. Compact now and retry.
+        if self.compaction_triggered.swap(false, Ordering::Relaxed) {
+            crate::log::info("mid-stream auto-compact: running compaction");
+            let _ = event_tx.send(AgentSessionEvent::AutoCompactionStart {
+                reason: CompactionReason::Threshold,
+            });
+
+            match self.run_compaction(None) {
+                Ok(Some(result)) => {
+                    self.reload_agent_context();
+                    let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                        summary: Some(result.summary),
+                        will_retry: true,
+                        messages: self.agent.state.messages.clone(),
+                    });
+
+                    // Retry: re-send the user prompt so the model picks up
+                    // where it left off with the compacted context.
+                    // Temporarily disable auto-compact for the retry to avoid
+                    // infinite loops if compaction didn't shrink enough.
+                    let retry_msg = AgentMessage::User {
+                        content: vec![ContentItem::Text {
+                            text: text.to_string(),
+                        }],
+                        timestamp: now_millis(),
+                    };
+                    self.prepare_system_prompt();
+                    self.prepare_callbacks(event_tx);
+                    let saved_auto_compact = self.auto_compact;
+                    self.auto_compact = false;
+                    let retry_messages = self.run_agent_prompt(vec![retry_msg], event_tx);
+                    self.auto_compact = saved_auto_compact;
+                    self.post_turn(retry_messages, &text, event_tx);
+                }
+                Ok(None) => {
+                    let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                        summary: None,
+                        will_retry: false,
+                        messages: vec![],
+                    });
+                    let _ = event_tx.send(AgentSessionEvent::Status {
+                        message: "Auto-compact triggered but nothing to compact.".into(),
+                        is_error: false,
+                    });
+                    // Fall through to normal post_turn with the original messages.
+                    self.post_turn(new_messages, &text, event_tx);
+                }
+                Err(e) => {
+                    let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                        summary: None,
+                        will_retry: false,
+                        messages: vec![],
+                    });
+                    let _ = event_tx.send(AgentSessionEvent::Status {
+                        message: format!("Auto-compact failed: {e}"),
+                        is_error: true,
+                    });
+                    self.post_turn(new_messages, &text, event_tx);
+                }
+            }
+            return;
+        }
+
         self.post_turn(new_messages, &text, event_tx);
     }
 
@@ -396,7 +467,9 @@ impl AgentSession {
         ));
     }
 
-    /// Handle compaction and session naming after a completed prompt.
+    /// Handle overflow compaction and session naming after a completed prompt.
+    /// Threshold-based auto-compaction is handled mid-stream (in run_agent_prompt's
+    /// on_event callback), not here.
     fn post_turn(
         &mut self,
         new_messages: Vec<AgentMessage>,
@@ -454,43 +527,6 @@ impl AgentSession {
                 }
             }
             return;
-        }
-
-        // Threshold-based auto-compaction (proactive, before we hit the wall)
-        if self.auto_compact
-            && let Some(last) = last_assistant(&new_messages)
-            && !last.stop_reason.is_error()
-            && let Some(ref usage) = last.usage
-            && let Some(ref model) = self.agent.state.model
-        {
-            let context_tokens = (usage.input + usage.output + usage.cache_read) as usize;
-            if compaction::should_compact(
-                context_tokens,
-                model.context_window,
-                &self.compaction_settings,
-            ) {
-                crate::log::info("threshold auto-compact triggered");
-                let _ = event_tx.send(AgentSessionEvent::AutoCompactionStart {
-                    reason: CompactionReason::Threshold,
-                });
-                match self.run_compaction(None) {
-                    Ok(Some(result)) => {
-                        self.reload_agent_context();
-                        let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
-                            summary: Some(result.summary),
-                            will_retry: false,
-                            messages: self.agent.state.messages.clone(),
-                        });
-                    }
-                    Ok(None) | Err(_) => {
-                        let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
-                            summary: None,
-                            will_retry: false,
-                            messages: vec![],
-                        });
-                    }
-                }
-            }
         }
 
         // Session naming after first completed turn — deterministic, no model call.
@@ -561,6 +597,16 @@ impl AgentSession {
     ) -> Vec<AgentMessage> {
         let tx = event_tx.clone();
 
+        // Capture compaction state before the destructure so the on_event
+        // closure can check the threshold on every UsageUpdate and cancel
+        // the stream immediately when the context exceeds it.
+        let auto_compact = self.auto_compact;
+        let compaction_enabled = self.compaction_settings.enabled;
+        let threshold_pct = self.compaction_settings.threshold_pct;
+        let cancel_flag = self.agent.cancel.clone();
+        let compaction_triggered = self.compaction_triggered.clone();
+        let compact_threshold_pct = self.compact_threshold_pct.clone();
+
         // Destructure self so the borrow checker sees agent, session_manager,
         // and session_cost as independent borrows (needed because the persist
         // closure captures session_manager/session_cost while agent.prompt()
@@ -623,6 +669,28 @@ impl AgentSession {
 
         let new_messages =
             agent.prompt(prompt_messages, &|event: AgentEvent| {
+                // Check for mid-stream auto-compaction on every UsageUpdate.
+                // UsageUpdate fires at message_start with the authoritative input
+                // token count — that's when we learn the context size for this call.
+                if auto_compact && compaction_enabled && context_window > 0 {
+                    if let AgentEvent::UsageUpdate { ref usage } = event {
+                        // Re-read the shared atomic so `/compact at N` takes effect
+                        // even while a stream is in progress.
+                        let live_pct = compact_threshold_pct.load(Ordering::Relaxed);
+                        let pct = if live_pct > 0 {
+                            live_pct as f64 / 100.0
+                        } else {
+                            threshold_pct
+                        };
+                        let context_tokens = (usage.input + usage.output + usage.cache_read) as usize;
+                        let threshold = (context_window as f64 * pct) as usize;
+                        if context_tokens > threshold {
+                            crate::log::info("mid-stream auto-compact triggered — cancelling stream");
+                            compaction_triggered.store(true, Ordering::Relaxed);
+                            cancel_flag.store(true, Ordering::Relaxed);
+                        }
+                    }
+                }
                 let _ = tx.send(AgentSessionEvent::Agent(event));
             }, Some(&mut persist));
 
@@ -640,13 +708,16 @@ impl AgentSession {
         }
 
         // Fire onResponseComplete for successful, non-error turns.
-        if let Some(last) = last_assistant(&new_messages) {
-            if !last.stop_reason.is_error() && !last.stop_reason.is_context_overflow() {
-                let cfg = NervConfig::load(crate::nerv_dir());
-                super::notifications::fire(
-                    super::notifications::NotificationMatcher::OnResponseComplete,
-                    &cfg.notifications,
-                );
+        // Don't fire when compaction cancelled the stream — we're about to retry.
+        if !compaction_triggered.load(Ordering::Relaxed) {
+            if let Some(last) = last_assistant(&new_messages) {
+                if !last.stop_reason.is_error() && !last.stop_reason.is_context_overflow() {
+                    let cfg = NervConfig::load(crate::nerv_dir());
+                    super::notifications::fire(
+                        super::notifications::NotificationMatcher::OnResponseComplete,
+                        &cfg.notifications,
+                    );
+                }
             }
         }
 
