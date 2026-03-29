@@ -1,4 +1,5 @@
 use super::types::*;
+use crate::tools::output_filter;
 
 /// Frozen context decisions for one prompt loop. Computed once before the
 /// while loop in `Agent::prompt` so that every API call within the loop
@@ -133,6 +134,8 @@ pub fn transform_context(
 struct MessageMeta {
     /// tool_call_id → tool name (for tool-specific transforms)
     tool_names: std::collections::HashMap<String, String>,
+    /// tool_call_id → original bash command string (for language-specific filters)
+    bash_commands: std::collections::HashMap<String, String>,
     /// tool_call_ids that have a corresponding ToolResult
     answered_ids: std::collections::HashSet<String>,
     /// tool_call_ids whose ToolResult was a denied error
@@ -145,18 +148,22 @@ struct MessageMeta {
 
 impl MessageMeta {
     fn new(messages: &[AgentMessage]) -> Self {
-        let tool_names: std::collections::HashMap<String, String> = messages
-            .iter()
-            .filter_map(|m| match m {
-                AgentMessage::Assistant(a) => Some(a),
-                _ => None,
-            })
-            .flat_map(|a| &a.content)
-            .filter_map(|b| match b {
-                ContentBlock::ToolCall { id, name, .. } => Some((id.clone(), name.clone())),
-                _ => None,
-            })
-            .collect();
+        let mut tool_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut bash_commands: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for msg in messages {
+            if let AgentMessage::Assistant(a) = msg {
+                for block in &a.content {
+                    if let ContentBlock::ToolCall { id, name, arguments } = block {
+                        tool_names.insert(id.clone(), name.clone());
+                        if name == "bash" {
+                            if let Some(cmd) = arguments.get("command").and_then(|v| v.as_str()) {
+                                bash_commands.insert(id.clone(), cmd.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         let answered_ids = messages
             .iter()
@@ -194,6 +201,7 @@ impl MessageMeta {
 
         Self {
             tool_names,
+            bash_commands,
             answered_ids,
             denied_ids,
             superseded_ids: find_superseded_results(messages),
@@ -308,13 +316,15 @@ fn transform_tool_result(
         });
     }
 
-    // Bash success compression (position-independent)
+    // Bash output filtering (position-independent): ANSI strip, dedup, language-specific compression
     if tool_name == Some("bash") && !is_error {
-        let text = content_text(&content);
-        if let Some(compressed) = compress_bash_success(&text) {
+        let raw = content_text(&content);
+        let command = meta.bash_commands.get(&tool_call_id).map(|s| s.as_str()).unwrap_or("");
+        let filtered = output_filter::filter_bash_output(command, &raw);
+        if filtered != raw.as_str() {
             return Some(AgentMessage::ToolResult {
                 tool_call_id,
-                content: vec![ContentItem::Text { text: compressed }],
+                content: vec![ContentItem::Text { text: filtered.into_owned() }],
                 is_error: false,
                 display: None,
                 timestamp,
@@ -566,49 +576,6 @@ fn fold_read_result(
     output.join("\n")
 }
 
-/// Detect bash success patterns and return a one-line summary.
-/// Returns None if the output doesn't match a known success pattern.
-fn compress_bash_success(text: &str) -> Option<String> {
-    // cargo check / cargo build with no errors
-    if (text.contains("Compiling") || text.contains("Checking") || text.contains("Finished"))
-        && !text.contains("error[")
-        && !text.contains("error:")
-    {
-        if let Some(line) = text.lines().rfind(|l| l.contains("Finished")) {
-            return Some(line.trim().to_string());
-        }
-    }
-
-    // cargo test with all passing
-    if let Some(line) = text.lines().rfind(|l| l.starts_with("test result:")) {
-        if line.contains("0 failed") {
-            return Some(line.trim().to_string());
-        }
-    }
-
-    // Python unittest: "Ran N tests... OK"
-    if text.contains("Ran ") && text.lines().any(|l| l.trim() == "OK") {
-        if let Some(line) = text.lines().rfind(|l| l.starts_with("Ran ")) {
-            return Some(line.trim().to_string());
-        }
-    }
-
-    // pytest: "N passed" with no failures
-    if let Some(line) = text.lines().rfind(|l| l.contains(" passed")) {
-        if !line.contains("failed") && !line.contains("error") {
-            return Some(line.trim().to_string());
-        }
-    }
-
-    // make: no error, last line is a target or "Nothing to be done"
-    if text.contains("make") && !text.contains("Error ") && !text.contains("error:") {
-        if let Some(line) = text.lines().rfind(|l| l.contains("Nothing to be done")) {
-            return Some(line.trim().to_string());
-        }
-    }
-
-    None
-}
 
 /// Walk backwards through messages. For each "read" tool call, track the path.
 /// If an earlier read targeted the same path, mark its tool_call_id as superseded.
@@ -1432,6 +1399,8 @@ mod tests {
 
     #[test]
     fn bash_success_compressed() {
+        use crate::tools::output_filter;
+
         let cargo_check_output = "\
    Compiling nerv v0.1.0 (/tmp/nerv)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.2s";
@@ -1441,18 +1410,18 @@ running 25 tests
 .........................
 test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s";
 
-        assert_eq!(
-            compress_bash_success(cargo_check_output),
-            Some("Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.2s".into())
-        );
-        assert_eq!(
-            compress_bash_success(cargo_test_output),
-            Some("test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s".into())
-        );
+        let r = output_filter::filter_bash_output("cargo check", cargo_check_output);
+        assert!(r.contains("Finished"), "cargo check: {r}");
+        assert!(!r.contains("Compiling"), "should be compressed: {r}");
 
-        // Error output should NOT be compressed
-        let error_output = "error[E0308]: mismatched types";
-        assert_eq!(compress_bash_success(error_output), None);
+        let r = output_filter::filter_bash_output("cargo test", cargo_test_output);
+        assert!(r.contains("25 passed"), "cargo test: {r}");
+        assert!(!r.contains("running 25 tests"), "should be compressed: {r}");
+
+        // Error output should NOT drop the error
+        let error_output = "Compiling nerv v0.1.0\nerror[E0308]: mismatched types\n  --> src/main.rs:1:1\n";
+        let r = output_filter::filter_bash_output("cargo build", error_output);
+        assert!(r.contains("error[E0308]"), "errors kept: {r}");
     }
 
     #[test]
@@ -1501,20 +1470,21 @@ test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 
     #[test]
     fn bash_success_python_unittest() {
+        use crate::tools::output_filter;
         let output = "\
 .....................
 ----------------------------------------------------------------------
 Ran 21 tests in 0.003s
 
 OK";
-        assert_eq!(
-            compress_bash_success(output),
-            Some("Ran 21 tests in 0.003s".into())
-        );
+        let r = output_filter::filter_bash_output("python -m unittest", output);
+        assert!(r.contains("Ran 21 tests"), "got: {r}");
+        assert!(!r.contains("------"), "should be compressed: {r}");
     }
 
     #[test]
     fn bash_success_pytest() {
+        use crate::tools::output_filter;
         let output = "\
 ============================= test session starts ==============================
 collected 15 items
@@ -1522,27 +1492,30 @@ collected 15 items
 test_foo.py ...............                                              [100%]
 
 ============================== 15 passed in 0.42s ==============================";
-        assert_eq!(
-            compress_bash_success(output),
-            Some("============================== 15 passed in 0.42s ==============================".into())
-        );
+        let r = output_filter::filter_bash_output("pytest", output);
+        assert!(r.contains("15 passed"), "got: {r}");
     }
 
     #[test]
-    fn bash_failure_not_compressed() {
-        // Python unittest failure
-        let fail = "\
-..F..
-FAILED (failures=1)";
-        assert_eq!(compress_bash_success(fail), None);
+    fn bash_failure_keeps_errors() {
+        use crate::tools::output_filter;
 
-        // cargo test failure
-        let cargo_fail = "test result: FAILED. 24 passed; 1 failed; 0 ignored";
-        assert_eq!(compress_bash_success(cargo_fail), None);
+        // cargo test failure — errors surface, not suppressed
+        let cargo_fail = "\
+running 3 tests
+..F
+failures:
 
-        // cargo check error
-        let check_fail = "Compiling nerv v0.1.0\nerror[E0308]: mismatched types";
-        assert_eq!(compress_bash_success(check_fail), None);
+---- test_addition stdout ----
+thread 'test_addition' panicked at 'assertion failed: 2 + 2 == 5'
+
+failures:
+    test_addition
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored";
+        let r = output_filter::filter_bash_output("cargo test", cargo_fail);
+        assert!(r.contains("FAILED: test_addition"), "got: {r}");
+        assert!(r.contains("assertion failed"), "got: {r}");
     }
 
     #[test]

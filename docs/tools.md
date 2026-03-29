@@ -143,6 +143,13 @@ to prevent pipe deadlocks.
 non-empty. Non-zero exit codes are reported as `[exit code: N]` and
 marked as errors. Output is tail-truncated at 200KB / 3000 lines.
 
+**Output filter pipeline**: before the result is stored in the context, the
+raw output passes through `tools::output_filter::filter_bash_output`. See
+[Context optimization § 6](context.md#6-bash-output-filter-pipeline) for the
+full pipeline description. The key property is that the pipeline is zero-alloc
+for plain output (no ANSI, no dedup run, no JSON, no known command) via
+`Cow::Borrowed` passthrough.
+
 ## grep
 
 Search file contents using ripgrep.

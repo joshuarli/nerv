@@ -7,6 +7,7 @@ pub mod find;
 pub mod grep;
 pub mod ls;
 pub mod memory;
+pub mod output_filter;
 pub mod read;
 pub mod symbols;
 pub mod truncate;

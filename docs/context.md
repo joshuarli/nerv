@@ -8,7 +8,7 @@ transforms reduce token usage without losing information the model needs.
 ```
 AgentMessage[]
   → transform_context()    7 optimizations: strip thinking/orphans/denied args,
-                           truncate stale, supersede reads, compress bash, strip edit args
+                           truncate stale, supersede reads, bash output filters, strip edit args
   → context gate           circuit breaker for unexpected context growth
   → convert_to_llm()       AgentMessage → LlmMessage (merge consecutive same-role)
   → build_request_body()   LlmMessage → provider-specific JSON
@@ -65,17 +65,47 @@ path are marked as superseded. Error reads are preserved.
 **Savings**: 200-2k+ tokens per redundant read. In a typical mass-edit session
 with 8 redundant reads, saves ~4-8k tokens.
 
-### 6. Bash success pattern compression
+### 6. Bash output filter pipeline
 
-Successful bash tool results matching known patterns are compressed to a
-single summary line regardless of age:
-- `cargo check/build` with no errors → the `Finished ...` line only
-- `cargo test` with 0 failures → the `test result: ok. ...` line only
-- Python `unittest` with OK → the `Ran N tests ...` line only
-- `pytest` with no failures → the summary line only
-- `make` with nothing to do → the `Nothing to be done` line
+Every bash `ToolResult` passes through `tools::output_filter::filter_bash_output`
+before entering the context. This is a four-stage pipeline:
 
-**Savings**: 100-2k tokens per successful build/test output.
+1. **ANSI strip** — removes all escape sequences. Returns `Cow::Borrowed`
+   (zero allocation) when the input contains no escape codes.
+2. **Line dedup** — collapses runs of ≥3 identical consecutive lines to
+   `line (×N)`. Returns `Cow::Borrowed` when no run is present.
+3. **JSON schema** — if the output is a large JSON blob (>500 chars, valid
+   JSON object/array), replaces it with a key/type skeleton. Useful when
+   the model calls an API and gets a huge response back.
+4. **Language filter** — command-aware compression for known test runners
+   and build tools. Routing is two-tier:
+   - *Command-based*: substring match on the command string.
+   - *Heuristic fallback*: content-signal match for commands that wrap
+     known tools (e.g. `make test` running `cargo test` internally).
+
+   | Command pattern | Filter |
+   |---|---|
+   | `cargo test` | `rust::filter_cargo_test` |
+   | `cargo build/check/clippy` | `rust::filter_cargo_build` |
+   | `go test` | `go::filter_go_test` |
+   | `pytest`, `py.test` | `python::filter_pytest` |
+   | `python -m unittest` | `python::filter_unittest` |
+   | `jest` | `ts::filter_jest` |
+   | `vitest` | `ts::filter_jest` |
+
+   Heuristic signals (content-based, fires when no command match):
+   - First line matches `{"Action":` → Go JSON test output
+   - Output contains `test result:` → cargo test
+   - Output contains `Compiling ` or `error[E` → cargo build
+   - Output contains `test session starts` → pytest
+   - Any line starts with `PASS ` or `FAIL ` → jest/vitest
+
+Each language filter returns `None` (pass-through) when it recognises
+no content to compress, so unrecognised output is never mangled.
+
+**Savings**: 100–2k tokens per successful build/test output. On error,
+filters extract just the relevant failures/errors, discarding progress
+noise and unrelated stdout.
 
 ### 7. Strip stale edit/write arguments
 
