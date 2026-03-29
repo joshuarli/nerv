@@ -34,7 +34,7 @@ impl Default for CompactionSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            threshold_pct: 0.50,
+            threshold_pct: 0.80,
             keep_recent_tokens: 20_000,
             verbatim_window_tokens: 5_000,
         }
