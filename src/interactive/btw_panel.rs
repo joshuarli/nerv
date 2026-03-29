@@ -17,6 +17,7 @@ use crate::tui::tui::Component;
 pub enum BtwChunk {
     Text(String),
     Error(String),
+    Usage(crate::agent::types::Usage),
     Done,
 }
 
@@ -29,6 +30,7 @@ const MIN_PANEL_LINES: usize = 3;
 const MAX_CONTENT_LINES: usize = 12;
 
 pub struct BtwPanel {
+    usage: crate::agent::types::Usage,
     /// The original question shown in the panel header.
     pub note: String,
     /// Accumulated response text.
@@ -41,10 +43,19 @@ pub struct BtwPanel {
     pub rx: channel::Receiver<BtwChunk>,
     /// Used to cancel the background stream if the panel is dismissed early.
     cancel: CancelFlag,
+    /// Accumulated cost for this btw call.
+    cost: crate::agent::types::Cost,
+    /// Pricing table for the model used (needed to compute cost from Usage).
+    pricing: crate::agent::types::ModelPricing,
 }
 
 impl BtwPanel {
-    pub fn new(note: String, rx: channel::Receiver<BtwChunk>, cancel: CancelFlag) -> Self {
+    pub fn new(
+        note: String,
+        rx: channel::Receiver<BtwChunk>,
+        cancel: CancelFlag,
+        pricing: crate::agent::types::ModelPricing,
+    ) -> Self {
         Self {
             note,
             response: String::new(),
@@ -52,6 +63,9 @@ impl BtwPanel {
             error: None,
             rx,
             cancel,
+            cost: crate::agent::types::Cost::default(),
+            usage: crate::agent::types::Usage { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+            pricing,
         }
     }
 
@@ -68,6 +82,14 @@ impl BtwPanel {
                 Ok(BtwChunk::Error(e)) => {
                     self.error = Some(e);
                     self.done = true;
+                    changed = true;
+                }
+                Ok(BtwChunk::Usage(u)) => {
+                    self.usage.input = self.usage.input.saturating_add(u.input);
+                    self.usage.output = self.usage.output.saturating_add(u.output);
+                    self.usage.cache_read = self.usage.cache_read.saturating_add(u.cache_read);
+                    self.usage.cache_write = self.usage.cache_write.saturating_add(u.cache_write);
+                    self.cost.add_usage(&u, &self.pricing);
                     changed = true;
                 }
                 Ok(BtwChunk::Done) => {
@@ -153,13 +175,33 @@ impl Component for BtwPanel {
         }
 
         // ── bottom border ─────────────────────────────────────────────────
-        let hint = if self.done { " ↵ dismiss " } else { "" };
-        let bottom_dashes = w.saturating_sub(hint.len() + 2);
+        let stats_str = if self.usage.input > 0 || self.usage.output > 0 {
+            let mut s = String::from(" ");
+            if self.usage.cache_read > 0 {
+                s.push_str(&format!("Rc{} ", fmt_tok(self.usage.cache_read)));
+            }
+            if self.usage.cache_write > 0 {
+                s.push_str(&format!("Wc{} ", fmt_tok(self.usage.cache_write)));
+            }
+            s.push_str(&format!("in{} out{}", fmt_tok(self.usage.input), fmt_tok(self.usage.output)));
+            if self.cost.total > 0.0 {
+                s.push_str(&format!(" ${}", fmt_cost(self.cost.total)));
+            }
+            s.push(' ');
+            s
+        } else {
+            String::new()
+        };
+        let dismiss = if self.done { " ↵ dismiss " } else { "" };
+        // stats on the left of the dashes, dismiss hint on the right
+        let fixed = stats_str.chars().count() + dismiss.len() + 2; // 2 for ╰ ╯
+        let bottom_dashes = w.saturating_sub(fixed);
         lines.push(format!(
-            "{}╰{}{}╯{}",
+            "{}╰{}{}{}╯{}",
             theme::ACCENT,
+            stats_str,
             "─".repeat(bottom_dashes),
-            hint,
+            dismiss,
             theme::RESET,
         ));
 
@@ -171,6 +213,28 @@ impl Component for BtwPanel {
 
 /// Wrap `text` to at most `max_chars` visible characters per line, splitting on
 /// word boundaries.  Handles `\n` in the source text.
+fn fmt_tok(count: u32) -> String {
+    if count < 1_000 {
+        count.to_string()
+    } else if count < 10_000 {
+        format!("{:.1}k", count as f64 / 1_000.0)
+    } else if count < 1_000_000 {
+        format!("{}k", count / 1_000)
+    } else {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
+    }
+}
+
+fn fmt_cost(dollars: f64) -> String {
+    if dollars < 0.01 {
+        format!("{:.4}", dollars)
+    } else if dollars < 1.0 {
+        format!("{:.3}", dollars)
+    } else {
+        format!("{:.2}", dollars)
+    }
+}
+
 fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
     if max_chars == 0 {
         return vec![];
@@ -228,12 +292,13 @@ pub fn spawn_btw(
     let cancel = new_cancel_flag();
     let cancel2 = cancel.clone();
     let note2 = note.clone();
+    let pricing = model.pricing.clone();
 
     std::thread::spawn(move || {
         stream_btw(messages, system_prompt, tools, model, provider_registry, note2, tx, cancel2);
     });
 
-    BtwPanel::new(note, rx, cancel)
+    BtwPanel::new(note, rx, cancel, pricing)
 }
 
 fn stream_btw(
@@ -273,6 +338,9 @@ fn stream_btw(
         &move |event| match event {
             AgentEvent::MessageUpdate { delta: StreamDelta::Text(text) } => {
                 let _ = tx2.send(BtwChunk::Text(text));
+            }
+            AgentEvent::UsageUpdate { usage } => {
+                let _ = tx2.send(BtwChunk::Usage(usage));
             }
             AgentEvent::AgentEnd { .. } => {
                 let _ = tx2.send(BtwChunk::Done);
