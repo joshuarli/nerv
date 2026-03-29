@@ -1,4 +1,4 @@
-/// Output filters for Python test runners: pytest and unittest.
+//! Output filters for Python test runners: pytest and unittest.
 
 /// Try to compress pytest output.
 /// Returns Some(summary) if recognisably a pytest run.
@@ -19,10 +19,10 @@ pub fn filter_pytest(text: &str) -> Option<String> {
     });
 
     // All passing
-    if let Some(sum) = summary {
-        if !sum.contains("failed") && !sum.contains("error") {
-            return Some(sum.trim().to_string());
-        }
+    if let Some(sum) = summary
+        && !sum.contains("failed") && !sum.contains("error")
+    {
+        return Some(sum.trim().to_string());
     }
 
     // Partial/full failure — extract failure sections

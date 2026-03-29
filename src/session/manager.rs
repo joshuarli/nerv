@@ -189,7 +189,7 @@ impl SessionManager {
         let entry_id = entry.id().to_string();
         let parent_id = entry.parent_id().map(|s| s.to_string());
 
-        let result = {
+        let _result = {
             let tx = self.db.transaction()?;
             let r = Self::append_entry_inner_tx(
                 &tx,
@@ -234,20 +234,21 @@ impl SessionManager {
         )?;
 
         // Index searchable text in FTS5
-        if let Some((text, role)) = extract_searchable_text(entry) {
-            if !text.is_empty() {
-                tx.execute(
-                    "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?1, ?2, ?3, ?4)",
-                    params![text, session_id, entry_id, role],
-                )?;
-            }
+        if let Some((text, role)) = extract_searchable_text(entry)
+            && !text.is_empty()
+        {
+            tx.execute(
+                "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?1, ?2, ?3, ?4)",
+                params![text, session_id, entry_id, role],
+            )?;
         }
 
         // Update session timestamp (and preview on first message) in one statement
         let now = now_iso();
-        if is_first {
-            if let SessionEntry::Message(me) = entry {
-                if let AgentMessage::User { content, .. } = &me.message {
+        if is_first
+            && let SessionEntry::Message(me) = entry
+            && let AgentMessage::User { content, .. } = &me.message
+        {
                     let preview: String = content
                         .iter()
                         .filter_map(|c| match c {
@@ -264,8 +265,6 @@ impl SessionManager {
                         params![now, preview, session_id],
                     )?;
                     return Ok(());
-                }
-            }
         }
         tx.execute("UPDATE sessions SET updated_at = ?1 WHERE id = ?2", params![now, session_id])?;
 
@@ -448,13 +447,13 @@ impl SessionManager {
         let mut total_output: u64 = 0;
         let mut api_calls: u32 = 0;
         for e in branch.iter() {
-            if let SessionEntry::Message(me) = e {
-                if let Some(t) = &me.tokens {
-                    cost_usd += t.cost_usd;
-                    total_input += t.input as u64;
-                    total_output += t.output as u64;
-                    api_calls += 1;
-                }
+            if let SessionEntry::Message(me) = e
+                && let Some(t) = &me.tokens
+            {
+                cost_usd += t.cost_usd;
+                total_input += t.input as u64;
+                total_output += t.output as u64;
+                api_calls += 1;
             }
         }
 
@@ -635,15 +634,15 @@ impl SessionManager {
 
     /// Save per-session config overrides to the DB.
     pub fn set_session_config(&self, config: &SessionConfig) {
-        if let Some(ref sid) = self.session_id {
-            if let Ok(json) = serde_json::to_string(config) {
-                self.db
-                    .execute(
-                        "UPDATE sessions SET session_config = ?1 WHERE id = ?2",
-                        params![json, sid],
-                    )
-                    .ok();
-            }
+        if let Some(ref sid) = self.session_id
+            && let Ok(json) = serde_json::to_string(config)
+        {
+            self.db
+                .execute(
+                    "UPDATE sessions SET session_config = ?1 WHERE id = ?2",
+                    params![json, sid],
+                )
+                .ok();
         }
     }
 
@@ -1306,16 +1305,15 @@ fn backfill_search_index(db: &Connection) {
             Err(_) => return,
         };
     for (entry_id, session_id, data) in rows {
-        if let Ok(entry) = serde_json::from_str::<SessionEntry>(&data) {
-            if let Some((text, role)) = extract_searchable_text(&entry) {
-                if !text.is_empty() {
-                    db.execute(
-                        "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?1, ?2, ?3, ?4)",
-                        params![text, session_id, entry_id, role],
-                    )
-                    .ok();
-                }
-            }
+        if let Ok(entry) = serde_json::from_str::<SessionEntry>(&data)
+            && let Some((text, role)) = extract_searchable_text(&entry)
+            && !text.is_empty()
+        {
+            db.execute(
+                "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?1, ?2, ?3, ?4)",
+                params![text, session_id, entry_id, role],
+            )
+            .ok();
         }
     }
     db.execute_batch("COMMIT").ok();

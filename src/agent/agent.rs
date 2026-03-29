@@ -452,7 +452,7 @@ impl Agent {
                     } = &e
                     {
                         // Anthropic told us exactly how long to wait; honour it.
-                        (*ms + 999) / 1000
+                        (*ms).div_ceil(1000)
                     } else {
                         BACKOFF_SECS[attempt as usize]
                     };
@@ -568,9 +568,10 @@ impl Agent {
         // Output gate: fires after bash executes (bash.rs has already applied
         // output_filter and stripped truncate_tail). The gate sees the final
         // byte count that will actually enter context.
-        if name == "bash" && !result.is_error {
-            if let Some(ref gate_fn) = self.state.output_gate_fn {
-                if result.content.len() > OUTPUT_GATE_THRESHOLD_BYTES {
+        if name == "bash" && !result.is_error
+            && let Some(ref gate_fn) = self.state.output_gate_fn
+            && result.content.len() > OUTPUT_GATE_THRESHOLD_BYTES
+        {
                     let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
                     let line_count = result.content.lines().count();
                     let estimated_tokens = result.content.len() / 4;
@@ -592,14 +593,12 @@ impl Agent {
                         );
                         result = ToolResult { content: hint, details: None, is_error: true };
                     }
-                }
-            }
         }
 
-        if !result.is_error {
-            if let Some(hook) = &self.state.post_tool_fn {
-                hook(name, args);
-            }
+        if !result.is_error
+            && let Some(hook) = &self.state.post_tool_fn
+        {
+            hook(name, args);
         }
 
         let display = result

@@ -108,9 +108,8 @@ pub fn find_repo_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
 /// directories, empty repos, or git unavailable).  Callers must handle both
 /// cases — the directory is created if it does not yet exist.
 pub fn repo_data_dir(cwd: &std::path::Path) -> std::path::PathBuf {
-    let dir = find_repo_root(cwd)
+    find_repo_root(cwd)
         .and_then(|root| repo_fingerprint(&root))
         .map(|fpr| nerv_dir().join("repos").join(fpr))
-        .unwrap_or_else(|| nerv_dir().to_path_buf());
-    dir
+        .unwrap_or_else(|| nerv_dir().to_path_buf())
 }

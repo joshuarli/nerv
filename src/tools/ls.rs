@@ -15,10 +15,10 @@ impl LsTool {
     }
     fn resolve_path(&self, path: &str) -> PathBuf {
         // Expand ~ at the start of the path
-        if let Some(rest) = path.strip_prefix('~') {
-            if let Some(home) = crate::home_dir() {
-                return home.join(rest.trim_start_matches('/'));
-            }
+        if let Some(rest) = path.strip_prefix('~')
+            && let Some(home) = crate::home_dir()
+        {
+            return home.join(rest.trim_start_matches('/'));
         }
         if path.starts_with('/') { PathBuf::from(path) } else { self.cwd.join(path) }
     }
@@ -90,6 +90,56 @@ fn render_dir(
             let child_prefix = format!("{}{}", prefix, if last { "    " } else { "│   " });
             render_dir(&path, &child_prefix, current_depth + 1, max_depth, out, entry_count);
         }
+    }
+}
+
+impl AgentTool for LsTool {
+    fn name(&self) -> &str {
+        "ls"
+    }
+    fn description(&self) -> &str {
+        "List directory contents as a tree."
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Directory to list (default: cwd)"},
+                "depth": {"type": "integer", "description": "Max depth to recurse (default: 2, max: 5)"}
+            },
+            "required": [],
+            "additionalProperties": false
+        })
+    }
+    fn validate(&self, _input: &serde_json::Value) -> Result<(), ToolError> {
+        Ok(())
+    }
+    fn execute(
+        &self,
+        input: serde_json::Value,
+        _update: UpdateCallback,
+        _cancel: &CancelFlag,
+    ) -> ToolResult {
+        let path_str = input["path"].as_str().unwrap_or(".");
+        let resolved = self.resolve_path(path_str);
+        let depth = input["depth"]
+            .as_u64()
+            .map(|d| (d as usize).clamp(1, MAX_DEPTH))
+            .unwrap_or(DEFAULT_DEPTH);
+
+        if !resolved.exists() {
+            return ToolResult::error(format!("path not found: {}", resolved.display()));
+        }
+        if !resolved.is_dir() {
+            return ToolResult::error(format!("not a directory: {}", resolved.display()));
+        }
+
+        let mut content = String::new();
+        let mut entry_count = 0usize;
+        render_tree(&resolved, depth, &mut content, &mut entry_count);
+
+        let display = format!("{} ({} entries)", path_str, entry_count);
+        ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
     }
 }
 
@@ -206,55 +256,5 @@ mod tests {
         let result =
             tool.execute(serde_json::json!({"path": "/nonexistent_path_xyz"}), cb, &cancel);
         assert!(result.content.contains("not found") || result.content.contains("error"));
-    }
-}
-
-impl AgentTool for LsTool {
-    fn name(&self) -> &str {
-        "ls"
-    }
-    fn description(&self) -> &str {
-        "List directory contents as a tree."
-    }
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Directory to list (default: cwd)"},
-                "depth": {"type": "integer", "description": "Max depth to recurse (default: 2, max: 5)"}
-            },
-            "required": [],
-            "additionalProperties": false
-        })
-    }
-    fn validate(&self, _input: &serde_json::Value) -> Result<(), ToolError> {
-        Ok(())
-    }
-    fn execute(
-        &self,
-        input: serde_json::Value,
-        _update: UpdateCallback,
-        _cancel: &CancelFlag,
-    ) -> ToolResult {
-        let path_str = input["path"].as_str().unwrap_or(".");
-        let resolved = self.resolve_path(path_str);
-        let depth = input["depth"]
-            .as_u64()
-            .map(|d| (d as usize).clamp(1, MAX_DEPTH))
-            .unwrap_or(DEFAULT_DEPTH);
-
-        if !resolved.exists() {
-            return ToolResult::error(format!("path not found: {}", resolved.display()));
-        }
-        if !resolved.is_dir() {
-            return ToolResult::error(format!("not a directory: {}", resolved.display()));
-        }
-
-        let mut content = String::new();
-        let mut entry_count = 0usize;
-        render_tree(&resolved, depth, &mut content, &mut entry_count);
-
-        let display = format!("{} ({} entries)", path_str, entry_count);
-        ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
     }
 }

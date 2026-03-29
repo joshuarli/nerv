@@ -109,8 +109,8 @@ impl NervConfig {
 
         if let (Ok(mut merged), Ok(user)) =
             (serde_json::to_value(Self::default()), serde_json::to_value(&existing))
+            && let (Some(merged_obj), Some(user_obj)) = (merged.as_object_mut(), user.as_object())
         {
-            if let (Some(merged_obj), Some(user_obj)) = (merged.as_object_mut(), user.as_object()) {
                 // Overwrite each default key with the user's value.
                 for (k, v) in user_obj {
                     merged_obj.insert(k.clone(), v.clone());
@@ -121,7 +121,6 @@ impl NervConfig {
                 if needs_write {
                     let _ = write_json(&path, &merged);
                 }
-            }
         }
 
         existing
@@ -145,15 +144,15 @@ impl NervConfig {
                 None
             }
         };
-        if let Some(ref id) = self.compaction_model {
-            if let Some(w) = check("compaction_model", id) {
-                warnings.push(w);
-            }
+        if let Some(ref id) = self.compaction_model
+            && let Some(w) = check("compaction_model", id)
+        {
+            warnings.push(w);
         }
-        if let Some(ref id) = self.default_model {
-            if let Some(w) = check("default_model", id) {
-                warnings.push(w);
-            }
+        if let Some(ref id) = self.default_model
+            && let Some(w) = check("default_model", id)
+        {
+            warnings.push(w);
         }
         warnings
     }

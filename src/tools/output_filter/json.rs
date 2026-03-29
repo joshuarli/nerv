@@ -1,10 +1,10 @@
-/// JSON schema extractor for large JSON outputs.
-///
-/// When a bash command produces a large JSON blob (e.g. `cat data.json` or
-/// `curl ... | python -m json.tool`), replace the values with their types
-/// so the LLM can understand the schema without reading thousands of tokens.
-///
-/// Threshold: only activates for outputs over `MIN_CHARS` characters.
+//! JSON schema extractor for large JSON outputs.
+//!
+//! When a bash command produces a large JSON blob (e.g. `cat data.json` or
+//! `curl ... | python -m json.tool`), replace the values with their types
+//! so the LLM can understand the schema without reading thousands of tokens.
+//!
+//! Threshold: only activates for outputs over `MIN_CHARS` characters.
 
 const MIN_CHARS: usize = 2_000;
 /// Maximum depth to expand before collapsing to "{ ... }"
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn empty_object_renders() {
-        let text = format!("{{}} {}", "x".repeat(MIN_CHARS));
+        let _text = format!("{{}} {}", "x".repeat(MIN_CHARS));
         // Won't parse as valid JSON because of trailing text, so returns None — that's
         // fine. Test the render_schema path for empty object directly.
         let v = serde_json::json!({});

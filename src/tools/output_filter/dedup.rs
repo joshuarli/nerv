@@ -6,7 +6,7 @@
 /// Writes directly into a pre-allocated `String` to avoid the intermediate
 /// `Vec<String>` + `join` that the naive approach uses.  Returns
 /// `Cow::Borrowed` when the input needs no changes (common fast path).
-pub fn dedup_lines(text: &str) -> std::borrow::Cow<str> {
+pub fn dedup_lines(text: &str) -> std::borrow::Cow<'_, str> {
     // Fast path: scan for any 3+ run before touching the allocator.
     if !has_dedup_run(text) {
         return std::borrow::Cow::Borrowed(text);

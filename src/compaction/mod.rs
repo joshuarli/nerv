@@ -45,7 +45,7 @@ impl Default for CompactionSettings {
 /// Approximate but fast — the authoritative count always comes from the API
 /// usage response.
 pub fn count_tokens(text: &str) -> usize {
-    (text.chars().count() + 3) / 4
+    text.chars().count().div_ceil(4)
 }
 
 /// Estimate tokens for an AgentMessage.

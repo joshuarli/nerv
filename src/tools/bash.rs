@@ -129,11 +129,11 @@ impl AgentTool for BashTool {
                 }
             }
         }
-        if let Some(stderr_buf) = stderr_thread.and_then(|t| t.join().ok()) {
-            if !stderr_buf.is_empty() {
-                output.extend_from_slice(b"\n[stderr]\n");
-                output.extend_from_slice(&stderr_buf);
-            }
+        if let Some(stderr_buf) = stderr_thread.and_then(|t| t.join().ok())
+            && !stderr_buf.is_empty()
+        {
+            output.extend_from_slice(b"\n[stderr]\n");
+            output.extend_from_slice(&stderr_buf);
         }
 
         let status = child.wait().ok();

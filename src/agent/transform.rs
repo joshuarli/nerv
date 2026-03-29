@@ -161,10 +161,10 @@ impl MessageMeta {
                 for block in &a.content {
                     if let ContentBlock::ToolCall { id, name, arguments } = block {
                         tool_names.insert(id.clone(), name.clone());
-                        if name == "bash" {
-                            if let Some(cmd) = arguments.get("command").and_then(|v| v.as_str()) {
-                                bash_commands.insert(id.clone(), cmd.to_string());
-                            }
+                        if name == "bash"
+                            && let Some(cmd) = arguments.get("command").and_then(|v| v.as_str())
+                        {
+                            bash_commands.insert(id.clone(), cmd.to_string());
                         }
                     }
                 }
@@ -372,19 +372,19 @@ fn transform_tool_result(
     }
 
     // Stale read with referenced lines → fold unreferenced ranges
-    if tool_name == Some("read") {
-        if let Some(refs) = meta.read_referenced_lines.get(&tool_call_id) {
-            let text = content_text(&content);
-            let folded = fold_read_result(&text, refs);
-            return Some(AgentMessage::ToolResult {
-                tool_call_id,
-                content: vec![ContentItem::Text { text: folded }],
-                is_error,
-                display: None,
-                details: None,
-                timestamp,
-            });
-        }
+    if tool_name == Some("read")
+        && let Some(refs) = meta.read_referenced_lines.get(&tool_call_id)
+    {
+        let text = content_text(&content);
+        let folded = fold_read_result(&text, refs);
+        return Some(AgentMessage::ToolResult {
+            tool_call_id,
+            content: vec![ContentItem::Text { text: folded }],
+            is_error,
+            display: None,
+            details: None,
+            timestamp,
+        });
     }
 
     // Stale generic → truncate
@@ -450,12 +450,11 @@ fn find_read_referenced_lines(
     for (i, msg) in messages.iter().enumerate() {
         if let AgentMessage::Assistant(a) = msg {
             for block in &a.content {
-                if let ContentBlock::ToolCall { id, name, arguments, .. } = block {
-                    if name == "read" {
-                        if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
-                            reads.push((i, id.clone(), path.to_string()));
-                        }
-                    }
+                if let ContentBlock::ToolCall { id, name, arguments, .. } = block
+                    && name == "read"
+                    && let Some(path) = arguments.get("path").and_then(|v| v.as_str())
+                {
+                    reads.push((i, id.clone(), path.to_string()));
                 }
             }
         }
@@ -497,34 +496,34 @@ fn find_read_referenced_lines(
         for msg in &messages[*read_idx + 1..] {
             if let AgentMessage::Assistant(a) = msg {
                 for block in &a.content {
-                    if let ContentBlock::ToolCall { name, arguments, .. } = block {
-                        if name == "edit" {
-                            let edit_path =
-                                arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                            if edit_path != read_path {
+                    if let ContentBlock::ToolCall { name, arguments, .. } = block
+                        && name == "edit"
+                    {
+                        let edit_path =
+                            arguments.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                        if edit_path != read_path {
+                            continue;
+                        }
+                        if let Some(old_str) =
+                            arguments.get("old_string").and_then(|v| v.as_str())
+                        {
+                            // Find which lines in the read match this old_string
+                            let old_lines: Vec<&str> = old_str.lines().collect();
+                            if old_lines.is_empty() {
                                 continue;
                             }
-                            if let Some(old_str) =
-                                arguments.get("old_string").and_then(|v| v.as_str())
+                            // Sliding window match over parsed_lines
+                            for window_start in
+                                0..parsed_lines.len().saturating_sub(old_lines.len() - 1)
                             {
-                                // Find which lines in the read match this old_string
-                                let old_lines: Vec<&str> = old_str.lines().collect();
-                                if old_lines.is_empty() {
-                                    continue;
-                                }
-                                // Sliding window match over parsed_lines
-                                for window_start in
-                                    0..parsed_lines.len().saturating_sub(old_lines.len() - 1)
-                                {
-                                    let matches = old_lines.iter().enumerate().all(|(j, ol)| {
-                                        window_start + j < parsed_lines.len()
-                                            && parsed_lines[window_start + j].1 == *ol
-                                    });
-                                    if matches {
-                                        let refs = result.entry(read_id.clone()).or_default();
-                                        for j in 0..old_lines.len() {
-                                            refs.insert(parsed_lines[window_start + j].0);
-                                        }
+                                let matches = old_lines.iter().enumerate().all(|(j, ol)| {
+                                    window_start + j < parsed_lines.len()
+                                        && parsed_lines[window_start + j].1 == *ol
+                                });
+                                if matches {
+                                    let refs = result.entry(read_id.clone()).or_default();
+                                    for j in 0..old_lines.len() {
+                                        refs.insert(parsed_lines[window_start + j].0);
                                     }
                                 }
                             }
@@ -1940,7 +1939,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
     fn stale_read_folds_unreferenced_lines() {
         // Build a read result with 50 numbered lines (matching read tool format)
         let read_content = (1..=50)
-            .map(|i| format!("{:>2}\t{}", i, format!("line {} content here", i)))
+            .map(|i| format!("{:>2}\t{}", i, format_args!("line {} content here", i)))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -1999,7 +1998,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         // A stale read with no subsequent edits on the same file should fall through
         // to normal summarize_tool_content behavior
         let read_content = (1..=50)
-            .map(|i| format!("{:>2}\t{}", i, format!("line {} stuff", i)))
+            .map(|i| format!("{:>2}\t{}", i, format_args!("line {} stuff", i)))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -2033,7 +2032,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
     fn stale_read_fold_preserves_context_around_referenced_lines() {
         // Verify that a few context lines around referenced lines are kept
         let read_content = (1..=40)
-            .map(|i| format!("{:>2}\t{}", i, format!("ctx line {}", i)))
+            .map(|i| format!("{:>2}\t{}", i, format_args!("ctx line {}", i)))
             .collect::<Vec<_>>()
             .join("\n");
 

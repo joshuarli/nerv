@@ -1,7 +1,7 @@
-/// Output filters for Go test runner (`go test`).
-///
-/// `go test -v` produces plain text; `go test -json` produces NDJSON events.
-/// We handle both formats.
+//! Output filters for Go test runner (`go test`).
+//!
+//! `go test -v` produces plain text; `go test -json` produces NDJSON events.
+//! We handle both formats.
 
 /// Try to compress `go test` output.
 /// Returns Some(summary) if recognisably a go test run.
@@ -145,18 +145,16 @@ fn filter_go_test_json(text: &str) -> Option<String> {
                         entry.current_output.clear();
                     }
                 }
-                "output" => {
-                    if !output.trim().is_empty() {
+                "output"
+                    if !output.trim().is_empty() => {
                         entry.current_output.push(output.trim_end_matches('\n').to_string());
                     }
-                }
-                "pass" => {
-                    if test.is_some() {
+                "pass"
+                    if test.is_some() => {
                         entry.passed += 1;
                         entry.current_test = None;
                         entry.current_output.clear();
                     }
-                }
                 "fail" => {
                     if let Some(t) = test {
                         entry.failed += 1;

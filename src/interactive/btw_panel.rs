@@ -303,6 +303,7 @@ pub fn spawn_btw(
     BtwPanel::new(note, rx, cancel, pricing)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stream_btw(
     messages: Vec<AgentMessage>,
     system_prompt: String,

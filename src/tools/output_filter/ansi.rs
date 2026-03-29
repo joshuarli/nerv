@@ -8,7 +8,7 @@
 ///
 /// Returns a `Cow::Borrowed` when the input contains no escape sequences or
 /// carriage returns, avoiding any allocation on the common clean-input path.
-pub fn strip_ansi(text: &str) -> std::borrow::Cow<str> {
+pub fn strip_ansi(text: &str) -> std::borrow::Cow<'_, str> {
     let bytes = text.as_bytes();
 
     // Fast path: scan for ESC or \r before touching an allocator.

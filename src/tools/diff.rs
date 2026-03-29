@@ -174,7 +174,7 @@ fn format_unified(edits: &[Edit], old_label: &str, new_label: &str, context: usi
             .filter(|e| matches!(e, Edit::Equal(_) | Edit::Insert(_)))
             .count();
 
-        let _ = write!(out, "@@ -{},{} +{},{} @@\n", old_start, old_count, new_start, new_count,);
+        let _ = writeln!(out, "@@ -{},{} +{},{} @@", old_start, old_count, new_start, new_count,);
 
         for e in &edits[start..end] {
             let (prefix, text) = match e {

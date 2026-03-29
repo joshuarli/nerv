@@ -182,6 +182,7 @@ No tool use.";
 /// - `AgentMessage::Assistant` rows have their `ContentBlock::ToolCall` blocks
 ///   removed; if no text/thinking remains, the message is dropped too.
 /// - `AgentMessage::User` rows are passed through unchanged.
+///
 /// Build a one-line description of a single tool call for context summaries.
 fn tool_call_summary(name: &str, args: &serde_json::Value) -> String {
     // Show the most useful argument for each tool so the model understands what

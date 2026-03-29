@@ -73,14 +73,12 @@ impl AgentTool for EditTool {
     fn normalize(&self, mut input: serde_json::Value) -> serde_json::Value {
         // Models sometimes emit `edits` as a JSON-encoded string instead of
         // a raw array (double-encoding). Detect and unwrap it.
-        if let Some(edits_val) = input.get("edits") {
-            if let Some(s) = edits_val.as_str() {
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s) {
-                    if parsed.is_array() {
-                        input["edits"] = parsed;
-                    }
-                }
-            }
+        if let Some(edits_val) = input.get("edits")
+            && let Some(s) = edits_val.as_str()
+            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s)
+            && parsed.is_array()
+        {
+            input["edits"] = parsed;
         }
         input
     }

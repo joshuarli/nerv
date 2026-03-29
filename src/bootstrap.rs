@@ -122,10 +122,10 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
                     } else {
                         project_root.join(path_str)
                     };
-                    if path.extension().is_some_and(|e| e == "rs") {
-                        if let Ok(mut index) = symbol_index.write() {
-                            index.index_file(&path);
-                        }
+                    if path.extension().is_some_and(|e| e == "rs")
+                        && let Ok(mut index) = symbol_index.write()
+                    {
+                        index.index_file(&path);
                     }
                 }
             }

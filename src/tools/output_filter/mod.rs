@@ -103,7 +103,7 @@ fn apply_language_filter(command: &str, text: &str) -> Option<String> {
     // Check for Go JSON *before* the generic JSON schema step in the outer
     // pipeline so NDJSON blobs are never handed to serde_json::from_str.
     // `go test -json` emits one {"Action":...} object per line.
-    if text.lines().next().map_or(false, |l| l.trim_start().starts_with("{\"Action\"")) {
+    if text.lines().next().is_some_and(|l| l.trim_start().starts_with("{\"Action\"")) {
         return go::filter_go_test(text);
     }
     if text.contains("test result:") {

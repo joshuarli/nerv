@@ -30,15 +30,15 @@ pub fn check_with_allowed_dirs(
     allowed_dirs: &[PathBuf],
 ) -> Permission {
     // If the user has granted a directory, auto-approve paths inside it.
-    if !allowed_dirs.is_empty() {
-        if let Some(path) = path_for_args(tool, args) {
-            let resolved = resolve_path(&path, repo_root);
-            let resolved = normalize_path(&resolved);
-            for dir in allowed_dirs {
-                let dir = normalize_path(dir);
-                if resolved.starts_with(&dir) {
-                    return Permission::Allow;
-                }
+    if !allowed_dirs.is_empty()
+        && let Some(path) = path_for_args(tool, args)
+    {
+        let resolved = resolve_path(&path, repo_root);
+        let resolved = normalize_path(&resolved);
+        for dir in allowed_dirs {
+            let dir = normalize_path(dir);
+            if resolved.starts_with(&dir) {
+                return Permission::Allow;
             }
         }
     }
@@ -225,7 +225,7 @@ fn extract_path_tokens(cmd: &str) -> Vec<String> {
     while let Some(c) = chars.next() {
         if c == '"' || c == '\'' {
             // Consume until matching closing quote (no escape handling needed)
-            while let Some(inner) = chars.next() {
+            for inner in chars.by_ref() {
                 if inner == c {
                     break;
                 }

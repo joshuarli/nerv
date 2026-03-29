@@ -141,10 +141,10 @@ impl SymbolCache {
     /// With a `repo_root`, this is relative to the root; otherwise it's the
     /// absolute path.
     fn cache_key<'a>(&self, path: &'a Path) -> std::borrow::Cow<'a, Path> {
-        if let Some(ref root) = self.repo_root {
-            if let Ok(rel) = path.strip_prefix(root) {
-                return std::borrow::Cow::Owned(rel.to_path_buf());
-            }
+        if let Some(ref root) = self.repo_root
+            && let Ok(rel) = path.strip_prefix(root)
+        {
+            return std::borrow::Cow::Owned(rel.to_path_buf());
         }
         std::borrow::Cow::Borrowed(path)
     }
@@ -257,6 +257,12 @@ const TS_QUERY: &str = r#"
         value: [(arrow_function) (function_expression)]) @definition.function)
 "#;
 
+impl Default for SymbolIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SymbolIndex {
     pub fn new() -> Self {
         Self::new_inner(None)
@@ -349,10 +355,10 @@ impl SymbolIndex {
     /// Prefer the two-phase pattern (see [`is_fresh`]) when holding an
     /// `RwLock<SymbolIndex>` to avoid taking a write lock on warm invocations.
     pub fn index_dir(&mut self, root: &Path) {
-        if let Some(last) = self.last_scan {
-            if last.elapsed() < SCAN_DEBOUNCE {
-                return;
-            }
+        if let Some(last) = self.last_scan
+            && last.elapsed() < SCAN_DEBOUNCE
+        {
+            return;
         }
         self.force_index_dir(root);
     }
@@ -370,20 +376,20 @@ impl SymbolIndex {
             }
         }
         for (path, mtime) in rs_files {
-            if let Some(entry) = self.files.get(&path) {
-                if entry.mtime == mtime {
-                    continue;
-                }
+            if let Some(entry) = self.files.get(&path)
+                && entry.mtime == mtime
+            {
+                continue;
             }
             let mtime_ms = mtime.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
             // Try the on-disk cache before running tree-sitter.
-            if let Some(ref cache) = self.cache {
-                if let Some(symbols) = cache.get(&path, mtime_ms) {
-                    // SQLite hit: symbols already cached — no need to read source at
-                    // all.  render() will read it on demand via fs::read_to_string.
-                    self.files.insert(path, FileEntry { mtime, symbols, source: None });
-                    continue;
-                }
+            if let Some(ref cache) = self.cache
+                && let Some(symbols) = cache.get(&path, mtime_ms)
+            {
+                // SQLite hit: symbols already cached — no need to read source at
+                // all.  render() will read it on demand via fs::read_to_string.
+                self.files.insert(path, FileEntry { mtime, symbols, source: None });
+                continue;
             }
             if let Ok(source) = std::fs::read_to_string(&path) {
                 let symbols = self.parse_symbols(&path, &source);
@@ -427,11 +433,11 @@ impl SymbolIndex {
         };
         let mtime_ms = mtime.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
         // Try cache first.
-        if let Some(ref cache) = self.cache {
-            if let Some(symbols) = cache.get(&canonical, mtime_ms) {
-                self.files.insert(canonical, FileEntry { mtime, symbols, source: None });
-                return;
-            }
+        if let Some(ref cache) = self.cache
+            && let Some(symbols) = cache.get(&canonical, mtime_ms)
+        {
+            self.files.insert(canonical, FileEntry { mtime, symbols, source: None });
+            return;
         }
         if let Ok(source) = std::fs::read_to_string(&canonical) {
             let symbols = self.parse_symbols(&canonical, &source);
@@ -446,6 +452,7 @@ impl SymbolIndex {
     fn parse_symbols(&mut self, path: &Path, source: &str) -> Vec<SymbolDef> {
         // Select language and query based on file extension.
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        #[allow(clippy::type_complexity)]
         let (lang, query_idx, find_parent): (
             tree_sitter::Language,
             usize,
@@ -682,20 +689,20 @@ fn collect_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
         .current_dir(root)
         .output();
 
-    if let Ok(o) = output {
-        if o.status.success() {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            return stdout
-                .lines()
-                .filter(|l| !l.is_empty())
-                .filter_map(|l| {
-                    let path = PathBuf::from(l);
-                    let path = path.canonicalize().unwrap_or(path);
-                    let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
-                    Some((path, mtime))
-                })
-                .collect();
-        }
+    if let Ok(o) = output
+        && o.status.success()
+    {
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        return stdout
+            .lines()
+            .filter(|l| !l.is_empty())
+            .filter_map(|l| {
+                let path = PathBuf::from(l);
+                let path = path.canonicalize().unwrap_or(path);
+                let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
+                Some((path, mtime))
+            })
+            .collect();
     }
 
     // Fallback: `git ls-files` also respects .gitignore.
@@ -706,20 +713,20 @@ fn collect_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
         .current_dir(root)
         .output();
 
-    if let Ok(o) = output {
-        if o.status.success() {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            return stdout
-                .lines()
-                .filter(|l| !l.is_empty())
-                .filter_map(|l| {
-                    let path = root.join(l);
-                    let path = path.canonicalize().unwrap_or(path);
-                    let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
-                    Some((path, mtime))
-                })
-                .collect();
-        }
+    if let Ok(o) = output
+        && o.status.success()
+    {
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        return stdout
+            .lines()
+            .filter(|l| !l.is_empty())
+            .filter_map(|l| {
+                let path = root.join(l);
+                let path = path.canonicalize().unwrap_or(path);
+                let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
+                Some((path, mtime))
+            })
+            .collect();
     }
 
     // Last resort: manual walk. Only skips obvious non-source dirs; does not
@@ -746,11 +753,10 @@ fn walk_dir_recursive(dir: &Path, out: &mut HashMap<PathBuf, SystemTime>) {
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| SOURCE_EXTENSIONS.contains(&e))
+            && let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified())
         {
-            if let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) {
-                let path = path.canonicalize().unwrap_or(path);
-                out.insert(path, mtime);
-            }
+            let path = path.canonicalize().unwrap_or(path);
+            out.insert(path, mtime);
         }
     }
 }

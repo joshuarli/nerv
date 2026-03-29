@@ -46,10 +46,10 @@ impl SymbolsTool {
     }
 
     fn resolve_path(&self, path: &str) -> PathBuf {
-        if let Some(rest) = path.strip_prefix('~') {
-            if let Some(home) = crate::home_dir() {
-                return home.join(rest.trim_start_matches('/'));
-            }
+        if let Some(rest) = path.strip_prefix('~')
+            && let Some(home) = crate::home_dir()
+        {
+            return home.join(rest.trim_start_matches('/'));
         }
         if path.starts_with('/') { PathBuf::from(path) } else { self.cwd.join(path) }
     }
@@ -217,23 +217,23 @@ fn find_doc_files(cwd: &std::path::Path) -> Vec<String> {
         .args(["ls-files", "--", "*.md"])
         .current_dir(cwd)
         .output();
-    if let Ok(out) = output {
-        if out.status.success() {
-            let mut files: Vec<String> =
-                String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_owned()).collect();
-            files.sort();
-            return files;
-        }
+    if let Ok(out) = output
+        && out.status.success()
+    {
+        let mut files: Vec<String> =
+            String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_owned()).collect();
+        files.sort();
+        return files;
     }
     // Outside a git repo (e.g. tests): fall back to rg.
     let output = std::process::Command::new("rg")
         .args(["--files", "--glob", "*.md", "--sort=path"])
         .current_dir(cwd)
         .output();
-    if let Ok(out) = output {
-        if out.status.success() {
-            return String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_owned()).collect();
-        }
+    if let Ok(out) = output
+        && out.status.success()
+    {
+        return String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_owned()).collect();
     }
     vec![]
 }

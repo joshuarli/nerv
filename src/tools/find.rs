@@ -15,10 +15,10 @@ impl FindTool {
     }
     fn resolve_path(&self, path: &str) -> String {
         // Expand ~ at the start of the path
-        if let Some(rest) = path.strip_prefix('~') {
-            if let Some(home) = crate::home_dir() {
-                return home.join(rest.trim_start_matches('/')).to_string_lossy().to_string();
-            }
+        if let Some(rest) = path.strip_prefix('~')
+            && let Some(home) = crate::home_dir()
+        {
+            return home.join(rest.trim_start_matches('/')).to_string_lossy().to_string();
         }
         if path.starts_with('/') {
             path.to_string()

@@ -73,48 +73,45 @@ impl AgentTool for ReadTool {
         let has_range = offset.is_some() || limit.is_some();
 
         // Mtime cache: if file unchanged since last read, check for dedup.
-        if let Ok(meta) = std::fs::metadata(&abs_path) {
-            if let Ok(mtime) = meta.modified() {
-                if let Ok(cache) = self.cache.lock() {
-                    if let Some(entry) = cache.get(&abs_path) {
-                        if entry.mtime == mtime {
-                            if !has_range {
-                                // Full re-read of unchanged file
-                                let msg = format!(
-                                    "[unchanged since last read: {} ({} lines)]",
-                                    path_str, entry.line_count
-                                );
-                                return ToolResult::ok_with_details(
-                                    msg,
-                                    serde_json::json!({"display": format!("{} (unchanged)", path_str)}),
-                                );
-                            }
-                            // Range dedup: if this range is fully covered by a previous read, skip.
-                            let req_start = offset.unwrap_or(1).max(1) - 1;
-                            let req_end = if let Some(lim) = limit {
-                                req_start + lim
-                            } else {
-                                entry.line_count
-                            };
-                            let covered = entry
-                                .ranges_served
-                                .iter()
-                                .any(|&(s, e)| s <= req_start && e >= req_end);
-                            if covered {
-                                let msg = format!(
-                                    "[already read {} lines {}-{} — use content from earlier in this conversation]",
-                                    path_str,
-                                    req_start + 1,
-                                    req_end
-                                );
-                                return ToolResult::ok_with_details(
-                                    msg,
-                                    serde_json::json!({"display": format!("{} (already read)", path_str)}),
-                                );
-                            }
-                        }
-                    }
-                }
+        if let Ok(meta) = std::fs::metadata(&abs_path)
+            && let Ok(mtime) = meta.modified()
+            && let Ok(cache) = self.cache.lock()
+            && let Some(entry) = cache.get(&abs_path)
+            && entry.mtime == mtime
+        {
+            if !has_range {
+                // Full re-read of unchanged file
+                let msg = format!(
+                    "[unchanged since last read: {} ({} lines)]",
+                    path_str, entry.line_count
+                );
+                return ToolResult::ok_with_details(
+                    msg,
+                    serde_json::json!({"display": format!("{} (unchanged)", path_str)}),
+                );
+            }
+            // Range dedup: if this range is fully covered by a previous read, skip.
+            let req_start = offset.unwrap_or(1).max(1) - 1;
+            let req_end = if let Some(lim) = limit {
+                req_start + lim
+            } else {
+                entry.line_count
+            };
+            let covered = entry
+                .ranges_served
+                .iter()
+                .any(|&(s, e)| s <= req_start && e >= req_end);
+            if covered {
+                let msg = format!(
+                    "[already read {} lines {}-{} \u{2014} use content from earlier in this conversation]",
+                    path_str,
+                    req_start + 1,
+                    req_end
+                );
+                return ToolResult::ok_with_details(
+                    msg,
+                    serde_json::json!({"display": format!("{} (already read)", path_str)}),
+                );
             }
         }
 
@@ -176,20 +173,19 @@ impl AgentTool for ReadTool {
                 };
 
                 // Update cache with total line count + range
-                if let Ok(meta) = std::fs::metadata(&abs_path) {
-                    if let Ok(mtime) = meta.modified() {
-                        if let Ok(mut cache) = self.cache.lock() {
-                            let range = (start, end);
-                            let entry = cache.entry(abs_path).or_insert_with(|| ReadCacheEntry {
-                                mtime,
-                                line_count: total_lines,
-                                ranges_served: Vec::new(),
-                            });
-                            entry.mtime = mtime;
-                            entry.line_count = total_lines;
-                            entry.ranges_served.push(range);
-                        }
-                    }
+                if let Ok(meta) = std::fs::metadata(&abs_path)
+                    && let Ok(mtime) = meta.modified()
+                    && let Ok(mut cache) = self.cache.lock()
+                {
+                    let range = (start, end);
+                    let entry = cache.entry(abs_path).or_insert_with(|| ReadCacheEntry {
+                        mtime,
+                        line_count: total_lines,
+                        ranges_served: Vec::new(),
+                    });
+                    entry.mtime = mtime;
+                    entry.line_count = total_lines;
+                    entry.ranges_served.push(range);
                 }
 
                 ToolResult::ok_with_details(content, serde_json::json!({"display": display}))

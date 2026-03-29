@@ -1,4 +1,4 @@
-/// Output filters for JavaScript/TypeScript test runners: Jest and Vitest.
+//! Output filters for JavaScript/TypeScript test runners: Jest and Vitest.
 
 /// Try to compress Jest or Vitest test output.
 /// Returns Some(summary) if recognisably a jest/vitest run.
@@ -26,10 +26,10 @@ fn filter_jest_output(text: &str) -> Option<String> {
     let tests_line = text.lines().find(|l| l.trim_start().starts_with("Tests:"));
 
     // All passing
-    if let (Some(s), Some(t)) = (suites_line, tests_line) {
-        if !s.contains("failed") && !t.contains("failed") {
-            return Some(format!("{}\n{}", s.trim(), t.trim()));
-        }
+    if let (Some(s), Some(t)) = (suites_line, tests_line)
+        && !s.contains("failed") && !t.contains("failed")
+    {
+        return Some(format!("{}\n{}", s.trim(), t.trim()));
     }
 
     // Failures: extract FAIL suite blocks
@@ -116,10 +116,10 @@ fn filter_vitest_output(text: &str) -> Option<String> {
             && (t.contains("passed") || t.contains("failed"))
     });
 
-    if let Some(sum) = summary {
-        if !sum.contains("failed") {
-            return Some(sum.trim().to_string());
-        }
+    if let Some(sum) = summary
+        && !sum.contains("failed")
+    {
+        return Some(sum.trim().to_string());
     }
 
     // Extract × failures

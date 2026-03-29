@@ -1436,8 +1436,8 @@ fn symbols_tool_no_results() {
 }
 
 fn codemap_tool(tmp: &TempDir) -> CodemapTool {
-    use std::sync::Mutex;
-    let index = Arc::new(Mutex::new(nerv::index::SymbolIndex::new()));
+    use std::sync::RwLock;
+    let index = Arc::new(RwLock::new(nerv::index::SymbolIndex::new()));
     CodemapTool::new(tmp.path().to_path_buf(), index)
 }
 

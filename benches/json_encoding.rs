@@ -105,6 +105,7 @@ fn make_conversation_with_tools(turns: usize) -> Vec<AgentMessage> {
             }],
             is_error: false,
             display: None,
+            details: None,
             timestamp: 3000 + i as u64,
         });
         messages.push(AgentMessage::Assistant(AssistantMessage {
