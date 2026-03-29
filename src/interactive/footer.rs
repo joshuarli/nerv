@@ -408,17 +408,30 @@ impl FooterComponent {
         self.api_calls += 1;
     }
 
-    /// Restore accumulated cost from a loaded session. Sets cost_input to the
-    /// full restored total (we don't have input/output split from legacy entries,
-    /// so we put everything in cost_input for display).
-    pub fn restore_cost(&mut self, total_usd: f64) {
-        self.cost_input = total_usd;
+    /// Restore all accumulated session stats (cost + token counts + API call count)
+    /// after a reset_context() call — used on SessionLoaded and post-compaction.
+    pub fn restore_stats(
+        &mut self,
+        cost_usd: f64,
+        total_input: u64,
+        total_output: u64,
+        api_calls: u32,
+    ) {
+        self.cost_input = cost_usd;
         self.cost_output = 0.0;
+        self.total_input = total_input;
+        self.total_output = total_output;
+        self.api_calls = api_calls;
     }
 
-    /// Return the total accumulated cost so far (input + output).
-    pub fn current_cost(&self) -> f64 {
-        self.cost_input + self.cost_output
+    /// Snapshot all accumulated stats for preservation across a reset_context() call.
+    pub fn snapshot_stats(&self) -> (f64, u64, u64, u32) {
+        (
+            self.cost_input + self.cost_output,
+            self.total_input,
+            self.total_output,
+            self.api_calls,
+        )
     }
 
     pub fn add_cost(&mut self, usage: &Usage, pricing: &ModelPricing) {

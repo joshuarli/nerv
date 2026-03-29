@@ -13,6 +13,12 @@ pub struct SessionContext {
     pub thinking_level: ThinkingLevel,
     /// Accumulated cost in USD across all API calls in this session branch.
     pub cost_usd: f64,
+    /// Total input tokens sent across all API calls in this session branch.
+    pub total_input: u64,
+    /// Total output tokens received across all API calls in this session branch.
+    pub total_output: u64,
+    /// Number of API calls made in this session branch.
+    pub api_calls: u32,
 }
 
 pub struct SessionManager {
@@ -447,14 +453,21 @@ impl SessionManager {
         let mut model: Option<(String, String)> = None;
         let mut thinking_level = ThinkingLevel::Off;
 
-        // Accumulate cost from all MessageEntry records in the branch.
-        let cost_usd: f64 = branch.iter().fold(0.0, |acc, e| {
+        // Accumulate cost and token counts from all MessageEntry records in the branch.
+        let mut cost_usd: f64 = 0.0;
+        let mut total_input: u64 = 0;
+        let mut total_output: u64 = 0;
+        let mut api_calls: u32 = 0;
+        for e in branch.iter() {
             if let SessionEntry::Message(me) = e {
-                acc + me.tokens.as_ref().map(|t| t.cost_usd).unwrap_or(0.0)
-            } else {
-                acc
+                if let Some(t) = &me.tokens {
+                    cost_usd += t.cost_usd;
+                    total_input += t.input as u64;
+                    total_output += t.output as u64;
+                    api_calls += 1;
+                }
             }
-        });
+        }
 
         let last_compact = branch.iter().enumerate().rev().find_map(|(i, e)| match e {
             SessionEntry::Compaction(c) => Some((i, c)),
@@ -511,6 +524,9 @@ impl SessionManager {
             model,
             thinking_level,
             cost_usd,
+            total_input,
+            total_output,
+            api_calls,
         }
     }
 

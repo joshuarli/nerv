@@ -273,7 +273,7 @@ impl InteractiveMode {
                     layout.footer.set_session_name(None);
                 }
             }
-            AgentSessionEvent::SessionLoaded { messages, cost_usd } => {
+            AgentSessionEvent::SessionLoaded { messages, cost_usd, total_input, total_output, api_calls } => {
                 // Dump full history to terminal scrollback
                 let mut scrollback = String::new();
                 for msg in &messages {
@@ -390,8 +390,8 @@ impl InteractiveMode {
                     .sum();
                 layout.footer.reset_context();
                 layout.footer.set_context_used(context_tokens as u32);
-                // Restore accumulated cost from the session DB (after reset_context clears it).
-                layout.footer.restore_cost(cost_usd);
+                // Restore accumulated stats from the session DB (after reset_context clears them).
+                layout.footer.restore_stats(cost_usd, total_input, total_output, api_calls);
 
                 self.status_message = if messages.is_empty() {
                     Some("New session started.".into())
@@ -532,14 +532,15 @@ impl InteractiveMode {
                     }
 
                     // Update footer context estimate from post-compaction messages.
-                    // Preserve the running cost total — reset_context() zeroes it.
-                    let prior_cost = layout.footer.current_cost();
+                    // Preserve all running stats — reset_context() zeroes them.
+                    let (prior_cost, prior_input, prior_output, prior_calls) =
+                        layout.footer.snapshot_stats();
                     let context_tokens: usize = messages
                         .iter()
                         .map(crate::compaction::estimate_tokens)
                         .sum();
                     layout.footer.reset_context();
-                    layout.footer.restore_cost(prior_cost);
+                    layout.footer.restore_stats(prior_cost, prior_input, prior_output, prior_calls);
                     layout.footer.set_context_used(context_tokens as u32);
 
                     tui.request_render(true); // full redraw — context replaced
