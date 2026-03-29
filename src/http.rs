@@ -1,4 +1,9 @@
 //! Shared HTTP client with TLS configured correctly.
+//!
+//! Uses native-tls (SecureTransport on macOS, OpenSSL on Linux), which
+//! delegates certificate trust to the system CA store. The `native-tls`
+//! feature also pulls in `webpki-root-certs` as a fallback root store —
+//! there's no supported way to drop that without forking ureq's connector.
 
 use std::sync::OnceLock;
 
@@ -14,7 +19,7 @@ pub fn agent() -> &'static ureq::Agent {
         ureq::Agent::config_builder()
             .tls_config(tls)
             .http_status_as_error(false)
-            .user_agent("claude-cli/1.0.0")
+            .user_agent("nerv/1.0.0")
             .build()
             .new_agent()
     })
