@@ -307,8 +307,9 @@ fn transform_tool_result(
         tool_call_id,
         content,
         is_error,
+        display,
+        details,
         timestamp,
-        ..
     } = msg
     else {
         return Some(msg);
@@ -343,12 +344,18 @@ fn transform_tool_result(
         let command = meta.bash_commands.get(&tool_call_id).map(|s| s.as_str()).unwrap_or("");
         let filtered = output_filter::filter_bash_output(command, &raw);
         if filtered != raw.as_str() {
+            // Rebuild, preserving display (used by TUI renderer) and marking
+            // filtered:true so subsequent transform_context calls are idempotent.
+            let new_details = match details {
+                Some(mut d) => { d["filtered"] = serde_json::json!(true); Some(d) }
+                None => Some(serde_json::json!({"filtered": true})),
+            };
             return Some(AgentMessage::ToolResult {
                 tool_call_id,
                 content: vec![ContentItem::Text { text: filtered.into_owned() }],
                 is_error: false,
-                display: None,
-                details: None,
+                display,
+                details: new_details,
                 timestamp,
             });
         }
@@ -2196,5 +2203,41 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         // The dedup filter should have collapsed the duplicate lines.
         assert_ne!(out_text, content, "unfiltered result should be filtered by transform_context");
         assert!(out_text.len() < content.len(), "dedup should have shortened the output");
+    }
+
+    /// When transform_context filters an unfiltered bash result, it should:
+    ///   1. Preserve the `display` field (used by TUI renderer)
+    ///   2. Set `details["filtered"] = true` so subsequent calls are idempotent
+    #[test]
+    fn filter_in_transform_preserves_display_and_sets_filtered_flag() {
+        let content = "line\nline\nline\nline\nline\n";
+        let msgs = vec![
+            assistant_tool_call("c1", "bash", serde_json::json!({"command": "echo line"})),
+            AgentMessage::ToolResult {
+                tool_call_id: "c1".into(),
+                content: vec![ContentItem::Text { text: content.into() }],
+                is_error: false,
+                display: Some("line\nline\n  ... (5 lines)".into()), // set by bash.rs
+                details: None, // simulate old session without filtered flag
+                timestamp: 0,
+            },
+            AgentMessage::Assistant(AssistantMessage {
+                content: vec![ContentBlock::Text { text: "done".into() }],
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+                timestamp: 1,
+            }),
+        ];
+        let result = transform_context(msgs, 200_000, None);
+        let tool_msg = result.iter().find(|m| matches!(m, AgentMessage::ToolResult { .. })).unwrap();
+        let AgentMessage::ToolResult { display, details, .. } = tool_msg else { panic!() };
+        // display should survive the rewrite
+        assert!(display.is_some(), "display field should be preserved after filtering");
+        // details should now have filtered:true so the next transform call skips this
+        let filtered_flag = details.as_ref()
+            .and_then(|d| d.get("filtered"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        assert!(filtered_flag, "details[\"filtered\"] should be true after transform_context filters");
     }
 }

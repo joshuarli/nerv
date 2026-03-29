@@ -612,14 +612,14 @@ impl Agent {
                     };
                     if matches!(gate_fn(info), OutputGateDecision::Deny) {
                         let hint = format!(
-                            "[output-too-large: {} lines / ~{}k tokens]\n\
+                            "[output-too-large: {} lines / ~{} tokens]\n\
                              Command: {}\n\
                              Output was too large to include in context. Options:\n\
                              - Pipe through grep/awk/sed to filter first: <cmd> | grep pattern\n\
                              - Redirect to a file and use the read tool with offset/limit\n\
                              - Use a more targeted command",
                             line_count,
-                            estimated_tokens / 1000,
+                            estimated_tokens,
                             command
                         );
                         result = ToolResult {
