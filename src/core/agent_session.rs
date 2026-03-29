@@ -76,6 +76,12 @@ pub enum AgentSessionEvent {
         messages: Vec<AgentMessage>,
         /// Accumulated cost in USD for this session (restored from DB on load).
         cost_usd: f64,
+        /// Total input tokens sent across all API calls (restored from DB).
+        total_input: u64,
+        /// Total output tokens received across all API calls (restored from DB).
+        total_output: u64,
+        /// Number of API calls made in this session (restored from DB).
+        api_calls: u32,
     },
     /// A worktree was created (via /wt). UI should update cwd display.
     WorktreeCreated {
@@ -780,6 +786,9 @@ impl AgentSession {
                 // Extract fields we need for deferred use before partial moves of ctx.
                 let full_history = ctx.full_history;
                 let cost_usd = ctx.cost_usd;
+                let total_input = ctx.total_input;
+                let total_output = ctx.total_output;
+                let api_calls = ctx.api_calls;
 
                 self.agent.state.messages = ctx.messages;
 
@@ -868,6 +877,9 @@ impl AgentSession {
                 let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
                     messages: full_history,
                     cost_usd,
+                    total_input,
+                    total_output,
+                    api_calls,
                 });
                 if let Some(pct) = self.apply_saved_compact_threshold() {
                     let _ = event_tx.send(AgentSessionEvent::CompactThresholdChanged { pct });
@@ -1078,6 +1090,9 @@ pub fn session_task(
                 let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
                     messages: vec![],
                     cost_usd: 0.0,
+                    total_input: 0,
+                    total_output: 0,
+                    api_calls: 0,
                 });
             }
             SessionCommand::LoadSession { id } => session.load_session(&id, &event_tx),
@@ -1242,6 +1257,9 @@ pub fn session_task(
                 let ctx = session.session_manager.build_session_context();
                 let full_history = ctx.full_history;
                 let cost_usd = ctx.cost_usd;
+                let total_input = ctx.total_input;
+                let total_output = ctx.total_output;
+                let api_calls = ctx.api_calls;
                 session.agent.state.messages = ctx.messages;
                 session.agent.state.thinking_level = ctx.thinking_level;
                 let _ = event_tx.send(AgentSessionEvent::ThinkingLevelChanged {
@@ -1253,6 +1271,9 @@ pub fn session_task(
                 let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
                     messages: full_history,
                     cost_usd,
+                    total_input,
+                    total_output,
+                    api_calls,
                 });
             }
             SessionCommand::CreateWorktree {
