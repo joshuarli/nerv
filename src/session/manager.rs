@@ -194,15 +194,12 @@ impl SessionManager {
         let entry_id = entry.id().to_string();
         let parent_id = entry.parent_id().map(|s| s.to_string());
 
-        self.db.execute("BEGIN", [])?;
-
-        let result = self.append_entry_inner(&session_id, &entry_id, parent_id.as_deref(), &data, &entry);
-        if result.is_err() {
-            self.db.execute("ROLLBACK", []).ok();
-            return result;
-        }
-
-        self.db.execute("COMMIT", [])?;
+        let result = {
+            let tx = self.db.transaction()?;
+            let r = Self::append_entry_inner_tx(&tx, &session_id, &entry_id, parent_id.as_deref(), &data, &entry, self.next_seq, self.entries.is_empty());
+            if r.is_ok() { tx.commit()?; } else { tx.rollback().ok(); }
+            r
+        };
 
         let idx = self.entries.len();
         self.by_id.insert(entry.id().to_string(), idx);
@@ -213,57 +210,59 @@ impl SessionManager {
         Ok(())
     }
 
-    fn append_entry_inner(
-        &self,
+    fn append_entry_inner_tx(
+        tx: &rusqlite::Transaction<'_>,
         session_id: &str,
         entry_id: &str,
         parent_id: Option<&str>,
         data: &str,
         entry: &SessionEntry,
+        next_seq: i64,
+        is_first: bool,
     ) -> anyhow::Result<()> {
-        self.db.execute(
+        tx.execute(
             "INSERT INTO entries (id, session_id, parent_id, seq, data) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![entry_id, session_id, parent_id, self.next_seq, data],
+            params![entry_id, session_id, parent_id, next_seq, data],
         )?;
 
         // Index searchable text in FTS5
         if let Some((text, role)) = extract_searchable_text(entry) {
             if !text.is_empty() {
-                self.db.execute(
+                tx.execute(
                     "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?1, ?2, ?3, ?4)",
                     params![text, session_id, entry_id, role],
                 )?;
             }
         }
 
-        // Update session timestamp
+        // Update session timestamp (and preview on first message) in one statement
         let now = now_iso();
-        self.db.execute(
+        if is_first {
+            if let SessionEntry::Message(me) = entry {
+                if let AgentMessage::User { content, .. } = &me.message {
+                    let preview: String = content
+                        .iter()
+                        .filter_map(|c| match c {
+                            ContentItem::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("")
+                        .chars()
+                        .take(80)
+                        .collect();
+                    tx.execute(
+                        "UPDATE sessions SET updated_at = ?1, preview = ?2 WHERE id = ?3",
+                        params![now, preview, session_id],
+                    )?;
+                    return Ok(());
+                }
+            }
+        }
+        tx.execute(
             "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
             params![now, session_id],
         )?;
-
-        // Update preview from first user message
-        if self.entries.is_empty()
-            && let SessionEntry::Message(me) = entry
-            && let AgentMessage::User { content, .. } = &me.message
-        {
-            let preview: String = content
-                .iter()
-                .filter_map(|c| match c {
-                    ContentItem::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("")
-                .chars()
-                .take(80)
-                .collect();
-            self.db.execute(
-                "UPDATE sessions SET preview = ?1 WHERE id = ?2",
-                params![preview, session_id],
-            )?;
-        }
 
         Ok(())
     }
@@ -831,13 +830,15 @@ impl SessionManager {
         let now = now_iso();
 
         // Everything runs inside a transaction; roll back on any error.
-        self.db.execute("BEGIN", [])?;
-        let result = self.fork_session_inner(&src_id, &new_id, &now, &branch_ids);
-        if result.is_err() {
-            self.db.execute("ROLLBACK", []).ok();
-            return result.map(|_| new_id);
+        {
+            let tx = self.db.transaction()?;
+            let result = Self::fork_session_inner_tx(&tx, &src_id, &new_id, &now, &branch_ids);
+            if result.is_err() {
+                tx.rollback().ok();
+                return result.map(|_| new_id);
+            }
+            tx.commit()?;
         }
-        self.db.execute("COMMIT", [])?;
 
         // Switch to the new session and reload in-memory state.  The entry ids
         // are identical to the source but the owning session_id has changed, so
@@ -848,8 +849,8 @@ impl SessionManager {
         Ok(new_id)
     }
 
-    fn fork_session_inner(
-        &self,
+    fn fork_session_inner_tx(
+        tx: &rusqlite::Transaction<'_>,
         src_id: &str,
         new_id: &str,
         now: &str,
@@ -858,7 +859,7 @@ impl SessionManager {
         // Copy session metadata row, stamping a fresh id and timestamp.
         // name, cwd, worktree, compact_threshold, repo_id and preview all
         // carry over so the fork looks like the original in /resume.
-        self.db.execute(
+        tx.execute(
             "INSERT INTO sessions (id, cwd, created_at, updated_at, preview, worktree, name, compact_threshold, repo_id)
              SELECT ?1, cwd, ?2, ?3, preview, worktree, name, compact_threshold, repo_id
              FROM sessions WHERE id = ?4",
@@ -874,11 +875,16 @@ impl SessionManager {
             .map(|old| (old.clone(), gen_entry_id()))
             .collect();
 
+        // Prepare the search_index read once outside the loop.
+        let mut si_stmt = tx.prepare(
+            "SELECT text, role FROM search_index WHERE entry_id = ?1",
+        )?;
+
         for old_id in branch_ids {
             let new_entry_id = &id_map[old_id];
 
             // Read the source row.
-            let (parent_id_raw, seq, data): (Option<String>, i64, String) = self.db.query_row(
+            let (parent_id_raw, seq, data): (Option<String>, i64, String) = tx.query_row(
                 "SELECT parent_id, seq, data FROM entries WHERE id = ?1",
                 params![old_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -902,21 +908,18 @@ impl SessionManager {
                     .map_err(|e| anyhow::anyhow!("serialise fork entry: {e}"))?
             };
 
-            self.db.execute(
+            tx.execute(
                 "INSERT INTO entries (id, session_id, parent_id, seq, data) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![new_entry_id, new_id, mapped_parent, seq, patched_data],
             )?;
 
             // Copy search_index rows, updating entry_id to the new id.
-            let mut si_stmt = self.db.prepare(
-                "SELECT text, role FROM search_index WHERE entry_id = ?1",
-            )?;
             let si_rows: Vec<(String, String)> = si_stmt
                 .query_map(params![old_id], |row| Ok((row.get(0)?, row.get(1)?)))?
                 .filter_map(|r| r.ok())
                 .collect();
             for (text, role) in si_rows {
-                self.db.execute(
+                tx.execute(
                     "INSERT INTO search_index (text, session_id, entry_id, role) VALUES (?1, ?2, ?3, ?4)",
                     params![text, new_id, new_entry_id, role],
                 )?;
@@ -950,8 +953,15 @@ impl SessionManager {
     }
 
     pub fn list_sessions(&self) -> Vec<SessionSummary> {
+        // Single query: join entries count so we avoid N+1 round-trips.
         let mut stmt = match self.db.prepare(
-            "SELECT id, cwd, created_at, updated_at, preview, name, repo_id FROM sessions ORDER BY updated_at DESC LIMIT 100",
+            "SELECT s.id, s.cwd, s.created_at, s.updated_at, s.preview, s.name, s.repo_id,
+                    COUNT(e.id) as message_count
+             FROM sessions s
+             LEFT JOIN entries e ON e.session_id = s.id
+             GROUP BY s.id
+             ORDER BY s.updated_at DESC
+             LIMIT 100",
         ) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -966,40 +976,29 @@ impl SessionManager {
                 row.get::<_, String>(4)?,
                 row.get::<_, Option<String>>(5)?,
                 row.get::<_, Option<String>>(6)?,
+                row.get::<_, i64>(7)?,
             ))
         }) {
             Ok(r) => r,
             Err(_) => return Vec::new(),
         };
 
-        let mut sessions = Vec::new();
-        for row in rows.flatten() {
-            let (id, cwd, created_at, updated_at, preview, name, repo_id) = row;
-
-            // Count entries for this session
-            let message_count = self.count_entries(&id);
-
-            let id_short = if id.len() >= 8 {
-                id[..8].to_string()
-            } else {
-                id.clone()
-            };
-
-            // Parse updated_at to SystemTime for age display
-            let modified = parse_iso_to_system_time(&updated_at);
-
-            sessions.push(SessionSummary {
-                id_short,
-                timestamp: created_at,
-                cwd,
-                preview,
-                name,
-                repo_id,
-                message_count,
-                modified,
-            });
-        }
-        sessions
+        rows.flatten()
+            .map(|(id, cwd, created_at, updated_at, preview, name, repo_id, count)| {
+                let id_short = if id.len() >= 8 { id[..8].to_string() } else { id.clone() };
+                let modified = parse_iso_to_system_time(&updated_at);
+                SessionSummary {
+                    id_short,
+                    timestamp: created_at,
+                    cwd,
+                    preview,
+                    name,
+                    repo_id,
+                    message_count: count as u32,
+                    modified,
+                }
+            })
+            .collect()
     }
 
     pub fn search_sessions(&self, query: &str) -> Vec<SearchResult> {
@@ -1042,9 +1041,11 @@ impl SessionManager {
             Err(_) => return Vec::new(),
         };
 
-        // Collect raw hits, dedup by session_id keeping best rank
-        let mut best: std::collections::HashMap<String, (String, String, f64)> =
-            std::collections::HashMap::new();
+        // Dedup by session_id keeping best (lowest) rank, then join with sessions
+        // in a single CTE query — no per-session round-trips.
+        //
+        // Build a VALUES list from the in-memory dedup so SQLite can join against it.
+        let mut best: HashMap<String, (String, String, f64)> = HashMap::new();
         for (excerpt, session_id, role, rank) in rows {
             best.entry(session_id)
                 .and_modify(|existing| {
@@ -1054,52 +1055,63 @@ impl SessionManager {
                 })
                 .or_insert((excerpt, role, rank));
         }
-
-        // Join with sessions table for metadata
-        let mut results: Vec<SearchResult> = Vec::new();
-        for (sid, (excerpt, role, rank)) in &best {
-            let row: Option<(String, String, String)> = self.db
-                .query_row(
-                    "SELECT id, cwd, updated_at FROM sessions WHERE id = ?1",
-                    params![sid],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .ok();
-            let Some((id, cwd, updated_at)) = row else { continue };
-            let id_short = if id.len() >= 8 {
-                id[..8].to_string()
-            } else {
-                id.clone()
-            };
-            let message_count = self.count_entries(&id);
-            let modified = parse_iso_to_system_time(&updated_at);
-            results.push(SearchResult {
-                session_id: id,
-                id_short,
-                excerpt: excerpt.clone(),
-                role: role.clone(),
-                cwd,
-                modified,
-                message_count,
-                rank: *rank,
-            });
+        if best.is_empty() {
+            return Vec::new();
         }
+
+        // Build a single query: join sessions + entries count for all matched session ids.
+        let placeholders = best.keys()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT s.id, s.cwd, s.updated_at, COUNT(e.id)
+             FROM sessions s
+             LEFT JOIN entries e ON e.session_id = s.id
+             WHERE s.id IN ({})
+             GROUP BY s.id",
+            placeholders
+        );
+        let mut stmt = match self.db.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let ids: Vec<&String> = best.keys().collect();
+        for (i, id) in ids.iter().enumerate() {
+            stmt.raw_bind_parameter(i + 1, id.as_str()).ok();
+        }
+        let session_rows: Vec<(String, String, String, i64)> = stmt
+            .raw_query()
+            .mapped(|row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut results: Vec<SearchResult> = session_rows
+            .into_iter()
+            .filter_map(|(id, cwd, updated_at, count)| {
+                let (excerpt, role, rank) = best.get(&id)?.clone();
+                let id_short = if id.len() >= 8 { id[..8].to_string() } else { id.clone() };
+                let modified = parse_iso_to_system_time(&updated_at);
+                Some(SearchResult {
+                    session_id: id,
+                    id_short,
+                    excerpt,
+                    role,
+                    cwd,
+                    modified,
+                    message_count: count as u32,
+                    rank,
+                })
+            })
+            .collect();
 
         results.sort_by(|a, b| a.rank.partial_cmp(&b.rank).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(20);
         results
     }
 
-    fn count_entries(&self, session_id: &str) -> u32 {
-        self.db
-            .query_row(
-                "SELECT COUNT(*) FROM entries WHERE session_id = ?1",
-                params![session_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c as u32)
-            .unwrap_or(0)
-    }
+
 
     /// Export the current branch (leaf → root) as JSONL lines.
     ///
@@ -1416,7 +1428,14 @@ mod tests {
 
     /// Count entries directly from the DB for a given session.
     fn db_entry_count(mgr: &SessionManager, session_id: &str) -> usize {
-        mgr.count_entries(session_id) as usize
+        mgr.db
+            .query_row(
+                "SELECT COUNT(*) FROM entries WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c as usize)
+            .unwrap_or(0)
     }
 
     /// Fetch all entry ids from the DB for a given session, ordered by seq.

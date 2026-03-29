@@ -113,15 +113,15 @@ impl SymbolCache {
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;").ok();
         db.execute_batch(
             "CREATE TABLE IF NOT EXISTS symbol_cache (
-                path  TEXT NOT NULL,
+                path  TEXT NOT NULL PRIMARY KEY,
                 mtime INTEGER NOT NULL,
-                data  TEXT NOT NULL,
-                PRIMARY KEY (path, mtime)
+                data  TEXT NOT NULL
             );",
         )
         .ok()?;
+        // Index on mtime for the 30-day eviction DELETE.
         db.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_cache_path ON symbol_cache(path);",
+            "CREATE INDEX IF NOT EXISTS idx_cache_mtime ON symbol_cache(mtime);",
         )
         .ok();
         // Evict rows older than 30 days to bound cache growth.
@@ -177,10 +177,9 @@ impl SymbolCache {
                 return;
             }
         };
-        // Delete all rows for this path, then insert the fresh one.
-        self.db.execute("DELETE FROM symbol_cache WHERE path = ?1", params![key_str.as_ref()]).ok();
+        // REPLACE handles both insert and update in one statement.
         if let Err(e) = self.db.execute(
-            "INSERT INTO symbol_cache (path, mtime, data) VALUES (?1, ?2, ?3)",
+            "INSERT OR REPLACE INTO symbol_cache (path, mtime, data) VALUES (?1, ?2, ?3)",
             params![key_str.as_ref(), mtime as i64, json],
         ) {
             crate::log::warn(&format!("symbol cache: insert failed for {}: {}", key_str, e));
