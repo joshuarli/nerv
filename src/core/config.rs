@@ -98,7 +98,31 @@ impl NervConfig {
             return defaults;
         }
 
-        read_jsonc(&path).unwrap_or_default()
+        // Read existing config. Backfill any keys that exist in defaults but are
+        // absent from the file, then re-save so the file is always complete.
+        let existing: Self = read_jsonc(&path).unwrap_or_default();
+
+        if let (Ok(mut merged), Ok(user)) = (
+            serde_json::to_value(Self::default()),
+            serde_json::to_value(&existing),
+        ) {
+            if let (Some(merged_obj), Some(user_obj)) =
+                (merged.as_object_mut(), user.as_object())
+            {
+                // Overwrite each default key with the user's value.
+                for (k, v) in user_obj {
+                    merged_obj.insert(k.clone(), v.clone());
+                }
+                // If any key in merged_obj was absent from the user file, the file
+                // is stale — rewrite it with the complete set.
+                let needs_write = merged_obj.keys().any(|k| !user_obj.contains_key(k));
+                if needs_write {
+                    let _ = write_json(&path, &merged);
+                }
+            }
+        }
+
+        existing
     }
 
     pub fn save(&self, nerv_dir: &Path) -> anyhow::Result<()> {

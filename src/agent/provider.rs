@@ -138,6 +138,10 @@ impl ProviderRegistry {
         self.providers.insert(name.to_string(), provider);
     }
 
+    pub fn unregister(&mut self, name: &str) {
+        self.providers.remove(name);
+    }
+
     pub fn get(&self, name: &str) -> Option<Arc<dyn Provider>> {
         self.providers.get(name).cloned()
     }

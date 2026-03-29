@@ -67,9 +67,9 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
 
     let mutation_queue = Arc::new(FileMutationQueue::new());
     let mut tool_registry = ToolRegistry::new();
-    let mut agent = Agent::new(Arc::new(std::sync::RwLock::new(
-        model_registry.provider_registry.clone(),
-    )));
+    // Share the same provider registry Arc so login/logout updates are immediately
+    // reflected in model_registry.available_models() without rebuilding the registry.
+    let mut agent = Agent::new(model_registry.provider_registry.clone());
 
     if !opts.talk_mode {
         // Symbol index scan is the most expensive startup cost — kick it off

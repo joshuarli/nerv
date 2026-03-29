@@ -1580,7 +1580,7 @@ fn list_all_models() {
         if provider_health.contains_key(&m.provider_name) {
             continue;
         }
-        let online = if let Some(p) = registry.provider_registry.get(&m.provider_name) {
+        let online = if let Some(p) = registry.provider_registry.read().unwrap().get(&m.provider_name) {
             p.healthcheck()
         } else {
             false // provider not registered (no auth)

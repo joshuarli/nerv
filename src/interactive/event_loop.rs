@@ -1009,10 +1009,9 @@ impl InteractiveMode {
             }
             "/logout" => {
                 let provider = if args.is_empty() { "anthropic" } else { args };
-                let nerv_dir = crate::nerv_dir();
-                let mut auth = crate::core::auth::AuthStorage::load(nerv_dir);
-                auth.remove(provider);
-                self.status_message = Some(format!("Logged out from {}.", provider));
+                let _ = self.cmd_tx.send(SessionCommand::Logout {
+                    provider: provider.to_string(),
+                });
             }
             "/fork" => {
                 let _ = self.cmd_tx.send(SessionCommand::ForkSession);

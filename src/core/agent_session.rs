@@ -148,6 +148,7 @@ pub enum SessionCommand {
     SetAutoCompact { enabled: bool },
     Export,
     Login { provider: String },
+    Logout { provider: String },
     ListSessions { repo_root: Option<String>, repo_id: Option<String> },
     GetTree,
     SwitchBranch {
@@ -1296,6 +1297,25 @@ pub fn session_task(
             }
             SessionCommand::Login { provider } => {
                 handle_login(&provider, &mut session, &event_tx);
+            }
+            SessionCommand::Logout { provider } => {
+                // Remove credentials from storage.
+                let nerv_dir = crate::nerv_dir();
+                let mut auth = super::auth::AuthStorage::load(nerv_dir);
+                auth.remove(&provider);
+
+                // Unregister the provider so available_models() stops showing it.
+                session
+                    .agent
+                    .provider_registry
+                    .write()
+                    .unwrap()
+                    .unregister(&provider);
+
+                let _ = event_tx.send(AgentSessionEvent::Status {
+                    message: format!("Logged out from {}.", provider),
+                    is_error: false,
+                });
             }
             SessionCommand::ListSessions { repo_root, repo_id } => {
                 let mut sessions = session.session_manager.list_sessions();

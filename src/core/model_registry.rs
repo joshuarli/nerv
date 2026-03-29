@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use super::auth::AuthStorage;
 use super::config::{CustomProviderConfig, NervConfig};
@@ -10,7 +10,8 @@ use crate::agent::{AnthropicProvider, OpenAICompatProvider};
 pub struct ModelRegistry {
     built_in: Vec<Model>,
     custom: Vec<Model>,
-    pub provider_registry: ProviderRegistry,
+    /// Shared with the Agent so login/logout are reflected immediately in available_models().
+    pub provider_registry: Arc<RwLock<ProviderRegistry>>,
 }
 
 impl ModelRegistry {
@@ -18,7 +19,7 @@ impl ModelRegistry {
         Self {
             built_in: Vec::new(),
             custom: Vec::new(),
-            provider_registry: ProviderRegistry::new(),
+            provider_registry: Arc::new(RwLock::new(ProviderRegistry::new())),
         }
     }
 
@@ -98,7 +99,7 @@ impl ModelRegistry {
         Self {
             built_in,
             custom,
-            provider_registry: registry,
+            provider_registry: Arc::new(RwLock::new(registry)),
         }
     }
 
@@ -107,9 +108,10 @@ impl ModelRegistry {
     }
 
     pub fn available_models(&self) -> Vec<&Model> {
+        let reg = self.provider_registry.read().unwrap();
         self.all_models()
             .into_iter()
-            .filter(|m| self.provider_registry.get(&m.provider_name).is_some())
+            .filter(|m| reg.get(&m.provider_name).is_some())
             .collect()
     }
 
@@ -141,12 +143,14 @@ impl ModelRegistry {
     }
 
     pub fn default_model(&self, config: &NervConfig) -> Option<&Model> {
+        let reg = self.provider_registry.read().unwrap();
         if let Some(ref id) = config.default_model
             && let Some(m) = self.find_model(id)
-            && self.provider_registry.get(&m.provider_name).is_some()
+            && reg.get(&m.provider_name).is_some()
         {
             return Some(m);
         }
+        drop(reg);
         self.available_models().into_iter().next()
     }
 
@@ -158,6 +162,8 @@ impl ModelRegistry {
         let provider =
             OpenAICompatProvider::new(cfg.name.clone(), cfg.base_url.clone(), cfg.api_key.clone());
         self.provider_registry
+            .write()
+            .unwrap()
             .register(&cfg.name, Arc::new(provider));
 
         for model_cfg in &cfg.models {
