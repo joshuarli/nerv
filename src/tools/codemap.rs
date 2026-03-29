@@ -57,7 +57,7 @@ impl AgentTool for CodemapTool {
 
     fn prompt_guidelines(&self) -> Vec<String> {
         vec![
-            "ALWAYS call with `query: \"\"` and a `file` filter. Non-empty queries miss definitions — never use them. One call per file, never re-read. `depth: full` = source bodies, `depth: signatures` = one-line summaries.".into(),
+            "Call with `query: \"\"` and a `file` filter to get all signatures in a file. Use `depth: full` only when you need the body of a *specific named symbol* — pass a non-empty query so you get just that symbol, not the whole file. To read an entire file's source, use `read` instead.".into(),
         ]
     }
 
