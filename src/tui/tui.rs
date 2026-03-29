@@ -73,20 +73,12 @@ impl Component for Container {
 
 pub struct TUI {
     terminal: Box<dyn Terminal>,
+    /// All lines from the last rendered frame (chat + fixed UI).
     previous_lines: Vec<String>,
-    previous_width: u16,
-    previous_height: u16,
-    max_lines_rendered: usize,
-    previous_viewport_top: usize,
     render_requested: bool,
     stopped: bool,
     /// Reusable byte buffer — avoids allocation per frame.
     write_buf: Vec<u8>,
-    /// Number of lines already flushed to terminal scrollback.
-    scrollback_flushed: usize,
-    /// Lines at the bottom that are fixed UI (editor, statusbar, footer).
-    /// These are never flushed to scrollback.
-    pub fixed_bottom: usize,
 }
 
 impl TUI {
@@ -94,28 +86,19 @@ impl TUI {
         Self {
             terminal,
             previous_lines: Vec::new(),
-            previous_width: 0,
-            previous_height: 0,
-            max_lines_rendered: 0,
-            previous_viewport_top: 0,
             render_requested: true,
             stopped: false,
             write_buf: Vec::with_capacity(8192),
-            scrollback_flushed: 0,
-            fixed_bottom: 0,
         }
     }
 
-    pub fn request_render(&mut self, full: bool) {
+    pub fn request_render(&mut self, _full: bool) {
         self.render_requested = true;
-        if full {
-            self.previous_lines.clear();
-        }
     }
 
-    pub fn maybe_render(&mut self, root: &dyn Component) {
+    pub fn maybe_render(&mut self, root: &dyn Component, fixed_bottom_lines: usize) {
         if self.render_requested && !self.stopped {
-            self.do_render(root);
+            self.do_render(root, fixed_bottom_lines);
             self.render_requested = false;
         }
     }
@@ -128,10 +111,6 @@ impl TUI {
         &mut *self.terminal
     }
 
-    pub fn scrollback_flushed(&self) -> usize {
-        self.scrollback_flushed
-    }
-
     pub fn width(&self) -> u16 {
         self.terminal.columns()
     }
@@ -142,9 +121,7 @@ impl TUI {
 
     pub fn dump_scrollback(&mut self, text: &str) {
         self.terminal.dump_scrollback(text);
-        self.previous_lines.clear();
         self.render_requested = true;
-        self.scrollback_flushed = 0;
     }
 
     pub fn suspend(&mut self) {
@@ -153,12 +130,11 @@ impl TUI {
 
     pub fn resume(&mut self) {
         self.terminal.restart();
-        self.previous_lines.clear();
+        self.previous_lines.clear(); // force full repaint after resume
         self.render_requested = true;
-        self.scrollback_flushed = 0;
     }
 
-    fn do_render(&mut self, root: &dyn Component) {
+    fn do_render(&mut self, root: &dyn Component, fixed_bottom_lines: usize) {
         let width = self.terminal.columns();
         let height = self.terminal.rows();
 
@@ -177,79 +153,44 @@ impl TUI {
             }
         }
 
-        // Append reset + hyperlink close to each non-empty line (before flush
-        // so the scrollback copy has correct styling too).
+        // Append reset + hyperlink close to each non-empty line.
         for line in &mut new_lines {
             if !line.is_empty() {
                 line.push_str("\x1b[0m\x1b]8;;\x07");
             }
         }
 
-        // Reuse buffer — clear but keep allocation
+        let old_total = self.previous_lines.len();
+        let new_total = new_lines.len();
+        let old_top = old_total.saturating_sub(height as usize);
+
         self.write_buf.clear();
         let buf = &mut self.write_buf;
 
-        // Synchronized output begin (DEC 2026) — wraps the flush AND the
-        // viewport redraw so neither is visible as an intermediate state.
-        buf.extend_from_slice(b"\x1b[?2026h");
+        buf.extend_from_slice(b"\x1b[?2026h"); // synchronized output begin
 
-        // Flush overflow to scrollback by printing the new lines at the top
-        // of the screen and then scrolling them into the terminal's natural
-        // scrollback buffer via newlines at the bottom row.  We never use
-        // ED 2 (\x1b[2J) here because many terminals (Terminal.app, iTerm2)
-        // treat that as "clear scrollback too", which is exactly what we want
-        // to avoid.
-        let scrollable_end = new_lines.len().saturating_sub(self.fixed_bottom);
-        let flush_limit = viewport_top.min(scrollable_end);
-        if flush_limit > self.scrollback_flushed {
-            let delta = flush_limit - self.scrollback_flushed;
-
-            // Step 1: overwrite the top `delta` rows of the screen with the
-            // lines that should enter scrollback, starting at row 1.
-            buf.extend_from_slice(b"\x1b[H");
-            for line in &new_lines[self.scrollback_flushed..flush_limit] {
-                buf.extend_from_slice(line.as_bytes());
-                buf.extend_from_slice(b"\r\n");
-            }
-
-            // Step 2: move to the last row and emit newlines to scroll the
-            // lines written in Step 1 into the terminal's scrollback buffer.
-            // Each \r\n at the bottom row scrolls the screen up by one line.
-            // If delta <= height, we need exactly `delta` newlines.
-            // If delta > height, Step 1 already scrolled `delta - height`
-            // lines into scrollback on its own (the cursor ran off the bottom
-            // mid-print), so we only need `height` newlines to clear the rest.
-            let scroll_count = delta.min(height as usize);
-            let _ = write!(buf, "\x1b[{};1H", height);
-            for _ in 0..scroll_count {
-                buf.extend_from_slice(b"\r\n");
-            }
-
-            self.scrollback_flushed = flush_limit;
-            // Force a full redraw so the viewport is repainted cleanly.
-            self.previous_lines.clear();
-        }
-
-        // (Synchronized output begin was already emitted above)
-
-        let need_full_render = width != self.previous_width
-            || height != self.previous_height
-            || self.previous_lines.is_empty();
-
-        if need_full_render {
+        if old_total == 0 || new_total < old_total {
+            // First render or line count shrank: full clear + repaint visible area.
             Self::full_render(buf, &new_lines, height, viewport_top);
         } else {
-            Self::diff_render(
-                buf,
-                &self.previous_lines,
-                &new_lines,
-                height,
-                viewport_top,
-                self.previous_viewport_top,
-            );
+            // New chat content: write new lines to scrollback by positioning
+            // at the bottom and letting them scroll naturally
+            let chat_limit = new_lines.len().saturating_sub(fixed_bottom_lines);
+            if viewport_top > old_top && old_top < chat_limit {
+                let scroll_end = viewport_top.min(chat_limit);
+                // Position at the last visible row and write new lines,
+                // which will scroll past the bottom and enter scrollback
+                let _ = write!(buf, "\x1b[{};1H", height);
+                for line in &new_lines[old_top..scroll_end] {
+                    buf.extend_from_slice(b"\r\n");
+                    buf.extend_from_slice(line.as_bytes());
+                }
+            }
+            
+            Self::diff_render(buf, &self.previous_lines, &new_lines, height, viewport_top, old_top);
         }
 
-        // Position hardware cursor (block style)
+        // Position hardware cursor
         if let Some((row, col)) = cursor_pos {
             let _ = write!(buf, "\x1b[{};{}H", row + 1, col + 1);
             buf.extend_from_slice(b"\x1b[2 q\x1b[?25h"); // steady block + show
@@ -257,32 +198,23 @@ impl TUI {
             buf.extend_from_slice(b"\x1b[?25l");
         }
 
-        // Synchronized output end
-        buf.extend_from_slice(b"\x1b[?2026l");
-
-        self.terminal.write_bytes(buf);
+        buf.extend_from_slice(b"\x1b[?2026l"); // synchronized output end
 
         self.previous_lines = new_lines;
-        self.previous_width = width;
-        self.previous_height = height;
-        self.max_lines_rendered = self.max_lines_rendered.max(self.previous_lines.len());
-        self.previous_viewport_top = viewport_top;
+        self.terminal.write_bytes(buf);
     }
 
     fn full_render(buf: &mut Vec<u8>, lines: &[String], height: u16, viewport_top: usize) {
-        // \x1b[H  — move to home (1,1)
-        // \x1b[J  — erase from cursor to end of screen (ED 0)
-        // We intentionally do NOT use \x1b[2J (erase entire display) because
-        // many terminals (Terminal.app, iTerm2) also clear the scrollback
-        // buffer when they receive ED 2.
-        buf.extend_from_slice(b"\x1b[H\x1b[J");
-
+        // On primary screen: use absolute positioning to avoid accidental scrolling
         let visible = &lines[viewport_top..];
         for (i, line) in visible.iter().take(height as usize).enumerate() {
-            if i > 0 {
-                buf.extend_from_slice(b"\r\n");
-            }
+            let _ = write!(buf, "\x1b[{};1H", i + 1);
             buf.extend_from_slice(line.as_bytes());
+            buf.extend_from_slice(b"\x1b[K"); // clear to end of line
+        }
+        // Clear remaining rows below content
+        for i in visible.len()..height as usize {
+            let _ = write!(buf, "\x1b[{};1H\x1b[K", i + 1);
         }
     }
 
@@ -296,7 +228,7 @@ impl TUI {
     ) {
         let h = height as usize;
 
-        // Viewport shift → full redraw
+        // Viewport shifted — fall back to full redraw.
         if viewport_top != old_top {
             Self::full_render(buf, new_lines, height, viewport_top);
             return;
@@ -312,21 +244,19 @@ impl TUI {
                 continue;
             }
 
-            // Find common byte prefix
             let common = common_prefix_len(old_line, new_line);
 
             if common == 0 || old_line.is_empty() {
-                // No common prefix or old was empty — rewrite full line
+                // Rewrite full line
                 let _ = write!(buf, "\x1b[{};1H\x1b[2K", row + 1);
                 buf.extend_from_slice(new_line.as_bytes());
             } else if new_line.len() > old_line.len()
                 && new_line.as_bytes().starts_with(old_line.as_bytes())
             {
-                // Old is a prefix of new (streaming append) — just emit the tail.
+                // Old is a prefix of new (streaming append) — emit the tail only.
                 let old_content = strip_line_suffix(old_line);
                 let col = visible_width(old_content);
                 let _ = write!(buf, "\x1b[{};{}H", row + 1, col + 1);
-                // Re-emit active ANSI state so appended text is styled correctly
                 buf.extend_from_slice(last_sgr(old_content).as_bytes());
                 let new_content = strip_line_suffix(new_line);
                 if new_content.len() > old_content.len() {
@@ -338,7 +268,6 @@ impl TUI {
                 let prefix = &new_line[..common];
                 let col = visible_width(prefix);
                 let _ = write!(buf, "\x1b[{};{}H\x1b[K", row + 1, col + 1);
-                // Re-emit active ANSI state from the common prefix
                 buf.extend_from_slice(last_sgr(prefix).as_bytes());
                 buf.extend_from_slice(&new_line.as_bytes()[common..]);
             }
@@ -346,9 +275,8 @@ impl TUI {
     }
 }
 
-/// Find the length of the common byte prefix between two strings.
-/// Backs up past any partial UTF-8 sequence or ANSI escape to avoid
-/// emitting fragments the terminal interprets as plaintext.
+/// Find the length of the common byte prefix between two strings,
+/// snapped back to a char boundary and behind any partial ANSI escape.
 fn common_prefix_len(a: &str, b: &str) -> usize {
     let ab = a.as_bytes();
     let bb = b.as_bytes();
@@ -357,13 +285,9 @@ fn common_prefix_len(a: &str, b: &str) -> usize {
     while i < limit && ab[i] == bb[i] {
         i += 1;
     }
-    // Back up to a char boundary
     while i > 0 && (!a.is_char_boundary(i) || !b.is_char_boundary(i)) {
         i -= 1;
     }
-    // Back up past any partial ANSI escape sequence.
-    // Scan backwards for ESC (0x1B). If found, check whether the escape
-    // is complete (terminated by a letter in 0x40..0x7E for CSI, or BEL/ST for OSC/APC).
     if i > 0 {
         let prefix = &ab[..i];
         if let Some(esc_pos) = memrchr(0x1B, prefix)
@@ -375,42 +299,30 @@ fn common_prefix_len(a: &str, b: &str) -> usize {
     i
 }
 
-/// Find last occurrence of byte in slice.
 fn memrchr(needle: u8, haystack: &[u8]) -> Option<usize> {
     haystack.iter().rposition(|&b| b == needle)
 }
 
-/// Check if the bytes starting at ESC form a complete escape sequence.
 fn escape_complete(seq: &[u8]) -> bool {
     if seq.len() < 2 || seq[0] != 0x1B {
         return false;
     }
     match seq[1] {
-        b'[' => {
-            // CSI: terminated by 0x40..0x7E
-            seq[2..].iter().any(|&b| (0x40..=0x7E).contains(&b))
-        }
-        b']' => {
-            // OSC: terminated by BEL (0x07) or ST (ESC \)
+        b'[' => seq[2..].iter().any(|&b| (0x40..=0x7E).contains(&b)),
+        b']' | b'_' => {
             seq[2..].contains(&0x07) || seq.windows(2).any(|w| w == [0x1B, b'\\'])
         }
-        b'_' => {
-            // APC: terminated by BEL or ST
-            seq[2..].contains(&0x07) || seq.windows(2).any(|w| w == [0x1B, b'\\'])
-        }
-        _ => true, // two-byte sequences (ESC + one char) are always complete
+        _ => true,
     }
 }
 
-/// Extract the last active SGR sequence from a string.
-/// Returns the accumulated SGR state to re-emit before appending text.
+/// Extract the last active SGR sequence from a string, to re-emit before appending.
 fn last_sgr(s: &str) -> String {
     let mut result = String::new();
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
-            // Find the end of this CSI sequence
             let start = i;
             i += 2;
             while i < bytes.len() && !((0x40..=0x7E).contains(&bytes[i])) {
@@ -418,7 +330,6 @@ fn last_sgr(s: &str) -> String {
             }
             if i < bytes.len() && bytes[i] == b'm' {
                 let seq = &s[start..=i];
-                // Check for reset
                 let params = &s[start + 2..i];
                 if params.is_empty() || params == "0" {
                     result.clear();
@@ -434,7 +345,7 @@ fn last_sgr(s: &str) -> String {
     result
 }
 
-/// Strip the trailing `\x1b[0m\x1b]8;;\x07` suffix we append to every line.
+/// Strip the trailing `\x1b[0m\x1b]8;;\x07` suffix appended to every line.
 fn strip_line_suffix(s: &str) -> &str {
     const SUFFIX: &str = "\x1b[0m\x1b]8;;\x07";
     s.strip_suffix(SUFFIX).unwrap_or(s)

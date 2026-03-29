@@ -587,8 +587,6 @@ impl InteractiveMode {
                 layout
                     .statusbar
                     .set_queue(&self.pending_messages, self.editing_queue_idx);
-                tui.fixed_bottom = layout.fixed_bottom_lines()
-                    + layout.statusbar.queue_line_count();
                 tui.request_render(false);
             }
             AgentEvent::MessageStart { message } => {

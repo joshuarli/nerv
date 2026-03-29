@@ -42,6 +42,19 @@ impl AppLayout {
             .unwrap_or(0);
         BASE_FIXED_BOTTOM + self.footer.hud_line_count() + panel
     }
+
+    /// Render just the fixed UI (statusbar queue, btw panel, editor, statusbar, footer).
+    pub fn render_fixed(&self, width: u16) -> Vec<String> {
+        let mut lines = Vec::new();
+        lines.extend(self.statusbar.render_queue(width));
+        if let Some(panel) = &self.btw_panel {
+            lines.extend(panel.render(width));
+        }
+        lines.extend(self.editor.render(width));
+        lines.extend(self.statusbar.render(width));
+        lines.extend(self.footer.render(width));
+        lines
+    }
 }
 
 impl Component for AppLayout {

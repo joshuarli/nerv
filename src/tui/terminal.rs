@@ -52,6 +52,7 @@ impl Terminal for ProcessTerminal {
             }
         }
 
+        // Stay on primary screen for scrollback persistence
         // Hide cursor, enable bracketed paste, disable line wrap
         let _ = self.stdout.write_all(b"\x1b[?25l\x1b[?2004h\x1b[?7l");
         // xterm modifyOtherKeys mode 2.
@@ -76,10 +77,8 @@ impl Terminal for ProcessTerminal {
         } else {
             let _ = self.stdout.write_all(b"\x1b[>4;0m");
         }
-        // Show cursor, disable bracketed paste, enable line wrap
-        // Position cursor at bottom-left so shell prompt appears cleanly
-        let rows = terminal_size().1;
-        let _ = write!(self.stdout, "\x1b[{};1H\x1b[J", rows);
+        // Leave primary screen mode (no ?1049l needed), show cursor,
+        // disable bracketed paste, enable line wrap
         let _ = self.stdout.write_all(b"\x1b[0 q\x1b[?25h\x1b[?2004l\x1b[?7h");
         let _ = self.stdout.flush();
 

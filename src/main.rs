@@ -18,8 +18,7 @@ use nerv::tui::*;
 /// need to diff-render again.
 macro_rules! render_frame {
     ($tui:expr, $layout:expr) => {{
-        $tui.maybe_render(&$layout);
-        $layout.chat.notify_flushed($tui.scrollback_flushed());
+        $tui.maybe_render(&$layout, $layout.fixed_bottom_lines());
     }};
 }
 
@@ -883,7 +882,6 @@ fn main() {
     footer.set_effort(initial_effort_level);
 
     let mut layout = AppLayout::new(Editor::new(), StatusBar::new(), footer);
-    tui.fixed_bottom = layout.fixed_bottom_lines(); // editor + statusbar + footer (+hud if NERV_HUD=1 or toggled on)
 
     let dim = nerv::interactive::theme::DIM;
     if !talk_mode {
@@ -1197,8 +1195,6 @@ fn main() {
                                 if let Some(panel) = layout.btw_panel.take() {
                                     panel.cancel();
                                 }
-                                tui.fixed_bottom = layout.fixed_bottom_lines()
-                                    + layout.statusbar.queue_line_count();
                                 tui.request_render(false); render_frame!(tui, layout);
                                 continue;
                             }
@@ -1276,11 +1272,9 @@ fn main() {
                                             if let Some(msg) = interactive.status_message.take() {
                                                 push_status(&mut layout, &msg, interactive.status_is_error);
                                             }
-                                            tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                             tui.request_render(false); continue;
                                         }
                                         launch_picker(req, &mut interactive, &mut layout, &stdin_paused);
-                                        tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                         tui.request_render(true); render_frame!(tui, layout); continue;
                                     }
                                     if interactive.quit_requested { tui.terminal_mut().stop(); should_quit = true; break; }
@@ -1290,7 +1284,6 @@ fn main() {
                                     }
                                     layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
                                     layout.statusbar.render_queue(tui.width());
-                                    tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                 }
                                 tui.request_render(false); continue;
                             }
@@ -1304,7 +1297,6 @@ fn main() {
                                     layout.editor.set_text(&text);
                                     layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
                                     layout.statusbar.render_queue(tui.width());
-                                    tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                     tui.request_render(false); render_frame!(tui, layout); continue;
                                 }
                             }
@@ -1316,7 +1308,6 @@ fn main() {
                                 layout.editor.set_text(&msg);
                                 layout.statusbar.set_queue(&interactive.pending_messages, None);
                                 layout.statusbar.render_queue(tui.width());
-                                tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                 tui.request_render(false); render_frame!(tui, layout); continue;
                             }
                             if keys::matches_key(seq, "down") && interactive.editing_queue_idx.is_some() {
@@ -1328,7 +1319,6 @@ fn main() {
                                     layout.editor.set_text(&text);
                                     layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
                                     layout.statusbar.render_queue(tui.width());
-                                    tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                     tui.request_render(false); render_frame!(tui, layout); continue;
                                 }
                             }
@@ -1339,7 +1329,6 @@ fn main() {
                                 layout.editor.clear();
                                 layout.statusbar.set_queue(&interactive.pending_messages, interactive.editing_queue_idx);
                                 layout.statusbar.render_queue(tui.width());
-                                tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
                                 tui.request_render(false); render_frame!(tui, layout); continue;
                             }
                             // History navigation: up/down when not streaming and editor is empty
@@ -1421,7 +1410,6 @@ fn process_event(
 ) {
     if let Some(req) = interactive.handle_event(event, layout, tui) {
         launch_picker(req, interactive, layout, stdin_paused);
-        tui.fixed_bottom = layout.fixed_bottom_lines() + layout.statusbar.queue_line_count();
         tui.request_render(true);
         return;
     }
