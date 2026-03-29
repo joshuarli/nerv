@@ -120,8 +120,6 @@ pub enum AgentSessionEvent {
 
 pub enum SessionCommand {
     Prompt { text: String },
-    /// Inject a background context note; model acknowledges briefly.
-    Btw { note: String },
     Abort,
     NewSession,
     LoadSession { id: String },
@@ -776,16 +774,6 @@ impl AgentSession {
         self.agent.abort();
     }
 
-    /// Send a background context note. The model is asked to acknowledge briefly
-    /// so the note is recorded in the conversation without triggering a full task.
-    pub fn btw(&mut self, note: String, event_tx: &Sender<AgentSessionEvent>) {
-        let text = format!(
-            "<btw>\n{}\n</btw>\n\n(This is a background note — please acknowledge in one sentence only, no action needed.)",
-            note
-        );
-        self.prompt(text, event_tx);
-    }
-
     pub fn load_session(&mut self, session_id: &str, event_tx: &Sender<AgentSessionEvent>) {
         match self.session_manager.load_session(session_id) {
             Ok(ctx) => {
@@ -1076,7 +1064,6 @@ pub fn session_task(
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
             SessionCommand::Prompt { text } => session.prompt(text, &event_tx),
-            SessionCommand::Btw { note } => session.btw(note, &event_tx),
             SessionCommand::Abort => session.abort(),
             SessionCommand::NewSession => {
                 let _ = session

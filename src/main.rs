@@ -858,6 +858,8 @@ fn main() {
     // Clone the allowed_dirs Arc so the main thread (UI) can add entries while
     // the session thread's permission_fn reads them.
     let allowed_dirs = session.allowed_dirs.clone();
+    // Clone the provider_registry Arc so the main thread can make /btw overlay calls.
+    let provider_registry = session.agent.provider_registry.clone();
 
     // Session thread
     let evt_tx = event_tx.clone();
@@ -937,6 +939,7 @@ fn main() {
     let mut interactive = InteractiveMode::new(
         cmd_tx,
         model_registry.clone(),
+        provider_registry,
         model_registry.default_model(&config).cloned(),
         initial_thinking_level,
         initial_effort_level,
@@ -1412,6 +1415,18 @@ fn launch_picker(
     stdin_paused.store(true, std::sync::atomic::Ordering::SeqCst);
     std::thread::sleep(std::time::Duration::from_millis(150));
 
+    // /btw overlay: ephemeral parallel Q&A — handle and return immediately.
+    if let PickerRequest::BtwOverlay { messages, model, note } = req {
+        nerv::interactive::btw_overlay::run_btw_overlay(
+            messages,
+            model,
+            interactive.provider_registry.clone(),
+            note,
+        );
+        stdin_paused.store(false, std::sync::atomic::Ordering::SeqCst);
+        return;
+    }
+
     enum PickResult {
         Session(String),
         Tree(TreeSelection),
@@ -1457,6 +1472,8 @@ fn launch_picker(
                 .map(PickResult::Model)
                 .unwrap_or(PickResult::None)
         }
+        // BtwOverlay is handled above with an early return; this arm is unreachable.
+        PickerRequest::BtwOverlay { .. } => PickResult::None,
     };
 
     stdin_paused.store(false, std::sync::atomic::Ordering::SeqCst);

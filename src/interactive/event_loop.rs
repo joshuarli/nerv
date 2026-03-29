@@ -1,9 +1,10 @@
 use crossbeam_channel as channel;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use super::layout::AppLayout;
 use super::theme;
+use crate::agent::provider::ProviderRegistry;
 use crate::agent::types::*;
 use crate::core::model_registry::ModelRegistry;
 use crate::core::*;
@@ -25,6 +26,12 @@ pub enum PickerRequest {
     },
     /// Open the model picker.
     ModelPicker,
+    /// Open the /btw ephemeral overlay.
+    BtwOverlay {
+        messages: Vec<AgentMessage>,
+        model: Model,
+        note: String,
+    },
 }
 
 pub struct InteractiveMode {
@@ -35,6 +42,10 @@ pub struct InteractiveMode {
     current_thinking: ThinkingLevel,
     current_effort: Option<EffortLevel>,
     model_registry: Arc<ModelRegistry>,
+    /// Shared provider registry — cloned Arc from the session, used by the /btw overlay.
+    pub provider_registry: Arc<RwLock<ProviderRegistry>>,
+    /// Snapshot of all session messages as of the last AgentEnd — used by /btw overlay.
+    messages_snapshot: Vec<AgentMessage>,
     skills: Vec<crate::core::skills::Skill>,
     repo_root: Option<String>,
     /// Stable repo fingerprint (SHA of initial commit) — rename-safe session filter.
@@ -71,6 +82,7 @@ impl InteractiveMode {
     pub fn new(
         cmd_tx: channel::Sender<SessionCommand>,
         model_registry: Arc<ModelRegistry>,
+        provider_registry: Arc<RwLock<ProviderRegistry>>,
         initial_model: Option<Model>,
         initial_thinking: ThinkingLevel,
         initial_effort: Option<EffortLevel>,
@@ -87,6 +99,8 @@ impl InteractiveMode {
             current_thinking: initial_thinking,
             current_effort: initial_effort,
             model_registry,
+            provider_registry,
+            messages_snapshot: Vec::new(),
             skills,
             repo_root,
             repo_id,
@@ -241,6 +255,8 @@ impl InteractiveMode {
             }
             AgentSessionEvent::SessionStarted { id, name } => {
                 self.session_id = Some(id.clone());
+                // Clear accumulated messages on any new/reset session.
+                self.messages_snapshot.clear();
                 layout.footer.set_session_id(id);
                 if let Some(n) = name {
                     layout.footer.set_session_name(Some(n));
@@ -373,6 +389,8 @@ impl InteractiveMode {
                 } else {
                     Some(format!("Loaded ({} messages)", messages.len()))
                 };
+                // Reset the messages snapshot to the loaded history.
+                self.messages_snapshot = messages;
                 tui.request_render(true); // full redraw — content replaced
             }
             AgentSessionEvent::AutoCompactionStart { reason } => {
@@ -539,7 +557,13 @@ impl InteractiveMode {
                 layout.statusbar.start_streaming();
                 tui.request_render(false);
             }
-            AgentEvent::AgentEnd { .. } => {
+            AgentEvent::AgentEnd { messages } => {
+                // Append the new messages from this turn to the snapshot used by /btw.
+                // Skip aborted or errored turns: they will be retried, and we don't want
+                // the partial user message added twice.
+                if crate::interactive::btw_overlay::turn_succeeded(&messages) {
+                    self.messages_snapshot.extend(messages);
+                }
                 self.is_streaming = false;
                 layout.chat.cancel_stream();
                 layout.statusbar.finish();
@@ -827,8 +851,15 @@ impl InteractiveMode {
             "/btw" => {
                 if args.is_empty() {
                     self.status_message = Some("Usage: /btw <note>".into());
+                } else if let Some(model) = self.current_model.clone() {
+                    return Some(PickerRequest::BtwOverlay {
+                        messages: self.messages_snapshot.clone(),
+                        model,
+                        note: args.to_string(),
+                    });
                 } else {
-                    let _ = self.cmd_tx.send(SessionCommand::Btw { note: args.to_string() });
+                    self.status_message = Some("/btw: no model configured".into());
+                    self.status_is_error = true;
                 }
             }
             "/plan" => {
