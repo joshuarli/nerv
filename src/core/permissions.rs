@@ -57,7 +57,9 @@ pub fn path_for_args(tool: &str, args: &serde_json::Value) -> Option<String> {
         "read" | "edit" | "write" | "grep" | "find" | "ls" | "symbols" | "codemap" => {
             args["path"].as_str().map(|s| s.to_string())
         }
-        "bash" => args["command"].as_str().map(|s| s.to_string()),
+        // bash commands are not paths — returning None disables the "allow dir"
+        // shortcut so pressing 'a' on a bash prompt falls back to a simple allow.
+        "bash" => None,
         _ => None,
     }
 }
@@ -468,6 +470,39 @@ mod tests {
         // `//` appearing in a -m commit message must not be treated as an outside-repo path.
         let args = serde_json::json!({"command": r#"git commit -m "fix prompt for // patterns""#});
         assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn bash_git_commit_with_cd_prefix_allowed() {
+        // `cd /repo && git add -A && git commit -m "..."` must be allowed when
+        // the cd target is the repo root.  Also covers the case where the
+        // commit message has a stray trailing `"` (double-quote at end of the
+        // outer shell string), which confuses the quote-stripper.
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        // Normal form
+        let cmd = format!(
+            "cd {} && git add -A && git commit -m \"fix: some message\"",
+            root.display()
+        );
+        let args = serde_json::json!({"command": cmd});
+        assert_eq!(check("bash", &args, Some(&root)), Permission::Allow);
+
+        // Stray trailing `"` — the raw string the /commit skill sometimes emits
+        let cmd2 = format!(
+            "cd {} && git add -A && git commit -m \"fix: some message\"\"",
+            root.display()
+        );
+        let args2 = serde_json::json!({"command": cmd2});
+        assert_eq!(check("bash", &args2, Some(&root)), Permission::Allow);
+    }
+
+    #[test]
+    fn bash_path_for_args_returns_none() {
+        // bash commands are not paths — path_for_args must return None so that
+        // pressing 'a' on a bash permission prompt doesn't push the entire
+        // command string into allowed_dirs (which caused repeat prompts).
+        let args = serde_json::json!({"command": "git add -A && git commit -m \"msg\""});
+        assert_eq!(super::path_for_args("bash", &args), None);
     }
 
     #[test]
