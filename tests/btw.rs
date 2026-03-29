@@ -349,3 +349,90 @@ fn snapshot_skips_error_turns() {
         "errored turn should not be in snapshot"
     );
 }
+
+// ── strip_tool_content ────────────────────────────────────────────────────────
+
+use nerv::interactive::btw_overlay::strip_tool_content;
+
+fn tool_call_block() -> ContentBlock {
+    ContentBlock::ToolCall {
+        id: "call_1".into(),
+        name: "bash".into(),
+        arguments: serde_json::json!({"command": "ls"}),
+    }
+}
+
+fn tool_result_msg(id: &str) -> AgentMessage {
+    AgentMessage::ToolResult {
+        tool_call_id: id.into(),
+        content: vec![ContentItem::Text { text: "output".into() }],
+        is_error: false,
+        display: None,
+        timestamp: 0,
+    }
+}
+
+#[test]
+fn strip_tool_content_removes_tool_results() {
+    let messages = vec![
+        user_msg("hello"),
+        tool_result_msg("call_1"),
+        user_msg("world"),
+    ];
+    let stripped = strip_tool_content(messages);
+    assert_eq!(stripped.len(), 2, "tool result should be removed");
+    assert!(matches!(stripped[0], AgentMessage::User { .. }));
+    assert!(matches!(stripped[1], AgentMessage::User { .. }));
+}
+
+#[test]
+fn strip_tool_content_removes_tool_call_blocks_from_assistant() {
+    let messages = vec![
+        AgentMessage::Assistant(AssistantMessage {
+            content: vec![
+                ContentBlock::Text { text: "Let me run that.".into() },
+                tool_call_block(),
+            ],
+            stop_reason: StopReason::ToolUse,
+            usage: Some(Usage::default()),
+            timestamp: 0,
+        }),
+    ];
+    let stripped = strip_tool_content(messages);
+    assert_eq!(stripped.len(), 1);
+    if let AgentMessage::Assistant(a) = &stripped[0] {
+        assert_eq!(a.content.len(), 1, "only text block should remain");
+        assert!(matches!(a.content[0], ContentBlock::Text { .. }));
+    } else {
+        panic!("expected assistant message");
+    }
+}
+
+#[test]
+fn strip_tool_content_drops_assistant_with_only_tool_calls() {
+    let messages = vec![
+        AgentMessage::Assistant(AssistantMessage {
+            content: vec![tool_call_block()],
+            stop_reason: StopReason::ToolUse,
+            usage: Some(Usage::default()),
+            timestamp: 0,
+        }),
+    ];
+    let stripped = strip_tool_content(messages);
+    assert!(stripped.is_empty(), "assistant with only tool calls should be dropped");
+}
+
+#[test]
+fn strip_tool_content_preserves_user_and_text_assistant() {
+    let messages = vec![
+        user_msg("question"),
+        AgentMessage::Assistant(AssistantMessage {
+            content: vec![ContentBlock::Text { text: "answer".into() }],
+            stop_reason: StopReason::EndTurn,
+            usage: Some(Usage::default()),
+            timestamp: 0,
+        }),
+    ];
+    let stripped = strip_tool_content(messages.clone());
+    assert_eq!(stripped.len(), 2, "all messages should be preserved");
+}

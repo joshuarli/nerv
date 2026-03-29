@@ -13,7 +13,10 @@ use crossbeam_channel as channel;
 
 use crate::agent::agent::Agent;
 use crate::agent::provider::{new_cancel_flag, ProviderRegistry};
-use crate::agent::types::{AgentEvent, AgentMessage, ContentItem, Model, StopReason, StreamDelta};
+use crate::agent::types::{
+    AgentEvent, AgentMessage, AssistantMessage, ContentBlock, ContentItem, Model, StopReason,
+    StreamDelta,
+};
 use crate::interactive::theme;
 use crate::tui::stdin_buffer::{StdinBuffer, StdinEvent};
 use crate::tui::keys;
@@ -163,11 +166,50 @@ enum Chunk {
 }
 
 /// System prompt for the ephemeral btw agent — keeps answers short and tool-free.
-const BTW_SYSTEM_PROMPT: &str = "\
+pub const BTW_SYSTEM_PROMPT: &str = "\
 You are a concise assistant helping a developer mid-task. \
 Answer in 1-4 sentences. \
 No markdown headers. \
 No tool use.";
+
+/// Strip all tool-related content from a message snapshot before sending to btw.
+///
+/// The btw agent runs without any tools defined.  If we forward tool_use /
+/// tool_result blocks to the Anthropic API, it returns a 400 error because
+/// tool_use content requires matching tool definitions.  We keep only the text
+/// content from each message so btw has the full conversational context without
+/// the tool machinery.
+///
+/// - `AgentMessage::ToolResult` rows are dropped entirely (they carry no prose).
+/// - `AgentMessage::Assistant` rows have their `ContentBlock::ToolCall` blocks
+///   removed; if no text/thinking remains, the message is dropped too.
+/// - `AgentMessage::User` rows are passed through unchanged.
+pub fn strip_tool_content(messages: Vec<AgentMessage>) -> Vec<AgentMessage> {
+    messages
+        .into_iter()
+        .filter_map(|msg| match msg {
+            AgentMessage::ToolResult { .. } => None,
+            AgentMessage::Assistant(a) => {
+                let text_blocks: Vec<ContentBlock> = a
+                    .content
+                    .into_iter()
+                    .filter(|b| matches!(b, ContentBlock::Text { .. } | ContentBlock::Thinking { .. }))
+                    .collect();
+                if text_blocks.is_empty() {
+                    None
+                } else {
+                    Some(AgentMessage::Assistant(AssistantMessage {
+                        content: text_blocks,
+                        stop_reason: a.stop_reason,
+                        usage: a.usage,
+                        timestamp: a.timestamp,
+                    }))
+                }
+            }
+            other => Some(other),
+        })
+        .collect()
+}
 
 fn stream_btw(
     messages: Vec<AgentMessage>,
@@ -183,7 +225,8 @@ fn stream_btw(
     };
 
     let mut agent = Agent::new(provider_registry);
-    agent.state.messages = messages;
+    // Strip tool_use/tool_result blocks so the API call is valid without tools.
+    agent.state.messages = strip_tool_content(messages);
     agent.state.model = Some(model);
     agent.state.system_prompt = BTW_SYSTEM_PROMPT.into();
     agent.cancel = cancel;
