@@ -4,7 +4,7 @@ version = "0.1.6"
 edition = "2024"
 
 [dependencies]
-ureq = { version = "3", features = ["json", "native-tls"], default-features = false }
+ureq = { version = "3", features = ["json", "native-tls-no-default"], default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
@@ -58,6 +58,9 @@ split-debuginfo = "unpacked"
 
 [profile.dev.package."*"]
 opt-level = 2
+
+[patch.crates-io]
+ureq = { path = "vendor/ureq" }
 
 [profile.release]
 opt-level = 3
