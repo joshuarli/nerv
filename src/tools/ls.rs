@@ -36,7 +36,7 @@ impl AgentTool for LsTool {
         "List directory contents as a tree."
     }
     fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({"type":"object","properties":{"path":{"type":"string"}},"required":[]})
+        serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"Directory to list (default: cwd)"}},"required":[],"additionalProperties":false})
     }
     fn validate(&self, _input: &serde_json::Value) -> Result<(), ToolError> {
         Ok(())

@@ -47,11 +47,12 @@ impl AgentTool for ReadTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string"},
+                "path": {"type": "string", "description": "Path to the file to read"},
                 "offset": {"type": "integer", "description": "Start line (1-based). Default: 1"},
                 "limit": {"type": "integer", "description": "Max lines to return. Default: all"}
             },
-            "required": ["path"]
+            "required": ["path"],
+            "additionalProperties": false
         })
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {

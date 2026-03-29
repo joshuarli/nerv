@@ -30,7 +30,7 @@ impl AgentTool for BashTool {
         "Execute a bash command and return its output."
     }
     fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer"}},"required":["command"]})
+        serde_json::json!({"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute via /bin/bash -c"},"timeout":{"type":"integer","description":"Timeout in seconds (optional)"}},"required":["command"],"additionalProperties":false})
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("command").and_then(|v| v.as_str()).is_none() {

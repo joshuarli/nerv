@@ -87,7 +87,8 @@ impl AgentTool for SymbolsTool {
                     "description": "Also find call sites / usages via ripgrep (default: false)"
                 }
             },
-            "required": ["query"]
+            "required": ["query"],
+            "additionalProperties": false
         })
     }
 

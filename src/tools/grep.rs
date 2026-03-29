@@ -51,7 +51,8 @@ impl AgentTool for GrepTool {
                 "files_with_matches": {"type": "boolean", "description": "Only print filenames of files containing matches (default: false)"},
                 "count": {"type": "boolean", "description": "Only print match count per file (default: false)"}
             },
-            "required": ["pattern"]
+            "required": ["pattern"],
+            "additionalProperties": false
         })
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {

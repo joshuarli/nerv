@@ -30,7 +30,7 @@ impl AgentTool for WriteTool {
         "Write content to a file. Creates parent directories if needed."
     }
     fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})
+        serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"Path to the file to write"},"content":{"type":"string","description":"Content to write"}},"required":["path","content"],"additionalProperties":false})
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("path").and_then(|v| v.as_str()).is_none() {

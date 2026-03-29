@@ -47,19 +47,30 @@ impl AgentTool for EditTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Path to the file to edit"},
-                "old_text": {"type": "string", "description": "Exact text to find and replace"},
-                "new_text": {"type": "string", "description": "Replacement text"},
+                "path": {
+                    "type": "string",
+                    "description": "Path to the file to edit"
+                },
+                "old_text": {
+                    "type": "string",
+                    "description": "Exact text to find and replace. Must match exactly once in the file."
+                },
+                "new_text": {
+                    "type": "string",
+                    "description": "Replacement text"
+                },
                 "edits": {
                     "type": "array",
                     "description": "Multiple disjoint replacements, matched against the original file. Each old_text must be unique.",
+                    "minItems": 1,
                     "items": {
                         "type": "object",
                         "properties": {
-                            "old_text": {"type": "string"},
-                            "new_text": {"type": "string"}
+                            "old_text": {"type": "string", "description": "Exact text to find and replace. Must match exactly once in the file."},
+                            "new_text": {"type": "string", "description": "Replacement text"}
                         },
-                        "required": ["old_text", "new_text"]
+                        "required": ["old_text", "new_text"],
+                        "additionalProperties": false
                     }
                 }
             },

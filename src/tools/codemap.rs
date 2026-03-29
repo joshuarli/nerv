@@ -50,7 +50,8 @@ impl AgentTool for CodemapTool {
                     "description": "Level of detail: 'signatures' (default) for one-line signatures, 'full' for complete source bodies"
                 }
             },
-            "required": ["query"]
+            "required": ["query"],
+            "additionalProperties": false
         })
     }
 

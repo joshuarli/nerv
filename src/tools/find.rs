@@ -36,7 +36,7 @@ impl AgentTool for FindTool {
         "Find files by name pattern using fd."
     }
     fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}},"required":["pattern"]})
+        serde_json::json!({"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern to match filenames, e.g. '*.rs'"},"path":{"type":"string","description":"Directory to search (default: cwd)"}},"required":["pattern"],"additionalProperties":false})
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
         if input.get("pattern").and_then(|v| v.as_str()).is_none() {

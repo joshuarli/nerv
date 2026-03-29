@@ -53,7 +53,8 @@ impl AgentTool for MemoryTool {
                     "description": "For 'add': the memory to store (single line, compressed). For 'remove': the 1-based index to delete."
                 }
             },
-            "required": ["action"]
+            "required": ["action"],
+            "additionalProperties": false
         })
     }
 
