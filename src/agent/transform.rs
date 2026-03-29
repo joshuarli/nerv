@@ -136,8 +136,9 @@ struct MessageMeta {
     tool_names: std::collections::HashMap<String, String>,
     /// tool_call_id → original bash command string (for language-specific filters)
     bash_commands: std::collections::HashMap<String, String>,
-    /// tool_call_id → tool result details JSON (carries filtered:true from bash, etc.)
-    tool_result_details: std::collections::HashMap<String, serde_json::Value>,
+    /// IDs of bash ToolResults where output_filter already ran (filtered:true in details).
+    /// transform_context skips the bash filter for these.
+    already_filtered_ids: std::collections::HashSet<String>,
     /// tool_call_ids that have a corresponding ToolResult
     answered_ids: std::collections::HashSet<String>,
     /// tool_call_ids whose ToolResult was a denied error
@@ -175,11 +176,13 @@ impl MessageMeta {
             })
             .collect();
 
-        let tool_result_details: std::collections::HashMap<String, serde_json::Value> = messages
+        let already_filtered_ids: std::collections::HashSet<String> = messages
             .iter()
             .filter_map(|m| match m {
-                AgentMessage::ToolResult { tool_call_id, details: Some(d), .. } => {
-                    Some((tool_call_id.clone(), d.clone()))
+                AgentMessage::ToolResult { tool_call_id, details: Some(d), .. }
+                    if d.get("filtered").and_then(|v| v.as_bool()).unwrap_or(false) =>
+                {
+                    Some(tool_call_id.clone())
                 }
                 _ => None,
             })
@@ -214,7 +217,7 @@ impl MessageMeta {
         Self {
             tool_names,
             bash_commands,
-            tool_result_details,
+            already_filtered_ids,
             answered_ids,
             denied_ids,
             superseded_ids: find_superseded_results(messages),
@@ -317,7 +320,9 @@ fn transform_tool_result(
 
     let tool_name = meta.tool_names.get(&tool_call_id).map(|s| s.as_str());
 
-    // Superseded: a later call on the same resource makes this one stale
+    // Superseded: a later call on the same resource makes this one stale.
+    // Preserve details (specifically filtered:true) so subsequent transform
+    // calls don't attempt to re-filter the placeholder text.
     if meta.superseded_ids.contains(&tool_call_id) {
         return Some(AgentMessage::ToolResult {
             tool_call_id,
@@ -326,7 +331,7 @@ fn transform_tool_result(
             }],
             is_error,
             display: None,
-            details: None,
+            details,
             timestamp,
         });
     }
@@ -334,16 +339,21 @@ fn transform_tool_result(
     // Bash output filtering (position-independent): ANSI strip, dedup, language-specific compression.
     // Skipped when details["filtered"] == true — bash.rs already ran the pipeline eagerly at
     // execution time so the output gate could see the final byte count.
-    let already_filtered = meta.tool_result_details
-        .get(&tool_call_id)
-        .and_then(|d| d.get("filtered"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let already_filtered = meta.already_filtered_ids.contains(&tool_call_id);
     if tool_name == Some("bash") && !is_error && !already_filtered {
-        let raw = content_text(&content);
+        // Borrow the text directly from a single Text item to avoid an allocation;
+        // fall back to a joined String only for the (practically impossible) multi-item case.
+        let single: Option<&str> = if content.len() == 1 {
+            match &content[0] { ContentItem::Text { text } => Some(text.as_str()), _ => None }
+        } else { None };
+        let owned: String;
+        let raw: &str = match single {
+            Some(s) => s,
+            None => { owned = content_text(&content); &owned }
+        };
         let command = meta.bash_commands.get(&tool_call_id).map(|s| s.as_str()).unwrap_or("");
-        let filtered = output_filter::filter_bash_output(command, &raw);
-        if filtered != raw.as_str() {
+        let filtered = output_filter::filter_bash_output(command, raw);
+        if filtered != raw {
             // Rebuild, preserving display (used by TUI renderer) and marking
             // filtered:true so subsequent transform_context calls are idempotent.
             let new_details = match details {
@@ -361,14 +371,15 @@ fn transform_tool_result(
         }
     }
 
-    // Everything below only applies to stale messages
+    // Everything below only applies to stale messages.
+    // Preserve details so filtered:true is not lost across repeated transform calls.
     if i >= config.stale_cutoff {
         return Some(AgentMessage::ToolResult {
             tool_call_id,
             content,
             is_error,
             display: None,
-            details: None,
+            details,
             timestamp,
         });
     }
@@ -1422,6 +1433,41 @@ mod tests {
             second_read.contains("updated"),
             "second read should be preserved"
         );
+    }
+
+    #[test]
+    fn superseded_result_preserves_details() {
+        // A superseded read result that has details set should keep those details
+        // through the superseded rewrite so they aren't silently dropped.
+        // (bash is not superseded, but read is — use read to exercise the path.)
+        let msgs = vec![
+            user("do something"),
+            assistant_tool_call("r1", "read", serde_json::json!({"path": "src/main.rs"})),
+            tool_result_with_details("r1", "fn main() {}", serde_json::json!({"filtered": true, "some_flag": 42})),
+            assistant_tool_call("r2", "read", serde_json::json!({"path": "src/main.rs"})),
+            tool_result("r2", "fn main() { updated }"),
+            assistant_text("Done."),
+        ];
+
+        let result = transform_context(msgs, 200_000, None);
+
+        let first_result = result.iter().find(|m| matches!(m,
+            AgentMessage::ToolResult { tool_call_id, .. } if tool_call_id == "r1"
+        ));
+        let details = match first_result {
+            Some(AgentMessage::ToolResult { details, content, .. }) => {
+                let text = content_text(content);
+                assert!(text.contains("superseded"), "should be superseded: {}", text);
+                details.clone()
+            }
+            _ => panic!("expected ToolResult for b1"),
+        };
+        let filtered = details
+            .as_ref()
+            .and_then(|d| d.get("some_flag"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        assert_eq!(filtered, 42, "details should survive superseded rewrite");
     }
 
     #[test]
