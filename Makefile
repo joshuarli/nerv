@@ -1,3 +1,11 @@
+# This is important; worktrees should be reusing the target cache
+# here otherwise we'll thrash hundreds of MB for each disposable
+# worktree.
+GIT_COMMON_DIR := $(shell git rev-parse --git-common-dir)
+REPO_ROOT := $(abspath $(GIT_COMMON_DIR)/..)
+CARGO_TARGET_DIR := $(REPO_ROOT)/target
+export CARGO_TARGET_DIR
+
 NAME       := nerv
 TARGET     := $(shell rustc -vV | awk '/^host:/ {print $$2}')
 LLVM_PROFDATA := $(shell xcrun -f llvm-profdata 2>/dev/null)
