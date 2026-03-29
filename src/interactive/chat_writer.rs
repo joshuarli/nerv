@@ -13,7 +13,7 @@ use crate::tui::utils::wrap_text_with_ansi;
 /// Permanent blocks are cached after first render. Only new blocks and
 /// the live streaming tail are rendered on each frame.
 pub struct ChatWriter {
-    blocks: Vec<Block>,
+    blocks: RefCell<Vec<Block>>,
     streaming: Option<StreamingState>,
     picker: Option<Vec<String>>,
     // Per-block render cache (interior mutability for use in &self render)
@@ -28,6 +28,8 @@ struct RenderCache {
 enum Block {
     Styled(Vec<String>),
     Markdown(String),
+    /// Source freed after first render; lines stored for resize fallback.
+    Rendered(Vec<String>),
     Spacer,
 }
 
@@ -46,7 +48,7 @@ impl Default for ChatWriter {
 impl ChatWriter {
     pub fn new() -> Self {
         Self {
-            blocks: Vec::new(),
+            blocks: RefCell::new(Vec::new()),
             streaming: None,
             picker: None,
             cache: RefCell::new(RenderCache {
@@ -57,7 +59,7 @@ impl ChatWriter {
     }
 
     pub fn clear(&mut self) {
-        self.blocks.clear();
+        self.blocks.borrow_mut().clear();
         self.streaming = None;
         self.cache.borrow_mut().block_lines.clear();
     }
@@ -87,7 +89,7 @@ impl ChatWriter {
         // Drop cached render lines for flushed blocks.
         cache.block_lines.drain(..to_drop);
         // Drop source blocks too — they are fully owned by terminal scrollback.
-        self.blocks.drain(..to_drop);
+        self.blocks.borrow_mut().drain(..to_drop);
         // block_lines and blocks are now in sync again (same length, same offset).
     }
 
@@ -108,8 +110,8 @@ impl ChatWriter {
     pub fn append_text(&mut self, delta: &str) {
         if let Some(ref mut s) = self.streaming {
             if !s.thinking_committed && !s.thinking.is_empty() {
-                self.blocks.push(Block::Styled(style_thinking(&s.thinking)));
-                self.blocks.push(Block::Spacer);
+                self.blocks.borrow_mut().push(Block::Styled(style_thinking(&s.thinking)));
+                self.blocks.borrow_mut().push(Block::Spacer);
                 s.thinking_committed = true;
             }
             s.text.push_str(delta);
@@ -122,14 +124,14 @@ impl ChatWriter {
             && let Some(t) = thinking
             && !t.is_empty()
         {
-            self.blocks.push(Block::Styled(style_thinking(t)));
-            self.blocks.push(Block::Spacer);
+            self.blocks.borrow_mut().push(Block::Styled(style_thinking(t)));
+            self.blocks.borrow_mut().push(Block::Spacer);
         }
         self.streaming = None;
         if !text.is_empty() {
-            self.blocks.push(Block::Markdown(text.to_string()));
+            self.blocks.borrow_mut().push(Block::Markdown(text.to_string()));
         }
-        self.blocks.push(Block::Spacer);
+        self.blocks.borrow_mut().push(Block::Spacer);
     }
 
     pub fn cancel_stream(&mut self) {
@@ -137,18 +139,19 @@ impl ChatWriter {
     }
 
     pub fn push_user(&mut self, text: &str) {
-        self.blocks.push(Block::Styled(vec![format!(
+        self.blocks.borrow_mut().push(Block::Styled(vec![format!(
             "{} {}{}",
             theme::REVERSE,
             text,
             theme::RESET,
         )]));
-        self.blocks.push(Block::Spacer);
+        self.blocks.borrow_mut().push(Block::Spacer);
     }
 
     pub fn push_tool_call(&mut self, name: &str, args: &serde_json::Value) {
         let detail = format_tool_call(name, args);
         self.blocks
+            .borrow_mut()
             .push(Block::Styled(vec![format!("{}› {}", theme::DIM, detail)]));
     }
 
@@ -168,22 +171,22 @@ impl ChatWriter {
             ));
             lines.push(String::new());
         }
-        self.blocks.push(Block::Styled(lines));
+        self.blocks.borrow_mut().push(Block::Styled(lines));
     }
 
     pub fn push_styled(&mut self, style: &'static str, text: &str) {
-        self.blocks.push(Block::Styled(vec![format!(
+        self.blocks.borrow_mut().push(Block::Styled(vec![format!(
             "{}{}{}",
             style,
             text,
             theme::RESET,
         )]));
-        self.blocks.push(Block::Spacer);
+        self.blocks.borrow_mut().push(Block::Spacer);
     }
 
     pub fn push_markdown_source(&mut self, text: &str) {
-        self.blocks.push(Block::Markdown(text.to_string()));
-        self.blocks.push(Block::Spacer);
+        self.blocks.borrow_mut().push(Block::Markdown(text.to_string()));
+        self.blocks.borrow_mut().push(Block::Spacer);
     }
 
     pub fn streaming_len(&self) -> usize {
@@ -215,14 +218,22 @@ impl Component for ChatWriter {
 
         let mut out = Vec::new();
 
-        // Render only new blocks (cache hit for existing ones)
-        for i in 0..self.blocks.len() {
+        // Render only new blocks (cache hit for existing ones).
+        // After caching a Markdown block, replace it with Block::Rendered to free
+        // the raw source string — the rendered lines in block_lines are canonical now.
+        let blocks_len = self.blocks.borrow().len();
+        for i in 0..blocks_len {
             if i < cache.block_lines.len() {
                 out.extend_from_slice(&cache.block_lines[i]);
             } else {
-                let rendered = render_block(&self.blocks[i], width);
+                let rendered = render_block(&self.blocks.borrow()[i], width);
                 out.extend_from_slice(&rendered);
                 cache.block_lines.push(rendered);
+                // Free the Markdown source now that the rendered lines are cached.
+                let mut blocks = self.blocks.borrow_mut();
+                if matches!(blocks[i], Block::Markdown(_)) {
+                    blocks[i] = Block::Rendered(cache.block_lines[i].clone());
+                }
             }
         }
 
@@ -267,6 +278,10 @@ fn render_block(block: &Block, width: u16) -> Vec<String> {
             .flat_map(|line| wrap_text_with_ansi(line, width))
             .collect(),
         Block::Markdown(src) => Markdown::new(src).render(width),
+        // Source was freed after first render; return stored lines verbatim.
+        // If the terminal width changed these won't reflow, but notify_flushed
+        // will drop them entirely before they accumulate.
+        Block::Rendered(lines) => lines.clone(),
         Block::Spacer => vec![String::new()],
     }
 }

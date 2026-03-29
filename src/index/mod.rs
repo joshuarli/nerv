@@ -411,10 +411,9 @@ impl SymbolIndex {
             // Try the on-disk cache before running tree-sitter.
             if let Some(ref cache) = self.cache {
                 if let Some(symbols) = cache.get(&path, mtime_ms) {
-                    // SQLite hit: symbols restored, but source not cached on disk.
-                    // Read the source now so render() has it without a second I/O.
-                    let source = std::fs::read_to_string(&path).ok().map(Arc::new);
-                    self.files.insert(path, FileEntry { mtime, symbols, source });
+                    // SQLite hit: symbols already cached — no need to read source at
+                    // all.  render() will read it on demand via fs::read_to_string.
+                    self.files.insert(path, FileEntry { mtime, symbols, source: None });
                     continue;
                 }
             }
@@ -423,8 +422,9 @@ impl SymbolIndex {
                 if let Some(ref cache) = self.cache {
                     cache.put(&path, mtime_ms, &symbols);
                 }
-                let source = Some(Arc::new(source));
-                self.files.insert(path, FileEntry { mtime, symbols, source });
+                // Drop source after parsing — render() reads it on demand.
+                // Keeping it would duplicate every indexed file in RAM.
+                self.files.insert(path, FileEntry { mtime, symbols, source: None });
             }
         }
         self.last_scan = Some(Instant::now());
@@ -464,8 +464,7 @@ impl SymbolIndex {
         // Try cache first.
         if let Some(ref cache) = self.cache {
             if let Some(symbols) = cache.get(&canonical, mtime_ms) {
-                let source = std::fs::read_to_string(&canonical).ok().map(Arc::new);
-                self.files.insert(canonical, FileEntry { mtime, symbols, source });
+                self.files.insert(canonical, FileEntry { mtime, symbols, source: None });
                 return;
             }
         }
@@ -474,8 +473,8 @@ impl SymbolIndex {
             if let Some(ref cache) = self.cache {
                 cache.put(&canonical, mtime_ms, &symbols);
             }
-            let source = Some(Arc::new(source));
-            self.files.insert(canonical, FileEntry { mtime, symbols, source });
+            // Drop source after parsing; render() re-reads on demand.
+            self.files.insert(canonical, FileEntry { mtime, symbols, source: None });
         }
     }
 
