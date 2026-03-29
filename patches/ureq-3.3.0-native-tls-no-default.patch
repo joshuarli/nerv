@@ -1,0 +1,93 @@
+--- a/src/error.rs
++++ b/src/error.rs
+@@ -101,7 +101,7 @@
+     /// *Note:* The wrapped error struct is not considered part of ureq API.
+     /// Breaking changes in that struct will not be reflected in ureq
+     /// major versions.
+-    #[cfg(feature = "native-tls")]
++    #[cfg(any(feature = "native-tls", feature = "native-tls-no-default"))]
+     NativeTls(native_tls::Error),
+ 
+     /// An error providing DER encoded certificates or private keys to Native-TLS.
+@@ -109,7 +109,7 @@
+     /// *Note:* The wrapped error struct is not considered part of ureq API.
+     /// Breaking changes in that struct will not be reflected in ureq
+     /// major versions.
+-    #[cfg(feature = "native-tls")]
++    #[cfg(any(feature = "native-tls", feature = "native-tls-no-default"))]
+     Der(der::Error),
+ 
+     /// An error with the cookies.
+@@ -248,9 +248,9 @@
+             Error::Pem(v) => write!(f, "PEM: {:?}", v),
+             #[cfg(feature = "_rustls")]
+             Error::Rustls(v) => write!(f, "rustls: {}", v),
+-            #[cfg(feature = "native-tls")]
++            #[cfg(any(feature = "native-tls", feature = "native-tls-no-default"))]
+             Error::NativeTls(v) => write!(f, "native-tls: {}", v),
+-            #[cfg(feature = "native-tls")]
++            #[cfg(any(feature = "native-tls", feature = "native-tls-no-default"))]
+             Error::Der(v) => write!(f, "der: {}", v),
+             #[cfg(feature = "cookies")]
+             Error::Cookie(v) => write!(f, "cookie: {}", v),
+@@ -297,14 +297,14 @@
+     }
+ }
+ 
+-#[cfg(feature = "native-tls")]
++#[cfg(any(feature = "native-tls", feature = "native-tls-no-default"))]
+ impl From<native_tls::Error> for Error {
+     fn from(value: native_tls::Error) -> Self {
+         Self::NativeTls(value)
+     }
+ }
+ 
+-#[cfg(feature = "native-tls")]
++#[cfg(any(feature = "native-tls", feature = "native-tls-no-default"))]
+ impl From<der::Error> for Error {
+     fn from(value: der::Error) -> Self {
+         Self::Der(value)
+--- a/src/tls/mod.rs
++++ b/src/tls/mod.rs
+@@ -11,7 +11,7 @@
+ #[cfg(feature = "_rustls")]
+ pub(crate) mod rustls;
+ 
+-#[cfg(feature = "native-tls")]
++#[cfg(any(feature = "native-tls", feature = "native-tls-no-default"))]
+ pub(crate) mod native_tls;
+ 
+ /// Setting for which TLS provider to use.
+@@ -49,7 +49,7 @@
+                 cfg!(feature = "_rustls")
+             }
+             TlsProvider::NativeTls => {
+-                cfg!(feature = "native-tls")
++                cfg!(any(feature = "native-tls", feature = "native-tls-no-default"))
+             }
+         }
+     }
+--- a/src/unversioned/transport/mod.rs
++++ b/src/unversioned/transport/mod.rs
+@@ -61,7 +61,7 @@
+ #[cfg(feature = "_rustls")]
+ pub use crate::tls::rustls::RustlsConnector;
+ 
+-#[cfg(feature = "native-tls")]
++#[cfg(any(feature = "native-tls", feature = "native-tls-no-default"))]
+ pub use crate::tls::native_tls::NativeTlsConnector;
+ 
+ pub mod time;
+@@ -384,8 +384,10 @@
+             crate::tls::TlsProvider::Rustls,
+         ));
+ 
+-        // As a fallback if rustls isn't enabled, use native-tls
+-        #[cfg(feature = "native-tls")]
++        // As a fallback if rustls isn't enabled, use native-tls.
++        // native-tls-no-default activates the connector but skips the bundled
++        // webpki roots; wire it in here so PlatformVerifier works without them.
++        #[cfg(any(feature = "native-tls", feature = "native-tls-no-default"))]
+         let inner = inner.chain(NativeTlsConnector::default());
+ 
+         // Panic if the config calls for native-tls, the uri scheme is https and that
