@@ -177,24 +177,8 @@ impl TUI {
             }
         }
 
-        // Flush overflow to scrollback: clear everything, dump all
-        // scrollable content from scratch, then force full redraw.
-        let scrollable_end = new_lines.len().saturating_sub(self.fixed_bottom);
-        let flush_limit = viewport_top.min(scrollable_end);
-        if flush_limit > self.scrollback_flushed {
-            // Nuke the screen
-            self.terminal.write_bytes(b"\x1b[2J\x1b[H");
-            // Dump ALL scrollable content (from line 0) to scrollback
-            let to_flush = &new_lines[..flush_limit];
-            let mut text = to_flush.join("\n");
-            text.push_str("\x1b[0m");
-            self.terminal.dump_scrollback(&text);
-            self.scrollback_flushed = flush_limit;
-            // Force full redraw of the viewport
-            self.previous_lines.clear();
-        }
-
-        // Append reset + hyperlink close to each non-empty line
+        // Append reset + hyperlink close to each non-empty line (before flush
+        // so the scrollback copy has correct styling too).
         for line in &mut new_lines {
             if !line.is_empty() {
                 line.push_str("\x1b[0m\x1b]8;;\x07");
@@ -205,8 +189,48 @@ impl TUI {
         self.write_buf.clear();
         let buf = &mut self.write_buf;
 
-        // Synchronized output begin (DEC 2026)
+        // Synchronized output begin (DEC 2026) — wraps the flush AND the
+        // viewport redraw so neither is visible as an intermediate state.
         buf.extend_from_slice(b"\x1b[?2026h");
+
+        // Flush overflow to scrollback by printing the new lines at the top
+        // of the screen and then scrolling them into the terminal's natural
+        // scrollback buffer via newlines at the bottom row.  We never use
+        // ED 2 (\x1b[2J) here because many terminals (Terminal.app, iTerm2)
+        // treat that as "clear scrollback too", which is exactly what we want
+        // to avoid.
+        let scrollable_end = new_lines.len().saturating_sub(self.fixed_bottom);
+        let flush_limit = viewport_top.min(scrollable_end);
+        if flush_limit > self.scrollback_flushed {
+            let delta = flush_limit - self.scrollback_flushed;
+
+            // Step 1: overwrite the top `delta` rows of the screen with the
+            // lines that should enter scrollback, starting at row 1.
+            buf.extend_from_slice(b"\x1b[H");
+            for line in &new_lines[self.scrollback_flushed..flush_limit] {
+                buf.extend_from_slice(line.as_bytes());
+                buf.extend_from_slice(b"\r\n");
+            }
+
+            // Step 2: move to the last row and emit newlines to scroll the
+            // lines written in Step 1 into the terminal's scrollback buffer.
+            // Each \r\n at the bottom row scrolls the screen up by one line.
+            // If delta <= height, we need exactly `delta` newlines.
+            // If delta > height, Step 1 already scrolled `delta - height`
+            // lines into scrollback on its own (the cursor ran off the bottom
+            // mid-print), so we only need `height` newlines to clear the rest.
+            let scroll_count = delta.min(height as usize);
+            let _ = write!(buf, "\x1b[{};1H", height);
+            for _ in 0..scroll_count {
+                buf.extend_from_slice(b"\r\n");
+            }
+
+            self.scrollback_flushed = flush_limit;
+            // Force a full redraw so the viewport is repainted cleanly.
+            self.previous_lines.clear();
+        }
+
+        // (Synchronized output begin was already emitted above)
 
         let need_full_render = width != self.previous_width
             || height != self.previous_height
@@ -246,7 +270,12 @@ impl TUI {
     }
 
     fn full_render(buf: &mut Vec<u8>, lines: &[String], height: u16, viewport_top: usize) {
-        buf.extend_from_slice(b"\x1b[2J\x1b[H");
+        // \x1b[H  — move to home (1,1)
+        // \x1b[J  — erase from cursor to end of screen (ED 0)
+        // We intentionally do NOT use \x1b[2J (erase entire display) because
+        // many terminals (Terminal.app, iTerm2) also clear the scrollback
+        // buffer when they receive ED 2.
+        buf.extend_from_slice(b"\x1b[H\x1b[J");
 
         let visible = &lines[viewport_top..];
         for (i, line) in visible.iter().take(height as usize).enumerate() {
