@@ -273,7 +273,7 @@ impl InteractiveMode {
                     layout.footer.set_session_name(None);
                 }
             }
-            AgentSessionEvent::SessionLoaded { messages, cost_usd, total_input, total_output, api_calls } => {
+            AgentSessionEvent::SessionLoaded { messages, cost_usd, total_input, total_output, api_calls, input_history } => {
                 // Dump full history to terminal scrollback
                 let mut scrollback = String::new();
                 for msg in &messages {
@@ -400,6 +400,10 @@ impl InteractiveMode {
                 };
                 // Reset the messages snapshot to the loaded history.
                 self.messages_snapshot = messages;
+                // Restore input history for up-arrow recall; reset navigation state.
+                self.message_history = input_history;
+                self.history_index = None;
+                self.history_saved_text = String::new();
                 tui.request_render(true); // full redraw — content replaced
             }
             AgentSessionEvent::AutoCompactionStart { reason } => {
@@ -699,6 +703,10 @@ impl InteractiveMode {
         // Record in history (avoid consecutive duplicates)
         if self.message_history.last().map(|s| s.as_str()) != Some(text.as_str()) {
             self.message_history.push(text.clone());
+            // Persist the full history so it survives restarts and compactions.
+            let _ = self.cmd_tx.try_send(SessionCommand::SaveInputHistory {
+                history: self.message_history.clone(),
+            });
         }
 
         if text.starts_with('/') {

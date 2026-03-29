@@ -19,6 +19,8 @@ pub struct SessionContext {
     pub total_output: u64,
     /// Number of API calls made in this session branch.
     pub api_calls: u32,
+    /// All user-typed prompts ever submitted in this session, oldest first.
+    pub input_history: Vec<String>,
 }
 
 pub struct SessionManager {
@@ -49,10 +51,17 @@ impl SessionManager {
                 worktree          TEXT,
                 name              TEXT,
                 compact_threshold REAL,
-                repo_id           TEXT
+                repo_id           TEXT,
+                input_history     TEXT
             )",
         )
         .expect("failed to create sessions table");
+
+        // Migrate: add input_history column to existing databases that pre-date it.
+        db.execute(
+            "ALTER TABLE sessions ADD COLUMN input_history TEXT",
+        )
+        .ok(); // Ignore error — column already exists on fresh DBs.
 
         db.execute(
             "CREATE TABLE IF NOT EXISTS entries (
@@ -527,6 +536,7 @@ impl SessionManager {
             total_input,
             total_output,
             api_calls,
+            input_history: self.load_input_history(),
         }
     }
 
@@ -554,6 +564,46 @@ impl SessionManager {
                 stmt.bind((3, sid.as_str())).ok();
                 stmt.next().ok();
             }
+        }
+    }
+
+    /// Persist the full input history (all user-typed prompts) for the current session.
+    pub fn save_input_history(&self, history: &[String]) {
+        if let Some(ref sid) = self.session_id {
+            let json = serde_json::to_string(history).unwrap_or_else(|_| "[]".to_string());
+            if let Ok(mut stmt) = self
+                .db
+                .prepare("UPDATE sessions SET input_history = ? WHERE id = ?")
+            {
+                stmt.bind((1, json.as_str())).ok();
+                stmt.bind((2, sid.as_str())).ok();
+                stmt.next().ok();
+            }
+        }
+    }
+
+    /// Load the persisted input history for the current session.
+    pub fn load_input_history(&self) -> Vec<String> {
+        let sid = match self.session_id.as_deref() {
+            Some(s) => s,
+            None => return Vec::new(),
+        };
+        let mut stmt = match self
+            .db
+            .prepare("SELECT input_history FROM sessions WHERE id = ?")
+        {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.bind((1, sid)).ok();
+        if stmt.next().ok() == Some(sqlite::State::Row) {
+            if let Ok(Some(json)) = stmt.read::<Option<String>, _>("input_history") {
+                serde_json::from_str::<Vec<String>>(&json).unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
         }
     }
 

@@ -82,6 +82,8 @@ pub enum AgentSessionEvent {
         total_output: u64,
         /// Number of API calls made in this session (restored from DB).
         api_calls: u32,
+        /// All user-typed prompts ever submitted in this session (for up-arrow recall).
+        input_history: Vec<String>,
     },
     /// A worktree was created (via /wt). UI should update cwd display.
     WorktreeCreated {
@@ -149,6 +151,8 @@ pub enum SessionCommand {
     MergeWorktree,
     SetPlanMode { enabled: bool },
     ForkSession,
+    /// Persist the full input history for the current session.
+    SaveInputHistory { history: Vec<String> },
 }
 
 pub struct AgentSession {
@@ -789,6 +793,7 @@ impl AgentSession {
                 let total_input = ctx.total_input;
                 let total_output = ctx.total_output;
                 let api_calls = ctx.api_calls;
+                let input_history = ctx.input_history;
 
                 self.agent.state.messages = ctx.messages;
 
@@ -880,6 +885,7 @@ impl AgentSession {
                     total_input,
                     total_output,
                     api_calls,
+                    input_history,
                 });
                 if let Some(pct) = self.apply_saved_compact_threshold() {
                     let _ = event_tx.send(AgentSessionEvent::CompactThresholdChanged { pct });
@@ -1093,6 +1099,7 @@ pub fn session_task(
                     total_input: 0,
                     total_output: 0,
                     api_calls: 0,
+                    input_history: vec![],
                 });
             }
             SessionCommand::LoadSession { id } => session.load_session(&id, &event_tx),
@@ -1132,6 +1139,9 @@ pub fn session_task(
                         });
                     }
                 }
+            }
+            SessionCommand::SaveInputHistory { history } => {
+                session.session_manager.save_input_history(&history);
             }
             SessionCommand::SetCompactThreshold { pct } => {
                 let frac = (pct as f64 / 100.0).clamp(0.01, 1.0);
@@ -1260,6 +1270,7 @@ pub fn session_task(
                 let total_input = ctx.total_input;
                 let total_output = ctx.total_output;
                 let api_calls = ctx.api_calls;
+                let input_history = ctx.input_history;
                 session.agent.state.messages = ctx.messages;
                 session.agent.state.thinking_level = ctx.thinking_level;
                 let _ = event_tx.send(AgentSessionEvent::ThinkingLevelChanged {
@@ -1274,6 +1285,7 @@ pub fn session_task(
                     total_input,
                     total_output,
                     api_calls,
+                    input_history,
                 });
             }
             SessionCommand::CreateWorktree {

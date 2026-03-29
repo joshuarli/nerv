@@ -135,6 +135,10 @@ impl Editor {
         }
     }
 
+    pub fn cursor_line(&self) -> usize {
+        self.cursor_line
+    }
+
     pub fn is_empty(&self) -> bool {
         self.lines.len() == 1 && self.lines[0].is_empty()
     }

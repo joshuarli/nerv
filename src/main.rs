@@ -1331,9 +1331,9 @@ fn main() {
                                 layout.statusbar.render_queue(tui.width());
                                 tui.request_render(false); render_frame!(tui, layout); continue;
                             }
-                            // History navigation: up/down when not streaming and editor is empty
+                            // History navigation: up/down when not streaming and cursor is on the first line
                             if keys::matches_key(seq, "up") && !interactive.is_streaming
-                                && layout.editor.is_empty()
+                                && layout.editor.cursor_line() == 0
                             {
                                 let current = layout.editor.text();
                                 if let Some(text) = interactive.history_up(&current) {
