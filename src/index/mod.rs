@@ -822,7 +822,7 @@ mod tests {
     fn free_function() {
         let syms = parse_source("fn hello(x: i32) -> bool {\n    true\n}\n");
         assert_eq!(syms.len(), 1);
-        assert_eq!(syms[0].name, "hello");
+        assert_eq!(syms[0].name.as_ref(), "hello");
         assert_eq!(syms[0].kind, SymbolKind::Function);
         assert!(syms[0].signature.starts_with("fn hello"));
         assert!(syms[0].parent.is_none());
@@ -832,9 +832,9 @@ mod tests {
     fn struct_and_enum() {
         let syms = parse_source("struct Foo;\nenum Bar { A, B }\n");
         assert_eq!(syms.len(), 2);
-        assert_eq!(syms[0].name, "Foo");
+        assert_eq!(syms[0].name.as_ref(), "Foo");
         assert_eq!(syms[0].kind, SymbolKind::Struct);
-        assert_eq!(syms[1].name, "Bar");
+        assert_eq!(syms[1].name.as_ref(), "Bar");
         assert_eq!(syms[1].kind, SymbolKind::Enum);
     }
 
@@ -847,9 +847,9 @@ mod tests {
         assert_eq!(syms.len(), 3, "got: {:#?}", syms);
         let methods: Vec<_> = syms.iter().filter(|s| s.kind == SymbolKind::Method).collect();
         assert_eq!(methods.len(), 2);
-        assert_eq!(methods[0].name, "run");
+        assert_eq!(methods[0].name.as_ref(), "run");
         assert_eq!(methods[0].parent.as_deref(), Some("impl Agent"));
-        assert_eq!(methods[1].name, "stop");
+        assert_eq!(methods[1].name.as_ref(), "stop");
     }
 
     #[test]
@@ -857,7 +857,7 @@ mod tests {
         let syms = parse_source(
             "trait Foo {}\nstruct Bar;\nimpl Foo for Bar {\n    fn do_it(&self) {}\n}\n",
         );
-        let method = syms.iter().find(|s| s.name == "do_it").unwrap();
+        let method = syms.iter().find(|s| s.name.as_ref() == "do_it").unwrap();
         assert_eq!(method.kind, SymbolKind::Method);
         assert_eq!(method.parent.as_deref(), Some("impl Foo for Bar"));
     }
@@ -865,7 +865,7 @@ mod tests {
     #[test]
     fn trait_definition() {
         let syms = parse_source("pub trait AgentTool: Send + Sync {\n    fn name(&self) -> &str;\n}\n");
-        let tr = syms.iter().find(|s| s.name == "AgentTool").unwrap();
+        let tr = syms.iter().find(|s| s.name.as_ref() == "AgentTool").unwrap();
         assert_eq!(tr.kind, SymbolKind::Trait);
     }
 
@@ -873,7 +873,7 @@ mod tests {
     fn type_alias() {
         let syms = parse_source("type Result<T> = std::result::Result<T, Error>;\n");
         assert_eq!(syms.len(), 1);
-        assert_eq!(syms[0].name, "Result");
+        assert_eq!(syms[0].name.as_ref(), "Result");
         assert_eq!(syms[0].kind, SymbolKind::Type);
     }
 
@@ -882,14 +882,14 @@ mod tests {
         let syms = parse_source("mod inner {\n    fn private() {}\n}\n");
         let mods: Vec<_> = syms.iter().filter(|s| s.kind == SymbolKind::Module).collect();
         assert_eq!(mods.len(), 1);
-        assert_eq!(mods[0].name, "inner");
+        assert_eq!(mods[0].name.as_ref(), "inner");
     }
 
     #[test]
     fn macro_definition() {
         let syms = parse_source("macro_rules! my_macro {\n    () => {};\n}\n");
         assert_eq!(syms.len(), 1);
-        assert_eq!(syms[0].name, "my_macro");
+        assert_eq!(syms[0].name.as_ref(), "my_macro");
         assert_eq!(syms[0].kind, SymbolKind::Macro);
     }
 
@@ -930,8 +930,8 @@ mod tests {
         );
         let methods: Vec<_> = syms.iter().filter(|s| s.kind == SymbolKind::Method).collect();
         assert_eq!(methods.len(), 2);
-        assert_eq!(methods[0].name, "name");
-        assert_eq!(methods[1].name, "default_impl");
+        assert_eq!(methods[0].name.as_ref(), "name");
+        assert_eq!(methods[1].name.as_ref(), "default_impl");
     }
 
     #[test]
@@ -1012,7 +1012,7 @@ mod tests {
         );
 
         let results = index.search("foo", None, None);
-        assert_eq!(results[0].name, "foo", "exact match should sort first");
+        assert_eq!(results[0].name.as_ref(), "foo", "exact match should sort first");
     }
 
     #[test]
@@ -1057,7 +1057,7 @@ mod tests {
 
         // Multi-word query matches any word
         let results = index.search("execute permission", None, None);
-        let names: Vec<&str> = results.iter().map(|s| s.name.as_str()).collect();
+        let names: Vec<&str> = results.iter().map(|s| s.name.as_ref()).collect();
         assert!(names.contains(&"execute_tools"), "should match 'execute'");
         assert!(names.contains(&"check_permission"), "should match 'permission'");
         assert!(!names.contains(&"render_ui"), "should not match unrelated");
@@ -1065,7 +1065,7 @@ mod tests {
         // Single-word still works as substring
         let results = index.search("perm", None, None);
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name, "check_permission");
+        assert_eq!(results[0].name.as_ref(), "check_permission");
     }
 
     #[test]
@@ -1074,9 +1074,9 @@ mod tests {
             "const MAX: usize = 100;\nstatic COUNTER: AtomicU32 = AtomicU32::new(0);\n",
         );
         assert_eq!(syms.len(), 2);
-        assert_eq!(syms[0].name, "MAX");
+        assert_eq!(syms[0].name.as_ref(), "MAX");
         assert_eq!(syms[0].kind, SymbolKind::Const);
-        assert_eq!(syms[1].name, "COUNTER");
+        assert_eq!(syms[1].name.as_ref(), "COUNTER");
         assert_eq!(syms[1].kind, SymbolKind::Const);
     }
 
@@ -1084,7 +1084,7 @@ mod tests {
     fn union_definition() {
         let syms = parse_source("union MyUnion {\n    i: i32,\n    f: f32,\n}\n");
         assert_eq!(syms.len(), 1);
-        assert_eq!(syms[0].name, "MyUnion");
+        assert_eq!(syms[0].name.as_ref(), "MyUnion");
         assert_eq!(syms[0].kind, SymbolKind::Union);
     }
 
@@ -1096,8 +1096,8 @@ mod tests {
         );
         let methods: Vec<_> = syms.iter().filter(|s| s.kind == SymbolKind::Method).collect();
         assert_eq!(methods.len(), 2, "trait method declarations should be indexed: {:#?}", syms);
-        assert_eq!(methods[0].name, "name");
-        assert_eq!(methods[1].name, "execute");
+        assert_eq!(methods[0].name.as_ref(), "name");
+        assert_eq!(methods[1].name.as_ref(), "execute");
     }
 
     #[test]
@@ -1112,11 +1112,11 @@ mod tests {
 
         let enums = index.search("", Some(SymbolKind::Enum), None);
         assert_eq!(enums.len(), 1);
-        assert_eq!(enums[0].name, "Bar");
+        assert_eq!(enums[0].name.as_ref(), "Bar");
 
         let structs = index.search("", Some(SymbolKind::Struct), None);
         assert_eq!(structs.len(), 1);
-        assert_eq!(structs[0].name, "Foo");
+        assert_eq!(structs[0].name.as_ref(), "Foo");
     }
 
     #[test]
@@ -1125,7 +1125,7 @@ mod tests {
         let syms = parse_source("fn good() {}\nfn broken( {}\n");
         // Should at least find the valid function
         assert!(
-            syms.iter().any(|s| s.name == "good"),
+            syms.iter().any(|s| s.name.as_ref() == "good"),
             "should recover valid symbols despite syntax errors: {:#?}",
             syms
         );
@@ -1409,7 +1409,7 @@ mod tests {
         for sym in &syms {
             let slice = &source[sym.start_byte as usize..sym.end_byte as usize];
             assert!(
-                slice.contains(&sym.name),
+                slice.contains(sym.name.as_ref()),
                 "byte slice for '{}' should contain the name; got: {:?}",
                 sym.name,
                 slice
@@ -1433,7 +1433,7 @@ mod tests {
         let syms = parse_source(source);
         assert_eq!(syms.len(), 1);
         let sym = &syms[0];
-        assert_eq!(sym.name, "after_unicode");
+        assert_eq!(sym.name.as_ref(), "after_unicode");
         // Verify the slice is valid UTF-8 and contains the function.
         let slice = &source[sym.start_byte as usize..sym.end_byte as usize];
         assert!(slice.contains("after_unicode"), "wrong byte slice: {:?}", slice);
@@ -1465,9 +1465,9 @@ mod tests {
         // Each slice must contain only that function's body.
         for sym in &sorted {
             let slice = &source[sym.start_byte as usize..sym.end_byte as usize];
-            assert!(slice.contains(&sym.name), "slice for '{}' missing name", sym.name);
+            assert!(slice.contains(sym.name.as_ref()), "slice for '{}' missing name", sym.name);
         }
-        let alpha = sorted.iter().find(|s| s.name == "alpha").unwrap();
+        let alpha = sorted.iter().find(|s| s.name.as_ref() == "alpha").unwrap();
         let slice = &source[alpha.start_byte as usize..alpha.end_byte as usize];
         assert!(!slice.contains("beta"),  "alpha slice bleeds into beta:  {:?}", slice);
         assert!(!slice.contains("gamma"), "alpha slice bleeds into gamma: {:?}", slice);
@@ -1479,7 +1479,7 @@ mod tests {
     fn go_free_function() {
         let syms = parse_go("package main\n\nfunc Hello(x int) bool {\n\treturn true\n}\n");
         assert_eq!(syms.len(), 1);
-        assert_eq!(syms[0].name, "Hello");
+        assert_eq!(syms[0].name.as_ref(), "Hello");
         assert_eq!(syms[0].kind, SymbolKind::Function);
         assert!(syms[0].parent.is_none());
     }
@@ -1488,7 +1488,7 @@ mod tests {
     fn go_method() {
         let src = "package main\n\ntype Dog struct{}\n\nfunc (d Dog) Speak() string {\n\treturn \"woof\"\n}\n";
         let syms = parse_go(src);
-        let method = syms.iter().find(|s| s.name == "Speak").unwrap();
+        let method = syms.iter().find(|s| s.name.as_ref() == "Speak").unwrap();
         assert_eq!(method.kind, SymbolKind::Method);
         assert_eq!(method.parent.as_deref(), Some("Dog"));
     }
@@ -1496,7 +1496,7 @@ mod tests {
     #[test]
     fn go_struct_type() {
         let syms = parse_go("package main\n\ntype Point struct {\n\tX, Y int\n}\n");
-        let s = syms.iter().find(|s| s.name == "Point").unwrap();
+        let s = syms.iter().find(|s| s.name.as_ref() == "Point").unwrap();
         assert_eq!(s.kind, SymbolKind::Struct);
     }
 
@@ -1506,14 +1506,14 @@ mod tests {
     fn python_free_function() {
         let syms = parse_py("def greet(name: str) -> str:\n    return f'hello {name}'\n");
         assert_eq!(syms.len(), 1);
-        assert_eq!(syms[0].name, "greet");
+        assert_eq!(syms[0].name.as_ref(), "greet");
         assert_eq!(syms[0].kind, SymbolKind::Function);
     }
 
     #[test]
     fn python_class() {
         let syms = parse_py("class Animal:\n    pass\n");
-        let c = syms.iter().find(|s| s.name == "Animal").unwrap();
+        let c = syms.iter().find(|s| s.name.as_ref() == "Animal").unwrap();
         assert_eq!(c.kind, SymbolKind::Struct);
     }
 
@@ -1521,7 +1521,7 @@ mod tests {
     fn python_method() {
         let src = "class Dog:\n    def speak(self) -> str:\n        return 'woof'\n";
         let syms = parse_py(src);
-        let method = syms.iter().find(|s| s.name == "speak").unwrap();
+        let method = syms.iter().find(|s| s.name.as_ref() == "speak").unwrap();
         assert_eq!(method.kind, SymbolKind::Method);
         assert_eq!(method.parent.as_deref(), Some("Dog"));
     }
@@ -1532,7 +1532,7 @@ mod tests {
     fn ts_free_function() {
         let syms = parse_ts("function greet(name: string): string {\n  return `hello ${name}`;\n}\n");
         assert_eq!(syms.len(), 1);
-        assert_eq!(syms[0].name, "greet");
+        assert_eq!(syms[0].name.as_ref(), "greet");
         assert_eq!(syms[0].kind, SymbolKind::Function);
     }
 
@@ -1540,9 +1540,9 @@ mod tests {
     fn ts_class_and_method() {
         let src = "class Animal {\n  speak(): string {\n    return 'roar';\n  }\n}\n";
         let syms = parse_ts(src);
-        let cls = syms.iter().find(|s| s.name == "Animal").unwrap();
+        let cls = syms.iter().find(|s| s.name.as_ref() == "Animal").unwrap();
         assert_eq!(cls.kind, SymbolKind::Struct);
-        let method = syms.iter().find(|s| s.name == "speak").unwrap();
+        let method = syms.iter().find(|s| s.name.as_ref() == "speak").unwrap();
         assert_eq!(method.kind, SymbolKind::Method);
         assert_eq!(method.parent.as_deref(), Some("Animal"));
     }
@@ -1551,23 +1551,23 @@ mod tests {
     fn ts_interface_and_type_alias() {
         let src = "interface Shape { area(): number; }\ntype Color = string;\n";
         let syms = parse_ts(src);
-        let iface = syms.iter().find(|s| s.name == "Shape").unwrap();
+        let iface = syms.iter().find(|s| s.name.as_ref() == "Shape").unwrap();
         assert_eq!(iface.kind, SymbolKind::Trait);
-        let alias = syms.iter().find(|s| s.name == "Color").unwrap();
+        let alias = syms.iter().find(|s| s.name.as_ref() == "Color").unwrap();
         assert_eq!(alias.kind, SymbolKind::Type);
     }
 
     #[test]
     fn ts_enum() {
         let syms = parse_ts("enum Direction { Up, Down, Left, Right }\n");
-        let e = syms.iter().find(|s| s.name == "Direction").unwrap();
+        let e = syms.iter().find(|s| s.name.as_ref() == "Direction").unwrap();
         assert_eq!(e.kind, SymbolKind::Enum);
     }
 
     #[test]
     fn ts_arrow_function_const() {
         let syms = parse_ts("const add = (a: number, b: number): number => a + b;\n");
-        let f = syms.iter().find(|s| s.name == "add").unwrap();
+        let f = syms.iter().find(|s| s.name.as_ref() == "add").unwrap();
         assert_eq!(f.kind, SymbolKind::Function);
     }
 }

@@ -8,11 +8,8 @@ use crossbeam_channel as channel;
 use crate::agent::agent::Agent;
 use crate::agent::provider::{new_cancel_flag, CancelFlag, ProviderRegistry};
 use crate::agent::types::{AgentEvent, AgentMessage, ContentItem, Model, StopReason, StreamDelta};
-use crate::interactive::btw_overlay::turn_succeeded;
 use crate::interactive::theme;
 use crate::tui::tui::Component;
-
-// ─────────────────────────────── chunk protocol ──────────────────────────────
 
 pub enum BtwChunk {
     Text(String),
@@ -20,11 +17,6 @@ pub enum BtwChunk {
     Usage(crate::agent::types::Usage),
     Done,
 }
-
-// ─────────────────────────────── panel ───────────────────────────────────────
-
-/// Minimum height of the panel (border + 1 content line + border).
-const MIN_PANEL_LINES: usize = 3;
 
 /// Maximum lines of content shown in the panel.
 const MAX_CONTENT_LINES: usize = 12;

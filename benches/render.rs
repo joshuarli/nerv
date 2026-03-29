@@ -100,7 +100,7 @@ fn bench_full_render_10_messages(c: &mut Criterion) {
         b.iter(|| {
             let mut tui = TUI::new(Box::new(NullTerminal::new(120, 40)));
             tui.request_render(true);
-            tui.maybe_render(black_box(&layout));
+            tui.maybe_render(black_box(&layout), 0);
         });
     });
 }
@@ -111,7 +111,7 @@ fn bench_full_render_50_messages(c: &mut Criterion) {
         b.iter(|| {
             let mut tui = TUI::new(Box::new(NullTerminal::new(120, 40)));
             tui.request_render(true);
-            tui.maybe_render(black_box(&layout));
+            tui.maybe_render(black_box(&layout), 0);
         });
     });
 }
@@ -120,12 +120,12 @@ fn bench_diff_render_no_change(c: &mut Criterion) {
     let layout = make_layout(10);
     let mut tui = TUI::new(Box::new(NullTerminal::new(120, 40)));
     tui.request_render(true);
-    tui.maybe_render(&layout);
+    tui.maybe_render(&layout, 0);
 
     c.bench_function("diff_render no_change", |b| {
         b.iter(|| {
             tui.request_render(false);
-            tui.maybe_render(black_box(&layout));
+            tui.maybe_render(black_box(&layout), 0);
         });
     });
 }
@@ -142,7 +142,7 @@ fn bench_diff_render_streaming_append(c: &mut Criterion) {
     // Initial render
     let mut layout = make_layout(5);
     tui.request_render(true);
-    tui.maybe_render(&layout);
+    tui.maybe_render(&layout, 0);
 
     let mut word_idx = 0;
     c.bench_function("diff_render streaming_append", |b| {
@@ -157,7 +157,7 @@ fn bench_diff_render_streaming_append(c: &mut Criterion) {
             layout.messages.push(Box::new(Spacer::new(1)));
 
             tui.request_render(false);
-            tui.maybe_render(black_box(&layout));
+            tui.maybe_render(black_box(&layout), 0);
         });
     });
 }
