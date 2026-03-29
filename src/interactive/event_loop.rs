@@ -250,6 +250,30 @@ impl InteractiveMode {
                 self.pending_permission = Some(response_tx);
                 self.pending_permission_details = None;
             }
+            AgentSessionEvent::OutputGateRequest {
+                command,
+                line_count,
+                estimated_tokens,
+                response_tx,
+            } => {
+                // Show the command, size, and hint so user can make an informed decision.
+                // Truncate long commands for display.
+                let cmd_display = if command.len() > 80 {
+                    let end = command.floor_char_boundary(80);
+                    format!("{}…", &command[..end])
+                } else {
+                    command.clone()
+                };
+                self.status_message = Some(format!(
+                    "⚠ Output gate: bash\n  {}\n  {} lines / ~{}k tokens\n  y = allow, n = deny (model gets hint to retry)",
+                    cmd_display,
+                    line_count,
+                    estimated_tokens / 1000,
+                ));
+                self.status_is_error = true;
+                self.pending_permission = Some(response_tx);
+                self.pending_permission_details = None;
+            }
             AgentSessionEvent::WorktreeCreated { path } => {
                 layout.footer.set_cwd(&path.to_string_lossy());
                 self.status_message =

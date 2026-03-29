@@ -136,6 +136,8 @@ struct MessageMeta {
     tool_names: std::collections::HashMap<String, String>,
     /// tool_call_id → original bash command string (for language-specific filters)
     bash_commands: std::collections::HashMap<String, String>,
+    /// tool_call_id → tool result details JSON (carries filtered:true from bash, etc.)
+    tool_result_details: std::collections::HashMap<String, serde_json::Value>,
     /// tool_call_ids that have a corresponding ToolResult
     answered_ids: std::collections::HashSet<String>,
     /// tool_call_ids whose ToolResult was a denied error
@@ -173,6 +175,16 @@ impl MessageMeta {
             })
             .collect();
 
+        let tool_result_details: std::collections::HashMap<String, serde_json::Value> = messages
+            .iter()
+            .filter_map(|m| match m {
+                AgentMessage::ToolResult { tool_call_id, details: Some(d), .. } => {
+                    Some((tool_call_id.clone(), d.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+
         let denied_ids = messages
             .iter()
             .filter_map(|m| match m {
@@ -202,6 +214,7 @@ impl MessageMeta {
         Self {
             tool_names,
             bash_commands,
+            tool_result_details,
             answered_ids,
             denied_ids,
             superseded_ids: find_superseded_results(messages),
@@ -312,12 +325,20 @@ fn transform_tool_result(
             }],
             is_error,
             display: None,
+            details: None,
             timestamp,
         });
     }
 
-    // Bash output filtering (position-independent): ANSI strip, dedup, language-specific compression
-    if tool_name == Some("bash") && !is_error {
+    // Bash output filtering (position-independent): ANSI strip, dedup, language-specific compression.
+    // Skipped when details["filtered"] == true — bash.rs already ran the pipeline eagerly at
+    // execution time so the output gate could see the final byte count.
+    let already_filtered = meta.tool_result_details
+        .get(&tool_call_id)
+        .and_then(|d| d.get("filtered"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if tool_name == Some("bash") && !is_error && !already_filtered {
         let raw = content_text(&content);
         let command = meta.bash_commands.get(&tool_call_id).map(|s| s.as_str()).unwrap_or("");
         let filtered = output_filter::filter_bash_output(command, &raw);
@@ -327,6 +348,7 @@ fn transform_tool_result(
                 content: vec![ContentItem::Text { text: filtered.into_owned() }],
                 is_error: false,
                 display: None,
+                details: None,
                 timestamp,
             });
         }
@@ -339,6 +361,7 @@ fn transform_tool_result(
             content,
             is_error,
             display: None,
+            details: None,
             timestamp,
         });
     }
@@ -353,6 +376,7 @@ fn transform_tool_result(
                 content: vec![ContentItem::Text { text: folded }],
                 is_error,
                 display: None,
+                details: None,
                 timestamp,
             });
         }
@@ -365,6 +389,7 @@ fn transform_tool_result(
         content: vec![ContentItem::Text { text: summary }],
         is_error,
         display: None,
+        details: None,
         timestamp,
     })
 }
@@ -766,6 +791,7 @@ mod tests {
             }],
             is_error: false,
             display: None,
+            details: None,
             timestamp: 0,
         }
     }
@@ -778,6 +804,7 @@ mod tests {
             }],
             is_error: true,
             display: None,
+            details: None,
             timestamp: 0,
         }
     }
@@ -875,6 +902,7 @@ mod tests {
                 }],
                 is_error: true,
                 display: None,
+                details: None,
                 timestamp: 1,
             },
         ];
@@ -914,6 +942,7 @@ mod tests {
                 }],
                 is_error: false,
                 display: None,
+                details: None,
                 timestamp: 1,
             },
         ];
@@ -2105,5 +2134,67 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
             prev[r1_result_idx], curr[r1_result_idx],
             "already-superseded read (r1) should not change during loop",
         );
+    }
+
+    fn tool_result_with_details(id: &str, content: &str, details: serde_json::Value) -> AgentMessage {
+        AgentMessage::ToolResult {
+            tool_call_id: id.into(),
+            content: vec![ContentItem::Text { text: content.into() }],
+            is_error: false,
+            display: None,
+            details: Some(details),
+            timestamp: 0,
+        }
+    }
+
+    /// When `details: {"filtered": true}` is set on a bash ToolResult, transform_context
+    /// must NOT apply the bash output filter again (it was already applied eagerly in bash.rs).
+    ///
+    /// We test this by constructing a message that *would* be changed by the filter
+    /// (duplicate consecutive lines) and confirming that transform_context leaves it alone.
+    #[test]
+    fn already_filtered_bash_result_is_not_refiltered() {
+        // Duplicate lines — the dedup stage of filter_bash_output would collapse these.
+        let content = "line\nline\nline\nline\nline\n";
+        let msgs = vec![
+            assistant_tool_call("c1", "bash", serde_json::json!({"command": "echo line"})),
+            tool_result_with_details("c1", content, serde_json::json!({"filtered": true})),
+            // A response to terminate the sequence
+            AgentMessage::Assistant(AssistantMessage {
+                content: vec![ContentBlock::Text { text: "done".into() }],
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+                timestamp: 1,
+            }),
+        ];
+        let result = transform_context(msgs, 200_000, None);
+        let tool_msg = result.iter().find(|m| matches!(m, AgentMessage::ToolResult { .. })).unwrap();
+        let AgentMessage::ToolResult { content: out_content, .. } = tool_msg else { panic!() };
+        let out_text = match &out_content[0] { ContentItem::Text { text } => text, _ => panic!() };
+        // Content must be unchanged — dedup was NOT applied.
+        assert_eq!(out_text, content, "already-filtered result should not be re-filtered");
+    }
+
+    /// Without `details: {{"filtered": true}}`, duplicate lines ARE collapsed by the filter.
+    #[test]
+    fn unfiltered_bash_result_is_filtered_by_transform_context() {
+        let content = "line\nline\nline\nline\nline\n";
+        let msgs = vec![
+            assistant_tool_call("c1", "bash", serde_json::json!({"command": "echo line"})),
+            tool_result("c1", content), // no details → not pre-filtered
+            AgentMessage::Assistant(AssistantMessage {
+                content: vec![ContentBlock::Text { text: "done".into() }],
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+                timestamp: 1,
+            }),
+        ];
+        let result = transform_context(msgs, 200_000, None);
+        let tool_msg = result.iter().find(|m| matches!(m, AgentMessage::ToolResult { .. })).unwrap();
+        let AgentMessage::ToolResult { content: out_content, .. } = tool_msg else { panic!() };
+        let out_text = match &out_content[0] { ContentItem::Text { text } => text, _ => panic!() };
+        // The dedup filter should have collapsed the duplicate lines.
+        assert_ne!(out_text, content, "unfiltered result should be filtered by transform_context");
+        assert!(out_text.len() < content.len(), "dedup should have shortened the output");
     }
 }

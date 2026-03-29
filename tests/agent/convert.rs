@@ -47,6 +47,7 @@ fn tool_result_stays_separate_from_assistant() {
             }],
             is_error: false,
             display: None,
+            details: None,
             timestamp: 1,
         },
     ];
@@ -73,6 +74,7 @@ fn transform_context_truncates_old_large_tool_results() {
             }],
             is_error: false,
             display: None,
+            details: None,
             timestamp: i as u64 + 1,
         });
     }
@@ -132,6 +134,7 @@ fn transform_context_preserves_small_old_results() {
             }],
             is_error: false,
             display: None,
+            details: None,
             timestamp: 99,
         },
     );
@@ -250,6 +253,7 @@ fn answered_tool_calls_preserved() {
             }],
             is_error: false,
             display: None,
+            details: None,
             timestamp: 2,
         },
     ];
@@ -282,6 +286,7 @@ fn transform_context_passthrough_when_few_messages() {
             }],
             is_error: false,
             display: None,
+            details: None,
             timestamp: 1,
         },
     ];

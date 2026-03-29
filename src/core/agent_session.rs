@@ -124,6 +124,14 @@ pub enum AgentSessionEvent {
         context_window: u32,
         response_tx: crossbeam_channel::Sender<bool>,
     },
+    /// Output gate — bash result exceeded OUTPUT_GATE_THRESHOLD_BYTES after filtering.
+    /// Agent blocks until user allows or denies adding the result to context.
+    OutputGateRequest {
+        command: String,
+        line_count: usize,
+        estimated_tokens: usize,
+        response_tx: crossbeam_channel::Sender<bool>,
+    },
 }
 
 pub enum SessionCommand {
@@ -324,6 +332,28 @@ impl AgentSession {
                             }
                             approved
                         }
+                    }
+                },
+            ));
+        }
+
+        // Output gate: fires after bash executes when filtered output exceeds threshold.
+        // Agent thread blocks on the channel waiting for a y/n from the TUI.
+        {
+            let output_tx = event_tx.clone();
+            self.agent.state.output_gate_fn = Some(std::sync::Arc::new(
+                move |info: crate::agent::agent::OutputGateInfo| {
+                    let (resp_tx, resp_rx) = crossbeam_channel::bounded(1);
+                    let _ = output_tx.send(AgentSessionEvent::OutputGateRequest {
+                        command: info.command.clone(),
+                        line_count: info.line_count,
+                        estimated_tokens: info.estimated_tokens,
+                        response_tx: resp_tx,
+                    });
+                    if resp_rx.recv().unwrap_or(false) {
+                        crate::agent::agent::OutputGateDecision::Allow
+                    } else {
+                        crate::agent::agent::OutputGateDecision::Deny
                     }
                 },
             ));

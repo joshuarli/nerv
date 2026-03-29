@@ -388,6 +388,7 @@ fn transform_context_mutates_stale_read_results() {
             content: vec![ContentItem::Text { text: "old content".into() }],
             is_error: false,
             display: None,
+            details: None,
             timestamp: 0,
         },
         AgentMessage::Assistant(AssistantMessage {
@@ -401,6 +402,7 @@ fn transform_context_mutates_stale_read_results() {
             content: vec![ContentItem::Text { text: "new content".into() }],
             is_error: false,
             display: None,
+            details: None,
             timestamp: 0,
         },
         user_msg("done"),
@@ -511,6 +513,7 @@ fn btw_last_user_breakpoint_lands_on_different_message_than_agent() {
             content: vec![ContentItem::Text { text: "file.txt".into() }],
             is_error: false,
             display: None,
+            details: None,
             timestamp: 0,
         },
         // The agent's final reply in this turn:
@@ -569,6 +572,7 @@ fn tool_result_msg(id: &str) -> AgentMessage {
         content: vec![ContentItem::Text { text: "output".into() }],
         is_error: false,
         display: None,
+        details: None,
         timestamp: 0,
     }
 }

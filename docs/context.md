@@ -15,6 +15,15 @@ AgentMessage[]
   → serialize              JSON → bytes for HTTP
 ```
 
+**Bash output pipeline** (runs at tool execution time, before the above):
+
+```
+bash.execute() raw output
+  → output_filter::filter_bash_output()   ANSI strip → dedup → JSON schema → language compression
+  → output gate (run_one_tool)             human y/n when filtered output > 50KB
+  → AgentMessage::ToolResult              details.filtered: true tells transform_context to skip
+```
+
 ## transform_context (`src/agent/convert.rs`)
 
 Applied before every LLM request. Seven optimizations (all zero-LLM-cost):
@@ -68,7 +77,11 @@ with 8 redundant reads, saves ~4-8k tokens.
 ### 6. Bash output filter pipeline
 
 Every bash `ToolResult` passes through `tools::output_filter::filter_bash_output`
-before entering the context. This is a four-stage pipeline:
+**at execution time** (inside `bash.execute()`, before the result enters
+`run_one_tool`). This means the output gate sees the post-compression size.
+The `details.filtered: true` flag on the stored message tells
+`transform_context` to skip this step for that tool call (it has already
+been applied). This is a four-stage pipeline:
 
 1. **ANSI strip** — removes all escape sequences. Returns `Cow::Borrowed`
    (zero allocation) when the input contains no escape codes.
@@ -154,6 +167,44 @@ compared to the previous call. If **all** of these hold, the user is prompted:
 This catches runaway context growth (e.g., reading a massive file, verbose
 test output) before it becomes an expensive API call. Uses the same y/n
 TUI prompt as permission requests.
+
+## Output gate (`src/agent/agent.rs` + `src/core/agent_session.rs`)
+
+After bash executes and the output filter pipeline runs, if the filtered
+result still exceeds **50 KB** (~12k tokens), the user is prompted:
+
+```
+⚠ Output gate: bash
+  cargo build --verbose
+  1247 lines / ~18k tokens
+  y = allow, n = deny (model gets hint to retry)
+```
+
+- **y (allow)**: full filtered output goes into context, same as today.
+- **n (deny)**: the tool result is replaced with a structured hint error:
+
+  ```
+  [output-too-large: 1247 lines / ~18k tokens]
+  Command: cargo build --verbose
+  Output was too large to include in context. Options:
+  - Pipe through grep/awk/sed to filter first: <cmd> | grep pattern
+  - Redirect to a file and use the read tool with offset/limit
+  - Use a more targeted command
+  ```
+
+The model reads this as `is_error: true` and self-corrects (e.g. re-runs
+with `| grep "^error"`). The gate fires exactly once per tool call.
+
+**Print mode**: `output_gate_fn` is only wired in interactive TUI mode
+(`agent_session.rs`). In `--print` / headless mode the gate is absent and
+large outputs pass through to context unblocked.
+
+**Pipeline position**: output gate runs *after* `filter_bash_output` and
+*before* `AgentMessage::ToolResult` is pushed to `agent.state.messages`.
+This is later than the context gate (which fires before the API call).
+The two are complementary:
+- Output gate: per-tool, post-execute, on raw result size
+- Context gate: per-API-call, on aggregate context token delta
 
 ## Compaction (`src/compaction/`)
 

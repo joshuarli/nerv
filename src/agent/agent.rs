@@ -66,6 +66,30 @@ pub type ContextGateFn = Arc<dyn Fn(ContextGateInfo) -> bool + Send + Sync>;
 /// Used to trigger side effects like updating the symbol index after file writes.
 pub type PostToolFn = Arc<dyn Fn(&str, &serde_json::Value) + Send + Sync>;
 
+/// Output gate — called after a bash tool executes but before its result enters
+/// `agent.state.messages`. Fires only when the filtered output exceeds
+/// OUTPUT_GATE_THRESHOLD_BYTES. Returns Allow to pass through or Deny to replace
+/// the result with a structured hint telling the model to be more targeted.
+pub type OutputGateFn = Arc<dyn Fn(OutputGateInfo) -> OutputGateDecision + Send + Sync>;
+
+/// Threshold above which the output gate fires (50 KB).
+pub const OUTPUT_GATE_THRESHOLD_BYTES: usize = 50_000;
+
+#[derive(Debug, Clone)]
+pub struct OutputGateInfo {
+    /// The bash command that produced the output.
+    pub command: String,
+    pub byte_count: usize,
+    pub line_count: usize,
+    /// chars/4 token estimate of the filtered output.
+    pub estimated_tokens: usize,
+}
+
+pub enum OutputGateDecision {
+    Allow,
+    Deny,
+}
+
 #[derive(Debug, Clone)]
 pub struct ContextGateInfo {
     pub estimated_tokens: usize,
@@ -86,6 +110,9 @@ pub struct AgentState {
     pub permission_fn: Option<PermissionFn>,
     pub context_gate_fn: Option<ContextGateFn>,
     pub post_tool_fn: Option<PostToolFn>,
+    /// Post-execution output gate for bash results. Fires after output_filter
+    /// has compressed the output; the gate sees final byte count.
+    pub output_gate_fn: Option<OutputGateFn>,
 }
 
 pub struct Agent {
@@ -111,6 +138,7 @@ impl Agent {
                 permission_fn: None,
                 context_gate_fn: None,
                 post_tool_fn: None,
+                output_gate_fn: None,
             },
             cancel: new_cancel_flag(),
             provider_registry,
@@ -540,7 +568,7 @@ impl Agent {
             .map(|f| f(name, args))
             .unwrap_or(true);
 
-        let result = if !permitted {
+        let mut result = if !permitted {
             ToolResult {
                 content: "Tool call denied by user.".into(),
                 details: None,
@@ -566,6 +594,43 @@ impl Agent {
                 is_error: true,
             }
         };
+
+        // Output gate: fires after bash executes (bash.rs has already applied
+        // output_filter and stripped truncate_tail). The gate sees the final
+        // byte count that will actually enter context.
+        if name == "bash" && !result.is_error {
+            if let Some(ref gate_fn) = self.state.output_gate_fn {
+                if result.content.len() > OUTPUT_GATE_THRESHOLD_BYTES {
+                    let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                    let line_count = result.content.lines().count();
+                    let estimated_tokens = result.content.len() / 4;
+                    let info = OutputGateInfo {
+                        command: command.to_string(),
+                        byte_count: result.content.len(),
+                        line_count,
+                        estimated_tokens,
+                    };
+                    if matches!(gate_fn(info), OutputGateDecision::Deny) {
+                        let hint = format!(
+                            "[output-too-large: {} lines / ~{}k tokens]\n\
+                             Command: {}\n\
+                             Output was too large to include in context. Options:\n\
+                             - Pipe through grep/awk/sed to filter first: <cmd> | grep pattern\n\
+                             - Redirect to a file and use the read tool with offset/limit\n\
+                             - Use a more targeted command",
+                            line_count,
+                            estimated_tokens / 1000,
+                            command
+                        );
+                        result = ToolResult {
+                            content: hint,
+                            details: None,
+                            is_error: true,
+                        };
+                    }
+                }
+            }
+        }
 
         if !result.is_error {
             if let Some(hook) = &self.state.post_tool_fn {
@@ -593,6 +658,9 @@ impl Agent {
             }],
             is_error: result.is_error,
             display,
+            // Carry tool details (e.g. filtered:true from bash) into the message
+            // so transform_context can skip redundant processing.
+            details: result.details,
             timestamp: now_millis(),
         }
     }

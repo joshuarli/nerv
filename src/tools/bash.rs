@@ -2,10 +2,10 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::truncate::{DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncate_tail};
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use crate::agent::provider::CancelFlag;
 use crate::errors::ToolError;
+use crate::tools::output_filter;
 use std::sync::atomic::Ordering;
 
 pub struct BashTool {
@@ -102,11 +102,23 @@ impl AgentTool for BashTool {
 
         let status = child.wait().ok();
         let exit_code = status.and_then(|s| s.code());
-        let tr = truncate_tail(&output, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
+
+        // Convert raw bytes to string (lossy UTF-8).
+        let raw = String::from_utf8_lossy(&output);
+
+        // Apply the output filter pipeline eagerly at execution time:
+        //   1. ANSI strip
+        //   2. Line dedup
+        //   3. JSON schema extraction
+        //   4. Language-specific compression (cargo, pytest, jest, ...)
+        // This runs here so the output gate in run_one_tool sees the already-filtered
+        // size, and transform_context can skip the bash filter step entirely.
+        let filtered = output_filter::filter_bash_output(command, &raw);
+
         let content = if exit_code != Some(0) {
-            format!("{}\n[exit code: {}]", tr.content, exit_code.unwrap_or(-1))
+            format!("{}\n[exit code: {}]", filtered, exit_code.unwrap_or(-1))
         } else {
-            tr.content
+            filtered.into_owned()
         };
 
         // Suppress display for bare sed/head/tail/awk file reads — the system prompt tells
@@ -138,7 +150,9 @@ impl AgentTool for BashTool {
             Some(content.clone())
         };
 
-        let mut details = serde_json::json!({"exit_code": exit_code, "truncated": tr.truncated});
+        // filtered: true tells transform_context to skip the bash filter step
+        // (it has already been applied here).
+        let mut details = serde_json::json!({"exit_code": exit_code, "filtered": true});
         if let Some(disp) = display {
             details["display"] = serde_json::json!(disp);
         }

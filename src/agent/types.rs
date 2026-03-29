@@ -80,6 +80,10 @@ pub enum AgentMessage {
         /// Rich display text for the TUI/HTML (e.g. unified diff). Not sent to the LLM.
         #[serde(skip_serializing_if = "Option::is_none")]
         display: Option<String>,
+        /// Tool-level metadata for transform_context (e.g. `{"filtered":true}` from bash).
+        /// Not sent to the LLM. Optional so old serialized sessions deserialize fine.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<serde_json::Value>,
         timestamp: u64,
     },
     #[serde(rename = "custom")]

@@ -376,3 +376,122 @@ fn tool_descriptions_kept_for_early_turns() {
         );
     }
 }
+
+// ── Output gate tests ─────────────────────────────────────────────────────────
+
+use nerv::agent::agent::{OutputGateDecision, OutputGateInfo, ToolResult, OUTPUT_GATE_THRESHOLD_BYTES};
+
+/// Mock "bash" tool: always returns the given fixed output.
+struct BigBashTool {
+    output: String,
+}
+
+impl AgentTool for BigBashTool {
+    fn name(&self) -> &str { "bash" }
+    fn description(&self) -> &str { "Mock bash" }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type":"object","properties":{"command":{"type":"string"}}})
+    }
+    fn validate(&self, _: &serde_json::Value) -> Result<(), nerv::errors::ToolError> { Ok(()) }
+    fn execute(&self, _input: serde_json::Value, _update: UpdateCallback, _cancel: &CancelFlag) -> ToolResult {
+        ToolResult::ok_with_details(
+            self.output.clone(),
+            serde_json::json!({"exit_code": 0, "filtered": true}),
+        )
+    }
+}
+
+fn setup_agent_with_bash(responses: Vec<Vec<ProviderEvent>>, bash_output: String) -> Agent {
+    let provider = Arc::new(MockProvider::new(responses));
+    let mut registry = ProviderRegistry::new();
+    registry.register("mock", provider);
+    let mut agent = Agent::new(Arc::new(RwLock::new(registry)));
+    agent.state.model = Some(test_model());
+    agent.state.system_prompt = "Test.".into();
+    agent.state.tools = vec![Arc::new(BigBashTool { output: bash_output })];
+    agent
+}
+
+#[test]
+fn output_gate_not_triggered_below_threshold() {
+    // Output below 50 KB → gate should never fire.
+    let small = "x".repeat(1_000);
+    let mut agent = setup_agent_with_bash(
+        vec![
+            tool_call_response("c1", "bash", r#"{"command":"echo hi"}"#),
+            simple_response("Done"),
+        ],
+        small.clone(),
+    );
+    let gate_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gate_fired2 = gate_fired.clone();
+    agent.state.output_gate_fn = Some(Arc::new(move |_info: OutputGateInfo| {
+        gate_fired2.store(true, std::sync::atomic::Ordering::SeqCst);
+        OutputGateDecision::Allow
+    }));
+    let (messages, _) = collect_events(&mut agent, vec![user_msg("run bash")]);
+    assert!(!gate_fired.load(std::sync::atomic::Ordering::SeqCst), "gate should not fire for small output");
+    // The bash result should be the small string.
+    let tool_result = messages.iter().find(|m| matches!(m, AgentMessage::ToolResult { .. }));
+    assert!(tool_result.is_some());
+    if let Some(AgentMessage::ToolResult { content, is_error, .. }) = tool_result {
+        assert!(!is_error, "small output should not be an error");
+        let text = match &content[0] { ContentItem::Text { text } => text, _ => panic!() };
+        assert!(text.contains(&small[..100]));
+    }
+}
+
+#[test]
+fn output_gate_allow_passes_result_through() {
+    // Output above 50 KB, gate returns Allow → result enters context unchanged.
+    let big = "A".repeat(OUTPUT_GATE_THRESHOLD_BYTES + 1_000);
+    let mut agent = setup_agent_with_bash(
+        vec![
+            tool_call_response("c1", "bash", r#"{"command":"cat big_file"}"#),
+            simple_response("Done"),
+        ],
+        big.clone(),
+    );
+    let gate_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gate_fired2 = gate_fired.clone();
+    agent.state.output_gate_fn = Some(Arc::new(move |info: OutputGateInfo| {
+        gate_fired2.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(info.byte_count > OUTPUT_GATE_THRESHOLD_BYTES);
+        assert_eq!(info.command, "cat big_file");
+        OutputGateDecision::Allow
+    }));
+    let (messages, _) = collect_events(&mut agent, vec![user_msg("run bash")]);
+    assert!(gate_fired.load(std::sync::atomic::Ordering::SeqCst), "gate must fire for large output");
+    let tool_result = messages.iter().find(|m| matches!(m, AgentMessage::ToolResult { .. }));
+    if let Some(AgentMessage::ToolResult { content, is_error, .. }) = tool_result {
+        assert!(!is_error, "allowed output should not be an error");
+        let text = match &content[0] { ContentItem::Text { text } => text, _ => panic!() };
+        assert_eq!(text, &big, "content should pass through unchanged when allowed");
+    }
+}
+
+#[test]
+fn output_gate_deny_replaces_with_hint() {
+    // Output above 50 KB, gate returns Deny → content replaced with actionable hint, is_error = true.
+    let big = "B".repeat(OUTPUT_GATE_THRESHOLD_BYTES + 1_000);
+    let mut agent = setup_agent_with_bash(
+        vec![
+            tool_call_response("c1", "bash", r#"{"command":"find / -type f"}"#),
+            simple_response("Done"),
+        ],
+        big,
+    );
+    agent.state.output_gate_fn = Some(Arc::new(|_info: OutputGateInfo| {
+        OutputGateDecision::Deny
+    }));
+    let (messages, _) = collect_events(&mut agent, vec![user_msg("run bash")]);
+    let tool_result = messages.iter().find(|m| matches!(m, AgentMessage::ToolResult { .. }));
+    assert!(tool_result.is_some(), "tool result message must exist");
+    if let Some(AgentMessage::ToolResult { content, is_error, .. }) = tool_result {
+        assert!(is_error, "denied output should be marked as error");
+        let text = match &content[0] { ContentItem::Text { text } => text, _ => panic!() };
+        assert!(text.contains("output-too-large"), "hint should mention output-too-large");
+        assert!(text.contains("find / -type f"), "hint should include the command");
+        assert!(text.contains("grep"), "hint should suggest grep");
+    }
+}

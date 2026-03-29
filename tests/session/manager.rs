@@ -57,6 +57,7 @@ fn tool_result_msg(id: &str, content: &str) -> AgentMessage {
         }],
         is_error: false,
         display: None,
+        details: None,
         timestamp: now_millis(),
     }
 }
@@ -77,6 +78,7 @@ fn round_trip_session_with_multiple_message_types() {
             }],
             is_error: false,
             display: None,
+            details: None,
             timestamp: now_millis(),
         },
         None,

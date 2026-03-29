@@ -141,14 +141,41 @@ to prevent pipe deadlocks.
 
 **Output**: stdout followed by `\n[stderr]\n{stderr}` if stderr is
 non-empty. Non-zero exit codes are reported as `[exit code: N]` and
-marked as errors. Output is tail-truncated at 200KB / 3000 lines.
+marked as errors.
 
-**Output filter pipeline**: before the result is stored in the context, the
-raw output passes through `tools::output_filter::filter_bash_output`. See
+**Output filter pipeline**: the raw output passes through
+`tools::output_filter::filter_bash_output` eagerly at execution time
+(inside `execute()`), before the result enters `run_one_tool`. This means
+the output gate (below) sees the already-compressed size. The pipeline is
+zero-alloc for plain output via `Cow::Borrowed` passthrough. See
 [Context optimization § 6](context.md#6-bash-output-filter-pipeline) for the
-full pipeline description. The key property is that the pipeline is zero-alloc
-for plain output (no ANSI, no dedup run, no JSON, no known command) via
-`Cow::Borrowed` passthrough.
+full pipeline description.
+
+**Output gate**: after `filter_bash_output` runs, if the result still
+exceeds 50 KB (≈12k tokens) the user is prompted via a blocking y/n:
+
+```
+⚠ Output gate: bash
+  cargo build --verbose
+  1247 lines / ~18k tokens
+  y = allow, n = deny (model gets hint to retry)
+```
+
+If denied, the tool result is replaced with a structured hint:
+
+```
+[output-too-large: 1247 lines / ~18k tokens]
+Command: cargo build --verbose
+Output was too large to include in context. Options:
+- Pipe through grep/awk/sed to filter first: <cmd> | grep pattern
+- Redirect to a file and use the read tool with offset/limit
+- Use a more targeted command
+```
+
+The model reads this as a tool error and self-corrects. The gate fires
+exactly once per tool call (not on every subsequent API request). The
+`details.filtered: true` flag on the stored `AgentMessage::ToolResult`
+tells `transform_context` to skip the filter step for that message.
 
 ## grep
 
@@ -298,13 +325,19 @@ up in bootstrap.
 
 ### Output truncation (`truncate.rs`)
 
-All external command output is truncated to prevent context blowup:
+External command output from `grep`, `find`, and `ls` is tail-truncated to
+prevent context blowup when a query matches an unexpectedly large result set:
 - **Max bytes**: 200,000
 - **Max lines**: 3,000
-- `truncate_tail`: keeps the last N bytes/lines (used by bash, grep, find, ls)
+- `truncate_tail`: keeps the last N bytes/lines (used by grep, find, ls)
 - `truncate_head`: keeps the first N lines (used by read)
 
 Truncation messages indicate how much was omitted.
+
+`bash` does not use `truncate_tail`. Instead it runs the output filter
+pipeline eagerly and then applies the output gate — a human-in-the-loop
+check for results that are still large after compression. See the [bash
+tool docs](tools.md#bash) for details.
 
 ### File mutation queue (`file_mutation_queue.rs`)
 

@@ -237,7 +237,8 @@ mod tests {
                 }],
                 is_error: false,
                 display: None,
-                timestamp: 1,
+                details: None,
+timestamp: 1,
             },
         ];
         let llm = convert_to_llm(&msgs);
