@@ -315,15 +315,24 @@ impl FullscreenList for TreeSelector {
             // Each indent level is 2 chars wide.
             // Ancestor levels draw "│ " if that level still has more siblings,
             // or "  " if it was the last sibling at that level.
-            // At the node itself: "├─" / "└─" / (nothing for root).
+            // At the node itself: "├─" / "└─" for direct branch children, or
+            // "│ " / "  " for flat-chain descendants (visually connected but not
+            // a branch point themselves).
             let mut prefix = String::new();
             if node.show_connector {
-                // Draw continuation lines for ancestor levels.
+                // Direct child of a branch point: draw ancestor continuation
+                // lines then the branch connector (└─ / ├─).
                 for &more in &node.ancestors_with_more {
                     prefix.push_str(if more { "│ " } else { "  " });
                 }
-                // Draw this node's own connector.
                 prefix.push_str(if node.is_last { "└─" } else { "├─" });
+            } else if !node.ancestors_with_more.is_empty() {
+                // Flat-chain descendant inside a branch: draw all ancestor
+                // continuation lines, then a │ or space at the branch level
+                // so the reader can see this chain is still under that branch.
+                for &more in &node.ancestors_with_more {
+                    prefix.push_str(if more { "│ " } else { "  " });
+                }
             }
 
             // ── fold indicator ──────────────────────────────────────────────
@@ -476,17 +485,19 @@ fn flatten(
 ) -> Vec<FlatNode> {
     let mut result = Vec::new();
 
-    // Stack entry: (node, indent, ancestors_with_more: Vec<bool>, is_last, parent_id)
+    // Stack entry: (node, indent, ancestors_with_more, is_last, parent_id, direct_branch_child)
     // ancestors_with_more[i] = true means level i still has more siblings below.
-    let mut stack: Vec<(&SessionTreeNode, usize, Vec<bool>, bool, Option<String>)> = Vec::new();
+    // direct_branch_child = true only for immediate children of a multi-child node;
+    // flat-chain descendants inherit false so they don't draw a connector.
+    let mut stack: Vec<(&SessionTreeNode, usize, Vec<bool>, bool, Option<String>, bool)> = Vec::new();
 
     let roots: Vec<&SessionTreeNode> = tree.iter().collect();
     // Push roots in reverse so we pop them in order (first root = first displayed).
     for (i, root) in roots.iter().enumerate().rev() {
-        stack.push((root, 0, vec![], i != roots.len() - 1, None));
+        stack.push((root, 0, vec![], i != roots.len() - 1, None, false));
     }
 
-    while let Some((node, indent, ancestors_with_more, has_more_siblings, parent_id)) = stack.pop() {
+    while let Some((node, indent, ancestors_with_more, has_more_siblings, parent_id, direct_branch_child)) = stack.pop() {
         let entry_type = node.entry_type.as_str();
         let is_meta = matches!(
             entry_type,
@@ -515,8 +526,8 @@ fn flatten(
                 is_user: node.is_user,
                 has_tool_calls: node.has_tool_calls,
                 indent,
-                // show_connector = true when the parent had multiple children (we drew a branch)
-                show_connector: !ancestors_with_more.is_empty(),
+                // show_connector = true only for direct children of a branch point.
+                show_connector: direct_branch_child,
                 is_last: !has_more_siblings,
                 is_meta,
                 is_folded,
@@ -537,26 +548,48 @@ fn flatten(
         // Indentation rules:
         // - Hidden nodes (system_prompt etc.) are transparent — pass through
         //   indent and ancestors unchanged so they don't add visual depth.
-        // - Visible nodes always indent their children one level deeper,
-        //   whether branching or not. Gives a nested tree appearance.
-        // - Only at branch points do we record a │ continuation flag.
+        // - Single-child chains stay at the same indent level and inherit the
+        //   same ancestors_with_more so they render flat (no connector, no
+        //   wasted horizontal space).
+        // - Only at real branch points (multiple visible children) do we
+        //   increase indent and record a │ continuation flag.
         let (child_indent, child_ancestors) = if !visible {
             // Hidden: fully transparent.
             (indent, ancestors_with_more.clone())
         } else if multi {
-            // Branch point: record whether this level has more siblings so
-            // │ continuation lines are drawn at child levels.
-            let mut a = ancestors_with_more.clone();
-            a.push(has_more_siblings);
-            (indent + 1, a)
+            // Branch point: indent increases and children draw ├─/└─ connectors.
+            //
+            // Whether to push a new continuation entry depends on the visual depth:
+            // - Root-level branch (no ancestors yet) or a direct-branch-child that
+            //   itself branches: push has_more_siblings so descendants know whether
+            //   to draw │ or space at this new indent level.
+            // - Flat-chain node that branches: the continuation info for the current
+            //   visual column was already pushed when the nearest direct-branch-child
+            //   ancestor was processed. Don't push again or the alignment drifts.
+            if direct_branch_child || ancestors_with_more.is_empty() {
+                let mut a = ancestors_with_more.clone();
+                a.push(has_more_siblings);
+                (indent + 1, a)
+            } else {
+                (indent + 1, ancestors_with_more.clone())
+            }
         } else {
-            // Single visible child: increase indent, no │ continuation.
-            let mut a = ancestors_with_more.clone();
-            a.push(false);
-            (indent + 1, a)
+            // Single visible child: flat — same indent and mostly same ancestors.
+            // If this node is a direct branch child, its flat-chain descendants need
+            // a │ continuation at this level; record has_more_siblings so they know
+            // whether to draw │ or space.
+            if direct_branch_child {
+                let mut a = ancestors_with_more.clone();
+                a.push(has_more_siblings);
+                (indent, a)
+            } else {
+                (indent, ancestors_with_more.clone())
+            }
         };
 
         // Push in reverse order so first child is popped first.
+        // direct_branch_child = true only when the parent (this node) is a multi-child node
+        // AND the child is a visible node (not a transparent hidden wrapper).
         for (i, child) in visible_children.iter().enumerate().rev() {
             let is_last_child = i == visible_children.len() - 1;
             stack.push((
@@ -565,6 +598,7 @@ fn flatten(
                 child_ancestors.clone(),
                 !is_last_child,
                 Some(node.entry_id.clone()),
+                multi,
             ));
         }
     }
@@ -583,4 +617,177 @@ fn has_visible(node: &SessionTreeNode, filter: FilterMode) -> bool {
 /// Truncate a string to at most `max` chars at a char boundary.
 fn char_truncate(s: &str, max: usize) -> &str {
     &s[..s.floor_char_boundary(max)]
+}
+
+// ─────────────────────────── tests ───────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::types::SessionTreeNode;
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    fn node(id: &str, role: &str, summary: &str, children: Vec<SessionTreeNode>) -> SessionTreeNode {
+        SessionTreeNode {
+            entry_id: id.to_string(),
+            entry_type: role.to_string(),
+            summary: summary.to_string(),
+            raw_text: summary.to_string(),
+            timestamp: String::new(),
+            children,
+            is_user: role == "user",
+            has_tool_calls: false,
+        }
+    }
+
+    /// Render a tree to the list of "prefix label" strings that would appear
+    /// on screen, so tests read like the actual UI output.
+    fn render_lines(tree: &[SessionTreeNode]) -> Vec<String> {
+        let folded = HashSet::new();
+        flatten(tree, &folded, FilterMode::Default)
+            .into_iter()
+            .map(|n| {
+                let connector = if n.show_connector {
+                    let continuation: String = n.ancestors_with_more.iter()
+                        .map(|&more| if more { "│ " } else { "  " })
+                        .collect();
+                    let tip = if n.is_last { "└─" } else { "├─" };
+                    format!("{}{} {}", continuation, tip, n.summary)
+                } else if !n.ancestors_with_more.is_empty() {
+                    let continuation: String = n.ancestors_with_more.iter()
+                        .map(|&more| if more { "│ " } else { "  " })
+                        .collect();
+                    format!("{} {}", continuation, n.summary)
+                } else {
+                    format!(" {}", n.summary)
+                };
+                connector
+            })
+            .collect()
+    }
+
+    // ── tests ─────────────────────────────────────────────────────────────────
+
+    /// A completely linear conversation renders flat — no connectors, no indent.
+    ///
+    ///  user: hello
+    ///  assistant: hi
+    ///  user: how are you
+    #[test]
+    fn linear_chain_is_flat() {
+        let tree = vec![
+            node("1", "user", "hello",
+                vec![node("2", "assistant", "hi",
+                    vec![node("3", "user", "how are you", vec![])])]),
+        ];
+        let lines = render_lines(&tree);
+        assert_eq!(lines, vec![
+            " hello",
+            " hi",
+            " how are you",
+        ]);
+    }
+
+    /// Two branches from a single parent.
+    ///
+    ///  assistant: whats up
+    ///    ├─ user: continue
+    ///    └─ user: hi
+    #[test]
+    fn single_branch_point_no_chains() {
+        let tree = vec![
+            node("1", "assistant", "whats up", vec![
+                node("2", "user", "continue", vec![]),
+                node("3", "user", "hi",       vec![]),
+            ]),
+        ];
+        let lines = render_lines(&tree);
+        assert_eq!(lines, vec![
+            " whats up",
+            "  ├─ continue",
+            "  └─ hi",
+        ]);
+    }
+
+    /// Branch point where each child has a flat chain.
+    ///
+    ///  assistant: whats up
+    ///    ├─ user: continue
+    ///    │  user: continue
+    ///    │  user: continue
+    ///    └─ user: hi
+    ///       assistant: hello
+    #[test]
+    fn branch_with_flat_chains() {
+        let tree = vec![
+            node("1", "assistant", "whats up", vec![
+                node("2", "user", "continue", vec![
+                    node("3", "user",      "continue", vec![
+                        node("4", "user", "continue", vec![])]),
+                ]),
+                node("5", "user", "hi", vec![
+                    node("6", "assistant", "hello", vec![]),
+                ]),
+            ]),
+        ];
+        let lines = render_lines(&tree);
+        assert_eq!(lines, vec![
+            " whats up",
+            "  ├─ continue",  // direct branch child, has_more=true → ├─, ancestors=[false]
+            "  │  continue",  // flat-chain, ancestors=[false,true]  → │ 
+            "  │  continue",  // flat-chain, ancestors=[false,true]  → │ 
+            "  └─ hi",        // direct branch child, is_last        → └─, ancestors=[false]
+            "     hello",     // flat-chain, ancestors=[false,false]  →   
+        ]);
+    }
+
+    /// Nested branch: a branch inside a chain inside a branch.
+    ///
+    ///  root
+    ///    ├─ a
+    ///    │  b
+    ///    │ ├─ c
+    ///    │ └─ d
+    ///    └─ e
+    #[test]
+    fn nested_branch() {
+        let tree = vec![
+            node("root", "user", "root", vec![
+                node("a", "user", "a", vec![
+                    node("b", "user", "b", vec![
+                        node("c", "user", "c", vec![]),
+                        node("d", "user", "d", vec![]),
+                    ]),
+                ]),
+                node("e", "user", "e", vec![]),
+            ]),
+        ];
+        let lines = render_lines(&tree);
+        assert_eq!(lines, vec![
+            " root",
+            "  ├─ a",       // branch child, more=true,  ancestors=[false]
+            "  │  b",       // flat-chain,                ancestors=[false, true]
+            "  │ ├─ c",     // nested branch child, more, ancestors=[false, true]
+            "  │ └─ d",     // nested branch child, last, ancestors=[false, true]
+            "  └─ e",       // branch child, last,        ancestors=[false]
+        ]);
+    }
+
+    /// Multiple root nodes render flat at the top level.
+    ///
+    ///  user: first session
+    ///  user: second session
+    #[test]
+    fn multiple_roots_flat() {
+        let tree = vec![
+            node("1", "user", "first session",  vec![]),
+            node("2", "user", "second session", vec![]),
+        ];
+        let lines = render_lines(&tree);
+        assert_eq!(lines, vec![
+            " first session",
+            " second session",
+        ]);
+    }
 }
