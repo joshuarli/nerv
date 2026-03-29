@@ -222,7 +222,9 @@ impl Agent {
 
         self.state.is_streaming = false;
         on_event(AgentEvent::AgentEnd {
-            messages: new_messages.clone(),
+            // Send the full accumulated history, not just this turn's new_messages.
+            // Consumers that need a full snapshot (e.g. /btw) use this directly.
+            messages: self.state.messages.clone(),
         });
         new_messages
     }

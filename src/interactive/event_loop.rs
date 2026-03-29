@@ -560,11 +560,12 @@ impl InteractiveMode {
                 tui.request_render(false);
             }
             AgentEvent::AgentEnd { messages } => {
-                // Append the new messages from this turn to the snapshot used by /btw.
-                // Skip aborted or errored turns: they will be retried, and we don't want
-                // the partial user message added twice.
+                // Replace the snapshot with the full history from the agent.
+                // AgentEnd now carries agent.state.messages (everything), not just
+                // new_messages from this turn, so we assign rather than extend.
+                // Skip aborted/errored turns: the snapshot stays at the last good state.
                 if crate::interactive::btw_overlay::turn_succeeded(&messages) {
-                    self.messages_snapshot.extend(messages);
+                    self.messages_snapshot = messages;
                 }
                 self.is_streaming = false;
                 layout.chat.cancel_stream();
@@ -854,8 +855,9 @@ impl InteractiveMode {
                 if args.is_empty() {
                     self.status_message = Some("Usage: /btw <note>".into());
                 } else if let Some(model) = self.current_model.clone() {
+                    let snap = self.messages_snapshot.clone();
                     return Some(PickerRequest::BtwOverlay {
-                        messages: self.messages_snapshot.clone(),
+                        messages: snap,
                         model,
                         note: args.to_string(),
                     });

@@ -386,7 +386,7 @@ fn strip_tool_content_removes_tool_results() {
 }
 
 #[test]
-fn strip_tool_content_removes_tool_call_blocks_from_assistant() {
+fn strip_tool_content_replaces_tool_call_blocks_with_summary() {
     let messages = vec![
         AgentMessage::Assistant(AssistantMessage {
             content: vec![
@@ -401,15 +401,20 @@ fn strip_tool_content_removes_tool_call_blocks_from_assistant() {
     let stripped = strip_tool_content(messages);
     assert_eq!(stripped.len(), 1);
     if let AgentMessage::Assistant(a) = &stripped[0] {
-        assert_eq!(a.content.len(), 1, "only text block should remain");
+        // Expect: original text block + a summary text block for the tool call.
+        assert_eq!(a.content.len(), 2, "text block + tool summary should remain");
         assert!(matches!(a.content[0], ContentBlock::Text { .. }));
+        assert!(matches!(a.content[1], ContentBlock::Text { .. }));
+        if let ContentBlock::Text { text } = &a.content[1] {
+            assert!(text.contains("bash"), "summary should name the tool");
+        }
     } else {
         panic!("expected assistant message");
     }
 }
 
 #[test]
-fn strip_tool_content_drops_assistant_with_only_tool_calls() {
+fn strip_tool_content_keeps_assistant_with_only_tool_calls_as_summary() {
     let messages = vec![
         AgentMessage::Assistant(AssistantMessage {
             content: vec![tool_call_block()],
@@ -419,7 +424,12 @@ fn strip_tool_content_drops_assistant_with_only_tool_calls() {
         }),
     ];
     let stripped = strip_tool_content(messages);
-    assert!(stripped.is_empty(), "assistant with only tool calls should be dropped");
+    // Now produces a summary text block instead of being dropped.
+    assert_eq!(stripped.len(), 1, "assistant should be kept as a summary");
+    if let AgentMessage::Assistant(a) = &stripped[0] {
+        assert_eq!(a.content.len(), 1);
+        assert!(matches!(a.content[0], ContentBlock::Text { .. }));
+    }
 }
 
 #[test]

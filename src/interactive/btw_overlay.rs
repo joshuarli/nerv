@@ -184,22 +184,85 @@ No tool use.";
 /// - `AgentMessage::Assistant` rows have their `ContentBlock::ToolCall` blocks
 ///   removed; if no text/thinking remains, the message is dropped too.
 /// - `AgentMessage::User` rows are passed through unchanged.
+/// Build a one-line description of a single tool call for context summaries.
+fn tool_call_summary(name: &str, args: &serde_json::Value) -> String {
+    // Show the most useful argument for each tool so the model understands what happened.
+    let detail = match name {
+        "bash" => args.get("command").and_then(|v| v.as_str())
+            .map(|s| s.char_indices().nth(120).map_or(s, |(i, _)| &s[..i]).to_string()),
+        "read" | "edit" | "write" | "ls" | "find" => args.get("path").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        "grep" => args.get("pattern").and_then(|v| v.as_str()).map(|s| format!(
+            "{:?}{}",
+            s,
+            args.get("path").and_then(|v| v.as_str()).map(|p| format!(" in {p}")).unwrap_or_default()
+        )),
+        _ => None,
+    };
+    match detail {
+        Some(d) => format!("{name}({d})"),
+        None => name.to_string(),
+    }
+}
+
 pub fn strip_tool_content(messages: Vec<AgentMessage>) -> Vec<AgentMessage> {
+    // Build a lookup from tool_call_id → first line of tool result text, so we
+    // can attach a brief outcome to each tool-call summary.
+    let mut result_snippets: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for msg in &messages {
+        if let AgentMessage::ToolResult { tool_call_id, content, is_error, .. } = msg {
+            let first_text = content.iter()
+                .find_map(|item| if let ContentItem::Text { text } = item { Some(text.as_str()) } else { None })
+                .unwrap_or("");
+            let first_line = first_text.lines().next().unwrap_or("");
+            let snippet = first_line.char_indices().nth(120)
+                .map_or(first_line, |(i, _)| &first_line[..i]);
+            let prefix = if *is_error { "error: " } else { "" };
+            result_snippets.insert(tool_call_id.clone(), format!("{prefix}{snippet}"));
+        }
+    }
+
     messages
         .into_iter()
         .filter_map(|msg| match msg {
+            // Drop raw ToolResult messages — their content is folded into the
+            // assistant summary above.
             AgentMessage::ToolResult { .. } => None,
             AgentMessage::Assistant(a) => {
-                let text_blocks: Vec<ContentBlock> = a
-                    .content
-                    .into_iter()
-                    .filter(|b| matches!(b, ContentBlock::Text { .. } | ContentBlock::Thinking { .. }))
+                // Collect any real text blocks first.
+                let mut content_out: Vec<ContentBlock> = a.content
+                    .iter()
+                    .filter(|b| matches!(b, ContentBlock::Text { .. }))
+                    .cloned()
                     .collect();
-                if text_blocks.is_empty() {
+
+                // Summarise tool calls as a single text block so btw understands
+                // what the agent did, without requiring tool definitions in the API call.
+                let tool_summaries: Vec<String> = a.content.iter()
+                    .filter_map(|b| {
+                        if let ContentBlock::ToolCall { id, name, arguments } = b {
+                            let call = tool_call_summary(name, arguments);
+                            let outcome = result_snippets.get(id)
+                                .filter(|s| !s.is_empty())
+                                .map(|s| format!(" → {s}"))
+                                .unwrap_or_default();
+                            Some(format!("[{call}{outcome}]"))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if !tool_summaries.is_empty() {
+                    content_out.push(ContentBlock::Text {
+                        text: tool_summaries.join("\n"),
+                    });
+                }
+
+                if content_out.is_empty() {
                     None
                 } else {
                     Some(AgentMessage::Assistant(AssistantMessage {
-                        content: text_blocks,
+                        content: content_out,
                         stop_reason: a.stop_reason,
                         usage: a.usage,
                         timestamp: a.timestamp,
