@@ -18,6 +18,10 @@ pub struct ChatWriter {
     picker: Option<Vec<String>>,
     // Per-block render cache (interior mutability for use in &self render)
     cache: RefCell<RenderCache>,
+    /// Total rendered lines already evicted to terminal scrollback (absolute offset).
+    /// notify_flushed receives an absolute scrollback_flushed count from the TUI;
+    /// we subtract this to get the delta relative to the current block list.
+    lines_evicted: usize,
 }
 
 struct RenderCache {
@@ -55,6 +59,7 @@ impl ChatWriter {
                 block_lines: Vec::new(),
                 width: 0,
             }),
+            lines_evicted: 0,
         }
     }
 
@@ -62,14 +67,25 @@ impl ChatWriter {
         self.blocks.borrow_mut().clear();
         self.streaming = None;
         self.cache.borrow_mut().block_lines.clear();
+        self.lines_evicted = 0;
     }
 
-    /// Called after the TUI flushes `flushed_lines` lines to terminal scrollback.
+    /// Reset the eviction baseline. Call whenever the TUI resets scrollback_flushed
+    /// to 0 (e.g. after suspend/resume), so future notify_flushed deltas are correct.
+    pub fn reset_eviction(&mut self) {
+        self.lines_evicted = 0;
+    }
+
+    /// Called after the TUI flushes `flushed_lines` lines to terminal scrollback
+    /// (absolute cumulative count since last full redraw).
     /// Drops source blocks and cached render lines that are fully covered, freeing
     /// their heap allocation.  Re-render cost is zero because the terminal owns
     /// the scrollback — these blocks will never be diff-rendered again.
     pub fn notify_flushed(&mut self, flushed_lines: usize) {
-        if flushed_lines == 0 {
+        // Convert absolute TUI count to delta relative to our current block list.
+        // lines_evicted tracks how many lines we have already dropped in prior calls.
+        let delta = flushed_lines.saturating_sub(self.lines_evicted);
+        if delta == 0 {
             return;
         }
         let mut cache = self.cache.borrow_mut();
@@ -77,7 +93,7 @@ impl ChatWriter {
         let mut to_drop = 0usize; // number of leading blocks to evict
         for block_lines in &cache.block_lines {
             let next = covered + block_lines.len();
-            if next > flushed_lines {
+            if next > delta {
                 break; // this block straddles the flush boundary — keep it
             }
             covered = next;
@@ -90,6 +106,8 @@ impl ChatWriter {
         cache.block_lines.drain(..to_drop);
         // Drop source blocks too — they are fully owned by terminal scrollback.
         self.blocks.borrow_mut().drain(..to_drop);
+        // Advance the eviction cursor by the lines we just dropped.
+        self.lines_evicted += covered;
         // block_lines and blocks are now in sync again (same length, same offset).
     }
 

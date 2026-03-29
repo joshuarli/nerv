@@ -1193,7 +1193,7 @@ fn main() {
                             if keys::matches_key(seq, "ctrl+z") {
                                 tui.suspend();
                                 unsafe { libc::raise(libc::SIGSTOP) };
-                                tui.resume(); render_frame!(tui, layout); continue;
+                                tui.resume(); layout.chat.reset_eviction(); render_frame!(tui, layout); continue;
                             }
                             if keys::matches_key(seq, "shift+tab") {
                                 let enabled = interactive.toggle_plan_mode();
