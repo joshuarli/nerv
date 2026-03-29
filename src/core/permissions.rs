@@ -131,9 +131,9 @@ fn check_bash(args: &serde_json::Value, repo_root: Option<&Path>) -> Permission 
         }
     }
 
-    // Subshell/eval — can hide arbitrary commands
-    if cmd.contains("$(") || cmd.contains('`') || cmd.contains("eval ") {
-        return Permission::Ask(format!("bash uses subshell/eval: {}", cmd));
+    // eval — can execute arbitrary constructed strings
+    if cmd.contains("eval ") {
+        return Permission::Ask(format!("bash uses eval: {}", cmd));
     }
 
     // Check for paths outside repo in the command (including after redirects)
@@ -409,8 +409,8 @@ mod tests {
     }
 
     #[test]
-    fn bash_subshell_asks() {
-        let args = serde_json::json!({"command": "cat $(find / -name secret)"});
+    fn bash_eval_asks() {
+        let args = serde_json::json!({"command": "eval \"$HOSTILE\""});
         assert!(matches!(
             check("bash", &args, Some(&repo())),
             Permission::Ask(_)
@@ -418,12 +418,17 @@ mod tests {
     }
 
     #[test]
-    fn bash_backtick_asks() {
-        let args = serde_json::json!({"command": "cat `which evil`"});
-        assert!(matches!(
-            check("bash", &args, Some(&repo())),
-            Permission::Ask(_)
-        ));
+    fn bash_for_loop_allowed() {
+        let cmd = "for t in agent btw session integration; do\n  result=$(cargo test --test $t 2>&1 | tail -1)\n  echo \"$t: $result\"\ndone";
+        let args = serde_json::json!({"command": cmd});
+        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn bash_backtick_command_allowed() {
+        // Backticks are common in scripts; path checks still apply.
+        let args = serde_json::json!({"command": "echo `date`"});
+        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
