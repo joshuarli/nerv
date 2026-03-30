@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
 use crate::errors::ToolError;
 
@@ -52,7 +52,6 @@ impl AgentTool for WriteTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");

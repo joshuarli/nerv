@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use nerv::agent::agent::{Agent, AgentTool, UpdateCallback};
+use nerv::agent::agent::{Agent, AgentTool};
 use nerv::agent::convert::convert_to_llm;
 use nerv::agent::provider::*;
 use nerv::agent::types::*;
@@ -164,8 +164,7 @@ fn cancel_flag_stops_agent() {
         fn execute(
             &self,
             _: serde_json::Value,
-            _: UpdateCallback,
-            _: &nerv::agent::provider::CancelFlag,
+            _cancel: &nerv::agent::provider::CancelFlag,
         ) -> nerv::agent::agent::ToolResult {
             self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             nerv::agent::agent::ToolResult::ok("cancelled")
@@ -377,7 +376,6 @@ impl AgentTool for BigBashTool {
     fn execute(
         &self,
         _input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         ToolResult::ok_with_details(

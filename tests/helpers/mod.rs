@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use nerv::agent::agent::{Agent, AgentTool, ToolResult, UpdateCallback};
+use nerv::agent::agent::{Agent, AgentTool, ToolResult};
 use nerv::agent::provider::*;
 use nerv::agent::types::*;
 use nerv::core::agent_session::AgentSession;
@@ -13,11 +13,6 @@ use nerv::core::*;
 use nerv::errors::ToolError;
 use nerv::session::SessionManager;
 use tempfile::TempDir;
-
-#[expect(dead_code)]
-pub fn noop_update() -> UpdateCallback {
-    Arc::new(|_| {})
-}
 
 #[expect(dead_code)]
 pub fn noop_cancel() -> CancelFlag {
@@ -82,7 +77,6 @@ impl AgentTool for EchoTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         ToolResult::ok(format!("echo: {}", input["text"].as_str().unwrap_or("(no input)")))

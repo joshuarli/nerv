@@ -7,8 +7,6 @@ use super::provider::*;
 use super::transform::{prepare_context, transform_context};
 use super::types::*;
 
-pub type UpdateCallback = Arc<dyn Fn(String) + Send + Sync>;
-
 pub trait AgentTool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
@@ -33,7 +31,6 @@ pub trait AgentTool: Send + Sync {
     fn execute(
         &self,
         input: serde_json::Value,
-        update: UpdateCallback,
         cancel: &CancelFlag,
     ) -> ToolResult;
 }
@@ -552,8 +549,7 @@ impl Agent {
             let args = tool.normalize(args.clone());
             match tool.validate(&args) {
                 Ok(()) => {
-                    let update_cb: UpdateCallback = Arc::new(|_output: String| {});
-                    tool.execute(args, update_cb, &self.cancel)
+                    tool.execute(args, &self.cancel)
                 }
                 Err(e) => ToolResult {
                     content: format!("Validation error: {}", e),

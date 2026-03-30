@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use super::truncate::{DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncate_tail};
-use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
 use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
@@ -71,7 +71,6 @@ impl AgentTool for GrepTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         let pattern = input["pattern"].as_str().unwrap_or("");

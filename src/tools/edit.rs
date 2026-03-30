@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::file_mutation_queue::FileMutationQueue;
-use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
 use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
@@ -141,7 +141,6 @@ impl AgentTool for EditTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");

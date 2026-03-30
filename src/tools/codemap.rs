@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
 use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
@@ -74,7 +74,6 @@ impl AgentTool for CodemapTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         let query = input["query"].as_str().unwrap_or("");

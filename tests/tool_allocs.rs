@@ -4,7 +4,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::Arc;
 
-use nerv::agent::agent::{AgentTool, UpdateCallback};
+use nerv::agent::agent::{AgentTool};
 use nerv::agent::provider::{CancelFlag, new_cancel_flag};
 use nerv::tools::*;
 
@@ -53,9 +53,6 @@ fn measure_allocs<F: FnOnce() -> R, R>(f: F) -> (R, AllocStats) {
     (result, stats)
 }
 
-fn noop_update() -> UpdateCallback {
-    Arc::new(|_| {})
-}
 
 fn noop_cancel() -> CancelFlag {
     new_cancel_flag()
@@ -69,13 +66,12 @@ fn read_100_lines_allocs() {
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
     let input = serde_json::json!({"path": "test.txt"});
-    let update = noop_update();
 
     // Warm up (first call may trigger lazy init)
-    let _ = tool.execute(input.clone(), update.clone(), &noop_cancel());
+    let _ = tool.execute(input.clone(), &noop_cancel());
 
     let (result, stats) =
-        measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
+        measure_allocs(|| tool.execute(input.clone(), &noop_cancel()));
     assert!(!result.is_error);
     eprintln!("read 100 lines: {} allocs, {} bytes", stats.count, stats.bytes);
     assert!(stats.count < 50, "read 100 lines: too many allocs ({})", stats.count);
@@ -90,7 +86,6 @@ fn edit_single_500_lines_allocs() {
 
     let mq = Arc::new(FileMutationQueue::new());
     let tool = EditTool::new(tmp.path().to_path_buf(), mq);
-    let update = noop_update();
 
     // Write + warm up
     std::fs::write(tmp.path().join("code.rs"), &original).unwrap();
@@ -99,12 +94,12 @@ fn edit_single_500_lines_allocs() {
         "old_text": "fn func_250() {}",
         "new_text": "fn func_250_renamed() {}"
     });
-    let _ = tool.execute(input.clone(), update.clone(), &noop_cancel());
+    let _ = tool.execute(input.clone(), &noop_cancel());
 
     // Measure
     std::fs::write(tmp.path().join("code.rs"), &original).unwrap();
     let (result, stats) =
-        measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
+        measure_allocs(|| tool.execute(input.clone(), &noop_cancel()));
     assert!(!result.is_error, "{}", result.content);
     eprintln!("edit single 500 lines: {} allocs, {} bytes", stats.count, stats.bytes);
     assert!(stats.count < 100, "edit single: too many allocs ({})", stats.count);
@@ -119,7 +114,6 @@ fn edit_multi_5x_500_lines_allocs() {
 
     let mq = Arc::new(FileMutationQueue::new());
     let tool = EditTool::new(tmp.path().to_path_buf(), mq);
-    let update = noop_update();
 
     let input = serde_json::json!({
         "path": "code.rs",
@@ -134,12 +128,12 @@ fn edit_multi_5x_500_lines_allocs() {
 
     // Warm up
     std::fs::write(tmp.path().join("code.rs"), &original).unwrap();
-    let _ = tool.execute(input.clone(), update.clone(), &noop_cancel());
+    let _ = tool.execute(input.clone(), &noop_cancel());
 
     // Measure
     std::fs::write(tmp.path().join("code.rs"), &original).unwrap();
     let (result, stats) =
-        measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
+        measure_allocs(|| tool.execute(input.clone(), &noop_cancel()));
     assert!(!result.is_error, "{}", result.content);
     eprintln!("edit multi 5x 500 lines: {} allocs, {} bytes", stats.count, stats.bytes);
     assert!(stats.count < 150, "edit multi: too many allocs ({})", stats.count);
@@ -165,15 +159,14 @@ fn write_10kb_allocs() {
     let tmp = tempfile::TempDir::new().unwrap();
     let content = "x".repeat(10_000);
     let tool = WriteTool::new(tmp.path().to_path_buf());
-    let update = noop_update();
 
     let input = serde_json::json!({"path": "out.txt", "content": &content});
 
     // Warm up
-    let _ = tool.execute(input.clone(), update.clone(), &noop_cancel());
+    let _ = tool.execute(input.clone(), &noop_cancel());
 
     let (result, stats) =
-        measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
+        measure_allocs(|| tool.execute(input.clone(), &noop_cancel()));
     assert!(!result.is_error);
     eprintln!("write 10kb: {} allocs, {} bytes", stats.count, stats.bytes);
     assert!(stats.count < 100, "write: too many allocs ({})", stats.count);
@@ -191,7 +184,6 @@ fn edit_lf_vs_crlf_overhead() {
 
     let mq = Arc::new(FileMutationQueue::new());
     let tool = EditTool::new(tmp.path().to_path_buf(), mq);
-    let update = noop_update();
 
     let input = serde_json::json!({
         "path": "test.txt",
@@ -201,18 +193,18 @@ fn edit_lf_vs_crlf_overhead() {
 
     // Measure LF
     std::fs::write(tmp.path().join("test.txt"), &lf_content).unwrap();
-    let _ = tool.execute(input.clone(), update.clone(), &noop_cancel()); // warm up
+    let _ = tool.execute(input.clone(), &noop_cancel()); // warm up
     std::fs::write(tmp.path().join("test.txt"), &lf_content).unwrap();
     let (r1, lf_stats) =
-        measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
+        measure_allocs(|| tool.execute(input.clone(), &noop_cancel()));
     assert!(!r1.is_error, "{}", r1.content);
 
     // Measure CRLF
     std::fs::write(tmp.path().join("test.txt"), &crlf_content).unwrap();
-    let _ = tool.execute(input.clone(), update.clone(), &noop_cancel()); // warm up
+    let _ = tool.execute(input.clone(), &noop_cancel()); // warm up
     std::fs::write(tmp.path().join("test.txt"), &crlf_content).unwrap();
     let (r2, crlf_stats) =
-        measure_allocs(|| tool.execute(input.clone(), update.clone(), &noop_cancel()));
+        measure_allocs(|| tool.execute(input.clone(), &noop_cancel()));
     assert!(!r2.is_error, "{}", r2.content);
 
     eprintln!(

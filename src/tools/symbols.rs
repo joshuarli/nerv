@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
 use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
@@ -110,7 +110,6 @@ impl AgentTool for SymbolsTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         let query = input["query"].as_str().unwrap_or("");
@@ -283,7 +282,7 @@ mod tests {
 
         let tool = SymbolsTool::new(tmp.path().to_path_buf());
         let cancel = new_cancel_flag();
-        let result = tool.execute(serde_json::json!({"query": ""}), Arc::new(|_| {}), &cancel);
+        let result = tool.execute(serde_json::json!({"query": ""}), &cancel);
         assert!(result.content.contains("DOCS:"), "should have DOCS section: {}", result.content);
         assert!(result.content.contains("README.md"), "should list README.md: {}", result.content);
         assert!(result.content.contains("docs.md"), "should list docs.md: {}", result.content);
@@ -297,7 +296,7 @@ mod tests {
 
         let tool = SymbolsTool::new(tmp.path().to_path_buf());
         let cancel = new_cancel_flag();
-        let result = tool.execute(serde_json::json!({"query": "hello"}), Arc::new(|_| {}), &cancel);
+        let result = tool.execute(serde_json::json!({"query": "hello"}), &cancel);
         assert!(
             !result.content.contains("DOCS:"),
             "specific query should NOT have DOCS: {}",
@@ -315,7 +314,7 @@ mod tests {
         let cancel = new_cancel_flag();
         let result = tool.execute(
             serde_json::json!({"query": "", "file": "lib.rs"}),
-            Arc::new(|_| {}),
+            
             &cancel,
         );
         assert!(

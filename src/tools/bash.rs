@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::Ordering;
 
-use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
 use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
@@ -47,7 +47,6 @@ impl AgentTool for BashTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        update: UpdateCallback,
         cancel: &CancelFlag,
     ) -> ToolResult {
         let command = input["command"].as_str().unwrap_or("");
@@ -124,7 +123,6 @@ impl AgentTool for BashTool {
                     Ok(0) => break,
                     Ok(n) => {
                         output.extend_from_slice(&buf[..n]);
-                        update(String::from_utf8_lossy(&buf[..n]).to_string());
                     }
                     Err(_) => break,
                 }

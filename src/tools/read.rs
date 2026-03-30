@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use std::time::SystemTime;
 
 use super::truncate::{DEFAULT_MAX_LINES, truncate_head};
-use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
 use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
@@ -64,7 +64,6 @@ impl AgentTool for ReadTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");
@@ -222,9 +221,8 @@ mod tests {
     }
 
     fn read(tool: &dyn AgentTool, path: &str) -> ToolResult {
-        let cb: UpdateCallback = Arc::new(|_| {});
         let cancel = new_cancel_flag();
-        tool.execute(serde_json::json!({"path": path}), cb, &cancel)
+        tool.execute(serde_json::json!({"path": path}), &cancel)
     }
 
     fn read_range(
@@ -233,7 +231,6 @@ mod tests {
         offset: Option<u64>,
         limit: Option<u64>,
     ) -> ToolResult {
-        let cb: UpdateCallback = Arc::new(|_| {});
         let cancel = new_cancel_flag();
         let mut args = serde_json::json!({"path": path});
         if let Some(o) = offset {
@@ -242,7 +239,7 @@ mod tests {
         if let Some(l) = limit {
             args["limit"] = serde_json::json!(l);
         }
-        tool.execute(args, cb, &cancel)
+        tool.execute(args, &cancel)
     }
 
     #[test]
