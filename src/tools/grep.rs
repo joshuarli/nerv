@@ -35,6 +35,10 @@ impl AgentTool for GrepTool {
     fn name(&self) -> &str {
         "grep"
     }
+
+    fn is_readonly(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
         "Search file contents using ripgrep. Respects .gitignore."
     }

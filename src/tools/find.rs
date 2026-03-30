@@ -33,6 +33,10 @@ impl AgentTool for FindTool {
     fn name(&self) -> &str {
         "find"
     }
+
+    fn is_readonly(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
         "Find files by name pattern using fd."
     }

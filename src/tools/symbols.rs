@@ -63,6 +63,10 @@ impl AgentTool for SymbolsTool {
         "symbols"
     }
 
+    fn is_readonly(&self) -> bool {
+        true
+    }
+
     fn description(&self) -> &str {
         "Search the project's tree-sitter symbol index for definitions. Returns symbol names, kinds, file locations, and signatures. Use before reading files to understand code structure."
     }
