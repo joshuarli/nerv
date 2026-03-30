@@ -180,7 +180,7 @@ pub fn mock_session(
     registry.register("mock", provider);
 
     let mut agent = Agent::new(Arc::new(RwLock::new(registry)));
-    agent.state.model = Some(test_model());
+    agent.set_model(Some(test_model()));
 
     let model_registry = Arc::new(ModelRegistry::empty());
     let mut tool_registry = ToolRegistry::new();

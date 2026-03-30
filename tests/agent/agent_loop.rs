@@ -12,8 +12,8 @@ fn setup_agent(responses: Vec<Vec<ProviderEvent>>) -> Agent {
     let mut registry = ProviderRegistry::new();
     registry.register("mock", provider);
     let mut agent = Agent::new(Arc::new(RwLock::new(registry)));
-    agent.state.model = Some(test_model());
-    agent.state.system_prompt = "Test.".into();
+    agent.set_model(Some(test_model()));
+    agent.set_system_prompt("Test.".into());
     agent
 }
 
@@ -51,7 +51,7 @@ fn tool_call_triggers_execution() {
         tool_call_response("call_1", "echo", r#"{"text":"hello"}"#),
         simple_response("Done"),
     ]);
-    agent.state.tools = vec![Arc::new(EchoTool)];
+    agent.set_tools(vec![Arc::new(EchoTool)]);
 
     let (messages, events) = collect_events(&mut agent, vec![user_msg("test")]);
 
@@ -95,7 +95,7 @@ fn multiple_tool_calls_execute_sequentially() {
         ],
         simple_response("all done"),
     ]);
-    agent.state.tools = vec![Arc::new(EchoTool)];
+    agent.set_tools(vec![Arc::new(EchoTool)]);
 
     let (messages, _) = collect_events(&mut agent, vec![user_msg("test")]);
 
@@ -119,11 +119,11 @@ fn unknown_tool_returns_error() {
 #[test]
 fn messages_accumulate_in_state() {
     let mut agent = setup_agent(vec![simple_response("reply")]);
-    agent.state.messages = vec![user_msg("prior context")];
+    agent.set_messages(vec![user_msg("prior context")]);
 
     let (_, _) = collect_events(&mut agent, vec![user_msg("new question")]);
 
-    assert!(agent.state.messages.len() >= 3);
+    assert!(agent.messages().len() >= 3);
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn cancel_flag_stops_agent() {
         simple_response("should not reach"),
     ]);
     let cancel = agent.cancel.clone();
-    agent.state.tools = vec![Arc::new(CancelTool { cancel })];
+    agent.set_tools(vec![Arc::new(CancelTool { cancel })]);
 
     let (messages, _) = collect_events(&mut agent, vec![user_msg("test")]);
 
@@ -197,7 +197,7 @@ fn turn_events_bracket_each_turn() {
         tool_call_response("c1", "echo", r#"{"text":"x"}"#),
         simple_response("done"),
     ]);
-    agent.state.tools = vec![Arc::new(EchoTool)];
+    agent.set_tools(vec![Arc::new(EchoTool)]);
 
     let (_, events) = collect_events(&mut agent, vec![user_msg("test")]);
 
@@ -236,7 +236,7 @@ fn persist_fn_called_for_tool_loop() {
         tool_call_response("c1", "echo", r#"{"text":"x"}"#),
         simple_response("Done"),
     ]);
-    agent.state.tools = vec![Arc::new(EchoTool)];
+    agent.set_tools(vec![Arc::new(EchoTool)]);
 
     let (messages, persisted) = collect_persisted(&mut agent, vec![user_msg("test")]);
 
@@ -269,7 +269,7 @@ fn persist_fn_order_matches_returned_messages() {
         tool_call_response("c2", "echo", r#"{"text":"b"}"#),
         simple_response("final"),
     ]);
-    agent.state.tools = vec![Arc::new(EchoTool)];
+    agent.set_tools(vec![Arc::new(EchoTool)]);
 
     let (messages, persisted) = collect_persisted(&mut agent, vec![user_msg("go")]);
 
@@ -290,19 +290,21 @@ fn tool_descriptions_pruned_after_threshold() {
     let mut registry = ProviderRegistry::new();
     registry.register("mock", provider);
     let mut agent = Agent::new(Arc::new(RwLock::new(registry)));
-    agent.state.model = Some(test_model());
-    agent.state.system_prompt = "Test.".into();
-    agent.state.tools = vec![Arc::new(EchoTool)];
+    agent.set_model(Some(test_model()));
+    agent.set_system_prompt("Test.".into());
+    agent.set_tools(vec![Arc::new(EchoTool)]);
 
     // Seed enough prior assistant messages to trigger pruning
     for i in 0..5 {
-        agent.state.messages.push(user_msg(&format!("q{}", i)));
-        agent.state.messages.push(AgentMessage::Assistant(AssistantMessage {
+        let mut msgs = agent.messages().to_vec();
+        msgs.push(user_msg(&format!("q{}", i)));
+        msgs.push(AgentMessage::Assistant(AssistantMessage {
             content: vec![ContentBlock::Text { text: format!("a{}", i) }],
             stop_reason: StopReason::EndTurn,
             usage: None,
             timestamp: 1000,
         }));
+        agent.set_messages(msgs);
     }
 
     let _ = collect_events(&mut agent, vec![user_msg("go")]);
@@ -328,9 +330,9 @@ fn tool_descriptions_kept_for_early_turns() {
     let mut registry = ProviderRegistry::new();
     registry.register("mock", provider);
     let mut agent = Agent::new(Arc::new(RwLock::new(registry)));
-    agent.state.model = Some(test_model());
-    agent.state.system_prompt = "Test.".into();
-    agent.state.tools = vec![Arc::new(EchoTool)];
+    agent.set_model(Some(test_model()));
+    agent.set_system_prompt("Test.".into());
+    agent.set_tools(vec![Arc::new(EchoTool)]);
 
     // No prior messages — first turn
     let _ = collect_events(&mut agent, vec![user_msg("hello")]);
@@ -390,9 +392,9 @@ fn setup_agent_with_bash(responses: Vec<Vec<ProviderEvent>>, bash_output: String
     let mut registry = ProviderRegistry::new();
     registry.register("mock", provider);
     let mut agent = Agent::new(Arc::new(RwLock::new(registry)));
-    agent.state.model = Some(test_model());
-    agent.state.system_prompt = "Test.".into();
-    agent.state.tools = vec![Arc::new(BigBashTool { output: bash_output })];
+    agent.set_model(Some(test_model()));
+    agent.set_system_prompt("Test.".into());
+    agent.set_tools(vec![Arc::new(BigBashTool { output: bash_output })]);
     agent
 }
 
@@ -406,10 +408,10 @@ fn output_gate_not_triggered_below_threshold() {
     );
     let gate_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let gate_fired2 = gate_fired.clone();
-    agent.state.output_gate_fn = Some(Arc::new(move |_info: OutputGateInfo| {
+    agent.set_output_gate_fn(Some(Arc::new(move |_info: OutputGateInfo| {
         gate_fired2.store(true, std::sync::atomic::Ordering::SeqCst);
         OutputGateDecision::Allow
-    }));
+    })));
     let (messages, _) = collect_events(&mut agent, vec![user_msg("run bash")]);
     assert!(
         !gate_fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -441,12 +443,12 @@ fn output_gate_allow_passes_result_through() {
     );
     let gate_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let gate_fired2 = gate_fired.clone();
-    agent.state.output_gate_fn = Some(Arc::new(move |info: OutputGateInfo| {
+    agent.set_output_gate_fn(Some(Arc::new(move |info: OutputGateInfo| {
         gate_fired2.store(true, std::sync::atomic::Ordering::SeqCst);
         assert!(info.byte_count > OUTPUT_GATE_THRESHOLD_BYTES);
         assert_eq!(info.command, "cat big_file");
         OutputGateDecision::Allow
-    }));
+    })));
     let (messages, _) = collect_events(&mut agent, vec![user_msg("run bash")]);
     assert!(
         gate_fired.load(std::sync::atomic::Ordering::SeqCst),
@@ -475,7 +477,7 @@ fn output_gate_deny_replaces_with_hint() {
         ],
         big,
     );
-    agent.state.output_gate_fn = Some(Arc::new(|_info: OutputGateInfo| OutputGateDecision::Deny));
+    agent.set_output_gate_fn(Some(Arc::new(|_info: OutputGateInfo| OutputGateDecision::Deny)));
     let (messages, _) = collect_events(&mut agent, vec![user_msg("run bash")]);
     let tool_result = messages.iter().find(|m| matches!(m, AgentMessage::ToolResult { .. }));
     assert!(tool_result.is_some(), "tool result message must exist");
