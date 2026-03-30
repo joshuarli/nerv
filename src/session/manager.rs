@@ -300,6 +300,7 @@ impl SessionManager {
         tokens_before: u32,
         tokens_after: u32,
         model_id: String,
+        cost_usd_before: f64,
         archived_messages: Vec<crate::agent::types::AgentMessage>,
     ) -> anyhow::Result<()> {
         if self.session_id.is_none() {
@@ -351,6 +352,7 @@ impl SessionManager {
             tokens_before,
             tokens_after,
             model_id,
+            cost_usd_before,
             archived_messages,
         });
         self.append_entry(entry)?;
@@ -445,8 +447,18 @@ impl SessionManager {
         let mut model: Option<(String, String)> = None;
         let mut thinking_level = ThinkingLevel::Off;
 
-        // Accumulate cost and token counts from all MessageEntry records in the branch.
-        let mut cost_usd: f64 = 0.0;
+        // Find the most recent compaction first so we can seed cost/token totals
+        // from its snapshot. Pre-compaction MessageEntry rows are hard-deleted from
+        // the DB, so without this offset the accumulated cost would only reflect
+        // the post-compaction window.
+        let last_compact = branch.iter().enumerate().rev().find_map(|(i, e)| match e {
+            SessionEntry::Compaction(c) => Some((i, c)),
+            _ => None,
+        });
+
+        // Seed accumulated stats from the compaction snapshot, then add all
+        // surviving (post-compaction) MessageEntry records on top.
+        let mut cost_usd: f64 = last_compact.as_ref().map(|(_, c)| c.cost_usd_before).unwrap_or(0.0);
         let mut total_input: u64 = 0;
         let mut total_output: u64 = 0;
         let mut api_calls: u32 = 0;
@@ -460,11 +472,6 @@ impl SessionManager {
                 api_calls += 1;
             }
         }
-
-        let last_compact = branch.iter().enumerate().rev().find_map(|(i, e)| match e {
-            SessionEntry::Compaction(c) => Some((i, c)),
-            _ => None,
-        });
 
         let walk_start = if let Some((compact_idx, ce)) = last_compact {
             messages.push(AgentMessage::CompactionSummary {

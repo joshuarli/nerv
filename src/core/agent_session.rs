@@ -898,6 +898,7 @@ impl AgentSession {
                     tokens_before,
                     tokens_after,
                     model_id.clone(),
+                    self.session_cost.total,
                     to_summarize.clone(),
                 );
                 // Fire onCompactionDone hooks (fire-and-forget).

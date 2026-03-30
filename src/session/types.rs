@@ -150,6 +150,11 @@ pub struct CompactionEntry {
     /// Model used to generate the compaction summary.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model_id: String,
+    /// Accumulated cost in USD for all API calls made *before* this compaction.
+    /// The pre-compaction MessageEntry rows are deleted from the DB, so this
+    /// value is the only way to restore the full session cost on resume.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub cost_usd_before: f64,
     /// The messages that were summarised away, preserved for export/debugging.
     /// Not sent to any LLM — display only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
