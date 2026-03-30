@@ -5,7 +5,7 @@ use super::config::{CustomProviderConfig, NervConfig};
 use super::local_models::load_models;
 use crate::agent::provider::ProviderRegistry;
 use crate::agent::types::{Model, ModelPricing};
-use crate::agent::{AnthropicProvider, OpenAICompatProvider};
+use crate::agent::{AnthropicProvider, CodexProvider, OpenAICompatProvider};
 
 pub struct ModelRegistry {
     built_in: Vec<Model>,
@@ -30,6 +30,9 @@ impl ModelRegistry {
         // Always include built-in models; available_models() filters by registered
         // providers
         let built_in = builtin_anthropic_models();
+        let codex_models = builtin_codex_models();
+        let mut built_in = built_in;
+        built_in.extend(codex_models);
 
         // Register Anthropic provider if auth is available
         let is_oauth = auth.is_oauth("anthropic");
@@ -42,6 +45,19 @@ impl ModelRegistry {
             }
             .with_headers(extra_headers);
             registry.register("anthropic", Arc::new(provider));
+        }
+
+        // Register Codex provider if auth is available
+        let is_oauth = auth.is_oauth("codex");
+        let extra_headers: Vec<(String, String)> = config.effective_headers("codex");
+        if let Some(api_key) = auth.api_key("codex") {
+            let provider = CodexProvider::new(
+                "codex".to_string(),
+                "https://api.openai.com/v1".to_string(),
+                Some(api_key),
+            )
+            .with_headers(extra_headers);
+            registry.register("codex", Arc::new(provider));
         }
 
         // Register custom providers
@@ -216,6 +232,59 @@ fn builtin_anthropic_models() -> Vec<Model> {
             supports_adaptive_thinking: false,
             supports_xhigh: false,
             pricing: ModelPricing { input: 0.80, output: 4.0, cache_read: 0.08, cache_write: 1.0 },
+        },
+    ]
+}
+
+fn builtin_codex_models() -> Vec<Model> {
+    vec![
+        Model {
+            id: "gpt-5".into(),
+            name: "GPT-5".into(),
+            provider_name: "codex".into(),
+            context_window: 1_000_000,
+            max_output_tokens: 32_000,
+            reasoning: true,
+            supports_adaptive_thinking: true,
+            supports_xhigh: true,
+            pricing: ModelPricing {
+                input: 3.0,
+                output: 12.0,
+                cache_read: 0.75,
+                cache_write: 3.75,
+            },
+        },
+        Model {
+            id: "gpt-5-mini".into(),
+            name: "GPT-5 Mini".into(),
+            provider_name: "codex".into(),
+            context_window: 1_000_000,
+            max_output_tokens: 32_000,
+            reasoning: false,
+            supports_adaptive_thinking: false,
+            supports_xhigh: false,
+            pricing: ModelPricing {
+                input: 0.4,
+                output: 1.6,
+                cache_read: 0.1,
+                cache_write: 0.5,
+            },
+        },
+        Model {
+            id: "gpt-4.5".into(),
+            name: "GPT-4.5".into(),
+            provider_name: "codex".into(),
+            context_window: 128_000,
+            max_output_tokens: 16_000,
+            reasoning: true,
+            supports_adaptive_thinking: true,
+            supports_xhigh: false,
+            pricing: ModelPricing {
+                input: 3.0,
+                output: 12.0,
+                cache_read: 0.75,
+                cache_write: 3.75,
+            },
         },
     ]
 }
