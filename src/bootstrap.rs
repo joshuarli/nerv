@@ -172,7 +172,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
 
     // Apply auto_compact setting from config (default: true).
     if let Some(enabled) = config.auto_compact {
-        session.auto_compact = enabled;
+        session.compaction.auto_compact = enabled;
     }
 
     // Validate configured model ids against the known model list.

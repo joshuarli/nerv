@@ -993,7 +993,7 @@ fn main() {
     let initial_effort_level = session.agent.state.effort_level;
     // Clone compact_threshold_arc so the main thread can write it directly for
     // immediate effect without waiting for SetCompactThreshold through cmd_tx.
-    let compact_threshold_arc = session.compact_threshold_pct.clone();
+    let compact_threshold_arc = session.compaction.threshold_pct.clone();
     // Clone the provider_registry Arc so the main thread can make /btw overlay
     // calls.
     let provider_registry = session.agent.provider_registry.clone();

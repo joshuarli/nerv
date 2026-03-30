@@ -35,6 +35,7 @@ use crate::agent::types::{
 use crate::now_millis;
 use crate::compaction::summarize::{generate_session_name, generate_summary};
 use crate::compaction::{self, CompactionResult, CompactionSettings};
+use super::compaction_controller::CompactionController;
 use crate::core::config::NervConfig;
 use crate::session::SessionManager;
 
@@ -230,10 +231,9 @@ pub struct AgentSession {
     pub tool_registry: ToolRegistry,
     /// Config loaded once at startup. Immutable for the lifetime of the session.
     pub config: NervConfig,
-    compaction_settings: CompactionSettings,
-    /// Shared with the interactive thread so `/compact at N` takes effect
-    /// immediately without going through cmd_tx. Range 0–100; default 80.
-    pub compact_threshold_pct: Arc<AtomicU32>,
+    /// Compaction state: settings, threshold, auto-compact flag, and the
+    /// mid-stream trigger flag. Grouped to make hand-off to closures obvious.
+    pub compaction: CompactionController,
     model_registry: Arc<ModelRegistry>,
     resources: LoadedResources,
     cwd: PathBuf,
@@ -256,12 +256,6 @@ pub struct AgentSession {
     /// True once the session has been given an auto-generated name, to avoid
     /// re-naming.
     session_named: bool,
-    /// Whether automatic threshold-based compaction is enabled for this
-    /// session.
-    pub auto_compact: bool,
-    /// Set by the UsageUpdate callback when mid-stream compaction triggers.
-    /// Checked after prompt() returns to decide whether to compact + retry.
-    compaction_triggered: Arc<AtomicBool>,
 }
 
 impl AgentSession {
@@ -279,8 +273,7 @@ impl AgentSession {
             session_manager,
             tool_registry,
             config,
-            compaction_settings: CompactionSettings::default(),
-            compact_threshold_pct: Arc::new(AtomicU32::new(80)),
+            compaction: CompactionController::default(),
             model_registry,
             resources,
             cwd,
@@ -293,8 +286,7 @@ impl AgentSession {
             plan_mode: false,
             talk_mode: false,
             session_named: false,
-            auto_compact: true,
-            compaction_triggered: Arc::new(AtomicBool::new(false)),
+
         }
     }
 
@@ -350,12 +342,12 @@ impl AgentSession {
         self.prepare_callbacks(event_tx);
 
         // Reset in case a previous prompt left it set (e.g. abort during compaction).
-        self.compaction_triggered.store(false, Ordering::Relaxed);
+        self.compaction.triggered.store(false, Ordering::Relaxed);
         let new_messages = self.run_agent_prompt(vec![user_msg], event_tx);
 
         // Mid-stream auto-compaction: the on_event callback detected the context
         // exceeded the threshold and cancelled the stream. Compact now and retry.
-        if self.compaction_triggered.swap(false, Ordering::Relaxed) {
+        if self.compaction.triggered.swap(false, Ordering::Relaxed) {
             crate::log::info("mid-stream auto-compact: running compaction");
             let _ = event_tx.send(AgentSessionEvent::AutoCompactionStart {
                 reason: CompactionReason::Threshold,
@@ -380,10 +372,10 @@ impl AgentSession {
                     };
                     self.prepare_system_prompt();
                     self.prepare_callbacks(event_tx);
-                    let saved_auto_compact = self.auto_compact;
-                    self.auto_compact = false;
+                    let saved_auto_compact = self.compaction.auto_compact;
+                    self.compaction.auto_compact = false;
                     let retry_messages = self.run_agent_prompt(vec![retry_msg], event_tx);
-                    self.auto_compact = saved_auto_compact;
+                    self.compaction.auto_compact = saved_auto_compact;
                     self.post_turn(retry_messages, &text, event_tx);
                 }
                 Ok(None) => {
@@ -654,12 +646,12 @@ impl AgentSession {
         // Capture compaction state before the destructure so the on_event
         // closure can check the threshold on every UsageUpdate and cancel
         // the stream immediately when the context exceeds it.
-        let auto_compact = self.auto_compact;
-        let compaction_enabled = self.compaction_settings.enabled;
-        let threshold_pct = self.compaction_settings.threshold_pct;
+        let auto_compact = self.compaction.auto_compact;
+        let compaction_enabled = self.compaction.settings.enabled;
+        let threshold_pct = self.compaction.settings.threshold_pct;
         let cancel_flag = self.agent.cancel.clone();
-        let compaction_triggered = self.compaction_triggered.clone();
-        let compact_threshold_pct = self.compact_threshold_pct.clone();
+        let compaction_triggered = self.compaction.triggered.clone();
+        let compact_threshold_pct = self.compaction.threshold_pct.clone();
 
         // Destructure self so the borrow checker sees agent, session_manager,
         // and session_cost as independent borrows (needed because the persist
@@ -851,8 +843,8 @@ impl AgentSession {
             &branch,
             0,
             branch.len(),
-            self.compaction_settings.keep_recent_tokens,
-            self.compaction_settings.verbatim_window_tokens,
+            self.compaction.settings.keep_recent_tokens,
+            self.compaction.settings.verbatim_window_tokens,
         );
         // first_kept_entry_id is the deletion boundary: the session DB removes
         // everything before this entry and inserts the compaction summary in
@@ -1047,7 +1039,7 @@ impl AgentSession {
                         .send(AgentSessionEvent::EffortLevelChanged { level: Some(effort) });
                 }
                 if let Some(enabled) = scfg.auto_compact {
-                    self.auto_compact = enabled;
+                    self.compaction.auto_compact = enabled;
                 }
                 // Don't re-name sessions that were already named (or have a preview we could
                 // use). We consider any loaded session as already handled.
@@ -1068,8 +1060,8 @@ impl AgentSession {
     /// was saved, so the caller can notify the UI.
     fn apply_saved_compact_threshold(&mut self) -> Option<u8> {
         let pct = self.session_manager.get_compact_threshold()?;
-        self.compaction_settings.threshold_pct = pct.clamp(0.01, 1.0);
-        self.compact_threshold_pct.store((pct * 100.0) as u32, Ordering::Relaxed);
+        self.compaction.settings.threshold_pct = pct.clamp(0.01, 1.0);
+        self.compaction.threshold_pct.store((pct * 100.0) as u32, Ordering::Relaxed);
         Some((pct * 100.0).round() as u8)
     }
 
@@ -1299,8 +1291,8 @@ pub fn session_task(
             }
             SessionCommand::SetCompactThreshold { pct } => {
                 let frac = (pct as f64 / 100.0).clamp(0.01, 1.0);
-                session.compaction_settings.threshold_pct = frac;
-                session.compact_threshold_pct.store(pct as u32, Ordering::Relaxed);
+                session.compaction.settings.threshold_pct = frac;
+                session.compaction.threshold_pct.store(pct as u32, Ordering::Relaxed);
                 session.session_manager.set_compact_threshold(frac);
                 let _ = event_tx.send(AgentSessionEvent::CompactThresholdChanged { pct });
                 let _ = event_tx.send(AgentSessionEvent::Status {
@@ -1309,7 +1301,7 @@ pub fn session_task(
                 });
             }
             SessionCommand::SetAutoCompact { enabled } => {
-                session.auto_compact = enabled;
+                session.compaction.auto_compact = enabled;
                 session.session_manager.update_session_config(|cfg| {
                     cfg.auto_compact = Some(enabled);
                 });
