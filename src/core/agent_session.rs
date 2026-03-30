@@ -895,6 +895,21 @@ impl AgentSession {
             .map(compaction::estimate_tokens)
             .sum::<usize>() as u32;
 
+        // Archive the full branch (to_summarize + verbatim window) so the export
+        // contains the complete pre-compaction transcript. The verbatim window
+        // stays in the DB but its messages are still included here for
+        // debugging/export — they are not re-sent to any LLM.
+        let archived_messages: Vec<AgentMessage> = branch
+            .iter()
+            .filter_map(|e| {
+                if let crate::session::types::SessionEntry::Message(me) = e {
+                    Some(me.message.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         match generate_summary(&to_summarize, None, provider, &model_id) {
             Ok(summary) => {
                 let _ = self.session_manager.append_compaction(
@@ -904,7 +919,7 @@ impl AgentSession {
                     tokens_after,
                     model_id.clone(),
                     self.session_cost.total,
-                    to_summarize.clone(),
+                    archived_messages,
                 );
                 // Fire onCompactionDone hooks (fire-and-forget).
                 super::notifications::fire(

@@ -116,4 +116,5 @@ When you genuinely have a byte offset that needs snapping to a char boundary (e.
 - [Authentication](docs/auth.md) — OAuth PKCE, Keychain, required headers
 - [Local models](docs/local-models.md) — GGUF download, hardware detection, llama-server
 - [Execution loop](docs/execution-loop.md) — loop structure, file ownership, where it diverges from the ideal, retry/circuit-breaker
+- [Debugging](docs/debugging.md) — session JSONL export format, parse-jsonl-session.py, entry types, compaction archive
 - [Evals](eval/AGENTS.md) — eval harness, task design, oracle tests, report analysis
