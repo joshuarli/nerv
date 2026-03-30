@@ -1,19 +1,13 @@
 ---
 name: commit
-description: Create a well-formed git commit from staged/unstaged changes
+description: Create a commit
 ---
 
 Create a commit efficiently:
 
-1. Run `git status && git diff --cached --stat && git log --oneline -3` in ONE bash call to see state, staged changes, and recent style.
-2. Stage files: `git add file1 file2 ...` (specific files, not `git add -A`).
-3. Commit: `git commit -m "message"` — imperative mood, under 72 chars, summarizes the "why" not the "what".
+**First assess:** `git status && git diff --cached --stat && git log --oneline -3`
 
-That's 2-3 bash calls total. Do not run git diff --stat, git status, git log as separate calls.
+**Then stage and commit:** `git add <specific files> && git commit -m` with a Conventional Commits subject (`feat:`, `fix:`, `ref:`, `chore:`, etc.), under 72 chars, imperative mood. Add a body when the change needs explanation — what changed and why, not a rehash of the diff.
 
-Rules:
-- Never use `--no-verify` or skip hooks.
-- Never use `--amend` unless explicitly asked.
-- Never push to remote unless explicitly asked.
-- Do not commit .env, credentials, or secrets.
-- If pre-commit hooks fail, fix the issue and create a new commit.
+Never use `--no-verify` or `--amend`.
+Never `git add -A`.
