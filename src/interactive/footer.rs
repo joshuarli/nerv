@@ -166,7 +166,6 @@ pub struct FooterComponent {
     cost_output: f64,
     provider_online: Option<bool>,
     plan_mode: bool,
-    /// Auto-compact threshold (0–100). Default 50.
     compact_threshold_pct: u8,
     /// When true, the hexagon bar animates as a loading sweep instead of
     /// showing fill.
@@ -239,7 +238,7 @@ impl FooterComponent {
             cost_output: 0.0,
             provider_online: None,
             plan_mode: false,
-            compact_threshold_pct: 50,
+            compact_threshold_pct: 80,
             compacting: false,
             compact_tick: 0,
             total_input: 0,

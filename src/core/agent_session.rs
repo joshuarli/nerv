@@ -208,9 +208,8 @@ pub struct AgentSession {
     pub session_manager: SessionManager,
     pub tool_registry: ToolRegistry,
     compaction_settings: CompactionSettings,
-    /// Compact threshold as integer percent (0-100). Shared with the main
-    /// thread so `/compact at N` takes effect immediately without going
-    /// through cmd_tx.
+    /// Shared with the interactive thread so `/compact at N` takes effect
+    /// immediately without going through cmd_tx. Range 0–100; default 80.
     pub compact_threshold_pct: Arc<AtomicU32>,
     model_registry: Arc<ModelRegistry>,
     resources: LoadedResources,
@@ -256,7 +255,7 @@ impl AgentSession {
             session_manager,
             tool_registry,
             compaction_settings: CompactionSettings::default(),
-            compact_threshold_pct: Arc::new(AtomicU32::new(50)),
+            compact_threshold_pct: Arc::new(AtomicU32::new(80)),
             model_registry,
             resources,
             cwd,
