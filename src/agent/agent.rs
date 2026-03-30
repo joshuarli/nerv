@@ -202,6 +202,7 @@ impl Agent {
         while has_tool_calls {
             let assistant = self.stream_response(on_event, &ctx);
             let assistant_msg = AgentMessage::Assistant(assistant.clone());
+            self.state.messages.push(assistant_msg.clone());
             new_messages.push(assistant_msg.clone());
             if let Some(ref mut f) = persist_fn {
                 f(&assistant_msg);
@@ -497,7 +498,6 @@ impl Agent {
             timestamp: now_millis(),
         };
 
-        self.state.messages.push(AgentMessage::Assistant(msg.clone()));
         on_event(AgentEvent::MessageEnd { message: msg.clone() });
 
         msg
