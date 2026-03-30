@@ -24,10 +24,6 @@ impl AgentTool for CodemapTool {
         "codemap"
     }
 
-    fn is_readonly(&self) -> bool {
-        true
-    }
-
     fn description(&self) -> &str {
         "Show symbol implementations from the codebase. Returns source bodies for matching functions, structs, traits, etc. grouped by file. Replaces multiple read calls when you need to understand how something works."
     }

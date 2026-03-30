@@ -20,12 +20,6 @@ pub trait AgentTool: Send + Sync {
         vec![]
     }
 
-    /// Whether this tool only reads state and never mutates files or system state.
-    /// Read-only tools are safe to run in parallel. Default: false.
-    fn is_readonly(&self) -> bool {
-        false
-    }
-
     /// Coerce model output before validate/execute. Default: identity.
     fn normalize(&self, input: serde_json::Value) -> serde_json::Value {
         input
@@ -514,14 +508,9 @@ impl Agent {
         tool_calls: &[(String, String, serde_json::Value)],
         on_event: &(dyn Fn(AgentEvent) + Sync),
     ) -> Vec<AgentMessage> {
+        const READONLY_TOOLS: &[&str] = &["read", "grep", "find", "ls", "symbols", "codemap"];
         let all_readonly = tool_calls.len() > 1
-            && tool_calls.iter().all(|(_, name, _)| {
-                self.state
-                    .tools
-                    .iter()
-                    .find(|t| t.name() == name.as_str())
-                    .is_some_and(|t| t.is_readonly())
-            });
+            && tool_calls.iter().all(|(_, name, _)| READONLY_TOOLS.contains(&name.as_str()));
 
         if all_readonly {
             // Parallel execution for readonly tools

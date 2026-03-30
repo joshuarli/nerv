@@ -34,10 +34,6 @@ impl AgentTool for ReadTool {
     fn name(&self) -> &str {
         "read"
     }
-
-    fn is_readonly(&self) -> bool {
-        true
-    }
     fn description(&self) -> &str {
         "Read a file with line numbers. Use offset/limit to read specific sections of large files."
     }
