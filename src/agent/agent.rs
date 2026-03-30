@@ -166,6 +166,65 @@ impl Agent {
         self.cancel.store(false, Ordering::Relaxed);
     }
 
+    pub fn set_model(&mut self, model: Option<Model>) {
+        if self.state.model.as_ref().map(|m| &m.id) != model.as_ref().map(|m| &m.id) {
+            self.prev_estimated_tokens = 0;
+        }
+        self.state.model = model;
+    }
+
+    pub fn model(&self) -> Option<&Model> {
+        self.state.model.as_ref()
+    }
+
+    pub fn set_system_prompt(&mut self, prompt: String) {
+        self.state.system_prompt = prompt;
+    }
+
+    pub fn set_tools(&mut self, tools: Vec<Arc<dyn AgentTool>>) {
+        self.state.tools = tools;
+    }
+
+    pub fn set_thinking_level(&mut self, level: ThinkingLevel) {
+        self.state.thinking_level = level;
+    }
+
+    pub fn set_effort_level(&mut self, level: Option<EffortLevel>) {
+        self.state.effort_level = level;
+    }
+
+    pub fn messages(&self) -> &[AgentMessage] {
+        &self.state.messages
+    }
+
+    pub fn set_messages(&mut self, messages: Vec<AgentMessage>) {
+        self.state.messages = messages;
+    }
+
+    pub fn clear_messages(&mut self) {
+        self.state.messages.clear();
+    }
+
+    pub fn set_permission_fn(&mut self, f: Option<PermissionFn>) {
+        self.state.permission_fn = f;
+    }
+
+    pub fn set_context_gate_fn(&mut self, f: Option<ContextGateFn>) {
+        self.state.context_gate_fn = f;
+    }
+
+    pub fn set_post_tool_fn(&mut self, f: Option<PostToolFn>) {
+        self.state.post_tool_fn = f;
+    }
+
+    pub fn set_output_gate_fn(&mut self, f: Option<OutputGateFn>) {
+        self.state.output_gate_fn = f;
+    }
+
+    pub fn is_streaming(&self) -> bool {
+        self.state.is_streaming
+    }
+
     /// Run the agentic loop synchronously. Calls `on_event` for each event.
     /// If `persist_fn` is provided, each new message is persisted to the
     /// session DB as it's produced (per-iteration), so a mid-turn crash

@@ -2147,7 +2147,7 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
         b.model_registry.default_model(&b.config).cloned()
     };
     if let Some(ref m) = model {
-        agent.state.model = Some(m.clone());
+        agent.set_model(Some(m.clone()));
         eprintln!("model: {}/{}", m.provider_name, m.id);
     } else {
         let err = serde_json::json!({"error": "no model configured (use --model or set default)"});
@@ -2156,19 +2156,19 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
     }
 
     // Build system prompt
-    agent.state.tools = b.session.tool_registry.active_tools();
+    agent.set_tools(b.session.tool_registry.active_tools());
     let tool_names: Vec<&str> = agent.state.tools.iter().map(|t| t.name()).collect();
     let snippets = b.session.tool_registry.prompt_snippets();
     let guidelines = b.session.tool_registry.prompt_guidelines();
     let model_id = model.as_ref().map(|m| m.id.as_str());
-    agent.state.system_prompt = nerv::core::system_prompt::build_system_prompt_for_model(
+    agent.set_system_prompt(nerv::core::system_prompt::build_system_prompt_for_model(
         &cwd,
         &b.resources,
         &tool_names,
         &snippets,
         &guidelines,
         model_id,
-    );
+    ));
 
     // Collect metrics via the event callback (Mutex for Sync — no contention in
     // practice)

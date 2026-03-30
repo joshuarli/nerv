@@ -420,7 +420,7 @@ impl AgentSession {
             let allowed_dirs = self.allowed_dirs.clone();
             let notifications = self.config.notifications.clone();
 
-            self.agent.state.permission_fn =
+            self.agent.set_permission_fn(
                 Some(std::sync::Arc::new(move |tool: &str, args: &serde_json::Value| {
                     let args_json = serde_json::to_string(args).unwrap_or_default();
                     let key = format!("{}:{}", tool, args_json);
@@ -465,7 +465,7 @@ impl AgentSession {
                             approved
                         }
                     }
-                }));
+                })));
         }
 
         // Output gate: fires after bash executes when filtered output exceeds
@@ -473,7 +473,7 @@ impl AgentSession {
         // the TUI.
         {
             let output_tx = event_tx.clone();
-            self.agent.state.output_gate_fn =
+            self.agent.set_output_gate_fn(
                 Some(std::sync::Arc::new(move |info: crate::agent::agent::OutputGateInfo| {
                     let (resp_tx, resp_rx) = crossbeam_channel::bounded(1);
                     let _ = output_tx.send(AgentSessionEvent::OutputGateRequest {
@@ -487,12 +487,12 @@ impl AgentSession {
                     } else {
                         crate::agent::agent::OutputGateDecision::Deny
                     }
-                }));
+                })));
         }
 
         // Context gate (circuit breaker for context growth)
         let gate_tx = event_tx.clone();
-        self.agent.state.context_gate_fn =
+        self.agent.set_context_gate_fn(
             Some(std::sync::Arc::new(move |info: crate::agent::agent::ContextGateInfo| {
                 if info.tool_rounds < 4 || info.prev_tokens == 0 {
                     return true;
@@ -513,7 +513,7 @@ impl AgentSession {
                     response_tx: resp_tx,
                 });
                 resp_rx.recv().unwrap_or(false)
-            }));
+            })));
     }
 
     /// Handle overflow compaction and session naming after a completed prompt.
@@ -589,28 +589,28 @@ impl AgentSession {
         // In talk mode: use a minimal conversational prompt with no tools,
         // no project context, and no memory.
         if self.talk_mode {
-            self.agent.state.tools = Vec::new();
-            self.agent.state.system_prompt =
-                "You are a helpful assistant. Answer clearly and concisely.".to_string();
+            self.agent.set_tools(Vec::new());
+            self.agent.set_system_prompt(
+                "You are a helpful assistant. Answer clearly and concisely.".to_string());
             return;
         }
 
         // Reload memory in case it was updated by a tool call
         self.resources.memory = std::fs::read_to_string(crate::nerv_dir().join("memory.md")).ok();
 
-        self.agent.state.tools = self.tool_registry.active_tools();
+        self.agent.set_tools(self.tool_registry.active_tools());
         let tool_names: Vec<&str> = self.agent.state.tools.iter().map(|t| t.name()).collect();
         let snippets = self.tool_registry.prompt_snippets();
         let guidelines = self.tool_registry.prompt_guidelines();
         let model_id = self.agent.state.model.as_ref().map(|m| m.id.as_str());
-        self.agent.state.system_prompt = build_system_prompt_for_model(
+        self.agent.set_system_prompt(build_system_prompt_for_model(
             &self.cwd,
             &self.resources,
             &tool_names,
             &snippets,
             &guidelines,
             model_id,
-        );
+        ));
 
         if let Some(ref wt) = self.worktree {
             self.agent.state.system_prompt.push_str(&format!(
@@ -766,7 +766,7 @@ impl AgentSession {
     /// Rebuild agent message history from the current session entries.
     fn reload_agent_context(&mut self) {
         let entries = self.session_manager.entries();
-        self.agent.state.messages = entries
+        self.agent.set_messages(entries
             .iter()
             .filter_map(|e| {
                 if let crate::session::types::SessionEntry::Message(me) = e {
@@ -775,7 +775,7 @@ impl AgentSession {
                     None
                 }
             })
-            .collect();
+            .collect());
     }
 
     /// Resolve the provider and model id to use for background utility tasks
@@ -905,7 +905,7 @@ impl AgentSession {
         event_tx: &Sender<AgentSessionEvent>,
     ) {
         if let Some(model) = self.model_registry.get_model(provider, model_id) {
-            self.agent.state.model = Some(model.clone());
+            self.agent.set_model(Some(model.clone()));
             let _ = self.session_manager.append_model_change(provider, model_id);
             let _ = event_tx.send(AgentSessionEvent::ModelChanged { model: model.clone() });
             // Persist as session-level override
@@ -920,7 +920,7 @@ impl AgentSession {
         level: ThinkingLevel,
         event_tx: &Sender<AgentSessionEvent>,
     ) {
-        self.agent.state.thinking_level = level;
+        self.agent.set_thinking_level(level);
         let _ = self.session_manager.append_thinking_level_change(level);
         let _ = event_tx.send(AgentSessionEvent::ThinkingLevelChanged { level });
         // Persist as session-level override
@@ -944,14 +944,14 @@ impl AgentSession {
                 let api_calls = ctx.api_calls;
                 let input_history = ctx.input_history;
 
-                self.agent.state.messages = ctx.messages;
+                self.agent.set_messages(ctx.messages);
 
                 // Restore accumulated session cost from persisted per-call cost_usd values.
                 self.session_cost = Cost::default();
                 self.session_cost.total = cost_usd;
 
                 // Restore thinking level
-                self.agent.state.thinking_level = ctx.thinking_level;
+                self.agent.set_thinking_level(ctx.thinking_level);
                 let _ = event_tx
                     .send(AgentSessionEvent::ThinkingLevelChanged { level: ctx.thinking_level });
 
@@ -988,7 +988,7 @@ impl AgentSession {
                                     cache_write: 0.0,
                                 },
                             };
-                            self.agent.state.model = Some(model.clone());
+                            self.agent.set_model(Some(model.clone()));
                             let _ = event_tx.send(AgentSessionEvent::ModelChanged { model });
                         } else {
                             let _ = event_tx.send(AgentSessionEvent::Status {
@@ -1034,7 +1034,7 @@ impl AgentSession {
                 // Restore per-session config overrides
                 let scfg = ctx.session_config;
                 if let Some(effort) = scfg.default_effort_level {
-                    self.agent.state.effort_level = Some(effort);
+                    self.agent.set_effort_level(Some(effort));
                     let _ = event_tx
                         .send(AgentSessionEvent::EffortLevelChanged { level: Some(effort) });
                 }
@@ -1176,7 +1176,7 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
                                 cache_write: 3.75,
                             },
                         };
-                        session.agent.state.model = Some(model.clone());
+                        session.agent.set_model(Some(model.clone()));
                         let _ = event_tx.send(AgentSessionEvent::ModelChanged { model });
                     }
 
@@ -1232,7 +1232,7 @@ pub fn session_task(
             SessionCommand::NewSession => {
                 let _ =
                     session.session_manager.new_session(&session.cwd, session.worktree.as_deref());
-                session.agent.state.messages.clear();
+                session.agent.clear_messages();
                 session.session_cost = Cost::default();
                 session.session_named = false;
                 let _ = event_tx.send(AgentSessionEvent::SessionStarted {
@@ -1256,7 +1256,7 @@ pub fn session_task(
                 session.set_thinking_level(level, &event_tx)
             }
             SessionCommand::SetEffortLevel { level } => {
-                session.agent.state.effort_level = level;
+                session.agent.set_effort_level(level);
                 // Persist as session-level override
                 session.session_manager.update_session_config(|cfg| {
                     cfg.default_effort_level = level;
@@ -1441,8 +1441,8 @@ pub fn session_task(
                 let total_output = ctx.total_output;
                 let api_calls = ctx.api_calls;
                 let input_history = ctx.input_history;
-                session.agent.state.messages = ctx.messages;
-                session.agent.state.thinking_level = ctx.thinking_level;
+                session.agent.set_messages(ctx.messages);
+                session.agent.set_thinking_level(ctx.thinking_level);
                 let _ = event_tx
                     .send(AgentSessionEvent::ThinkingLevelChanged { level: ctx.thinking_level });
                 if let Some((provider, model_id)) = ctx.model {

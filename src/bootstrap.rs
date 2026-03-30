@@ -118,7 +118,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
         // After file-writing tools, update the symbol index for the affected file.
         // For bash, mark the index dirty so the next symbols call does a full rescan.
         let project_root = cwd.to_path_buf();
-        agent.state.post_tool_fn = Some(Arc::new(move |tool_name, args| match tool_name {
+        agent.set_post_tool_fn(Some(Arc::new(move |tool_name, args| match tool_name {
             "edit" | "write" => {
                 if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
                     let path = if path_str.starts_with('/') {
@@ -139,7 +139,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
                 }
             }
             _ => {}
-        }));
+        })));
     }
 
     let cancel_flag = agent.cancel.clone();
@@ -161,13 +161,13 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     // Apply default thinking level from config (true = on, false = off).
     if let Some(enabled) = config.default_thinking {
         use crate::agent::types::ThinkingLevel;
-        session.agent.state.thinking_level =
-            if enabled { ThinkingLevel::On } else { ThinkingLevel::Off };
+        session.agent.set_thinking_level(
+            if enabled { ThinkingLevel::On } else { ThinkingLevel::Off });
     }
 
     // Apply default effort level from config ("low", "medium", "high", "max").
     if let Some(effort) = config.default_effort_level {
-        session.agent.state.effort_level = Some(effort);
+        session.agent.set_effort_level(Some(effort));
     }
 
     // Apply auto_compact setting from config (default: true).
