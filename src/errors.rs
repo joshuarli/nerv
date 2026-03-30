@@ -54,14 +54,3 @@ pub enum ToolError {
     Cancelled,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum SessionError {
-    #[error("corrupt session file {path}: {reason}")]
-    Corrupt { path: PathBuf, reason: String },
-
-    #[error("migration failed (v{from}→v{to}): {reason}")]
-    MigrationFailed { from: u32, to: u32, reason: String },
-
-    #[error("session I/O error: {0}")]
-    Io(#[from] std::io::Error),
-}

@@ -10,6 +10,7 @@ use crate::core::config::NervConfig;
 use crate::core::model_registry::ModelRegistry;
 use crate::core::resource_loader::LoadedResources;
 use crate::core::tool_registry::{ToolDefinition, ToolRegistry};
+use crate::index::SOURCE_EXTENSIONS;
 use crate::session::SessionManager;
 use crate::tools::{
     BashTool, CodemapTool, EditTool, FileMutationQueue, FindTool, GrepTool, LsTool, MemoryTool,
@@ -125,7 +126,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
                     } else {
                         project_root.join(path_str)
                     };
-                    if path.extension().is_some_and(|e| e == "rs")
+                    if path.extension().is_some_and(|e| SOURCE_EXTENSIONS.contains(&e.to_str().unwrap_or("")))
                         && let Ok(mut index) = symbol_index.write()
                     {
                         index.index_file(&path);

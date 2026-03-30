@@ -11,7 +11,7 @@ use crate::agent::types::{
     AgentEvent, AgentMessage, ContentBlock, ContentItem, EffortLevel, Model, StreamDelta,
     ThinkingLevel, Usage,
 };
-use crate::core::agent_session::{AgentSessionEvent, CompactionReason, SessionCommand};
+use crate::core::agent_session::{AgentSessionEvent, AllowedDirs, CompactionReason, SessionCommand};
 use crate::core::config::NervConfig;
 use crate::core::model_registry::ModelRegistry;
 use crate::session::types::SessionTreeNode;
@@ -88,7 +88,7 @@ pub struct InteractiveMode {
     pub compact_threshold: u8,
     /// Directories the user has granted full access to (shared with the session
     /// thread).
-    pub allowed_dirs: Arc<Mutex<Vec<PathBuf>>>,
+    pub allowed_dirs: AllowedDirs,
     /// Shared cancel flag — set this to interrupt a running stream immediately.
     pub cancel_flag: CancelFlag,
     /// Shared compact threshold (percent 0–100) — written directly so `/compact
@@ -139,7 +139,7 @@ impl InteractiveMode {
             pending_permission_details: None,
             plan_mode: false,
             compact_threshold: 50,
-            allowed_dirs: Arc::new(Mutex::new(Vec::new())),
+            allowed_dirs: AllowedDirs::default(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             compact_threshold_arc: Arc::new(AtomicU32::new(50)),
             config,

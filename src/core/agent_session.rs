@@ -3,6 +3,23 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+/// Typed wrapper around the shared allowed-directories list.
+///
+/// Directories added here are granted full tool access without per-call prompts.
+/// The Arc makes it cheap to clone into closures.
+#[derive(Clone, Default)]
+pub struct AllowedDirs(Arc<std::sync::Mutex<Vec<PathBuf>>>);
+
+impl AllowedDirs {
+    pub fn push(&self, dir: PathBuf) {
+        self.0.lock().unwrap().push(dir);
+    }
+    pub fn snapshot(&self) -> Vec<PathBuf> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+
 use crossbeam_channel::Sender;
 
 use super::model_registry::ModelRegistry;
@@ -229,7 +246,7 @@ pub struct AgentSession {
     /// Directories the user has granted full access to via the "allow dir"
     /// prompt response. Shared with the main thread so new entries can be
     /// pushed from the UI.
-    pub allowed_dirs: Arc<std::sync::Mutex<Vec<PathBuf>>>,
+    pub allowed_dirs: AllowedDirs,
     /// Worktree path tied to this session (set via --wt or /wt).
     worktree: Option<PathBuf>,
     /// Plan mode: restrict tools to read-only, steer model toward planning.
@@ -271,7 +288,7 @@ impl AgentSession {
             last_input_tokens: 0,
             permissions_enabled: false,
             permission_cache: Arc::new(std::sync::Mutex::new(HashSet::new())),
-            allowed_dirs: Arc::new(std::sync::Mutex::new(Vec::new())),
+            allowed_dirs: AllowedDirs::default(),
             worktree: None,
             plan_mode: false,
             talk_mode: false,
@@ -419,7 +436,7 @@ impl AgentSession {
                         return true;
                     }
 
-                    let dirs = allowed_dirs.lock().unwrap().clone();
+                    let dirs = allowed_dirs.snapshot();
                     let perm = super::permissions::check_with_allowed_dirs(
                         tool,
                         args,

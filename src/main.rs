@@ -1263,7 +1263,7 @@ fn main() {
                                         } else {
                                             path.parent().map(|p| p.to_path_buf()).unwrap_or(path)
                                         };
-                                        interactive.allowed_dirs.lock().unwrap().push(dir.clone());
+                                        interactive.allowed_dirs.push(dir.clone());
                                         layout.chat.push_styled(
                                             nerv::interactive::theme::SUCCESS,
                                             &format!("  → allowed dir: {}", dir.display()),

@@ -674,7 +674,7 @@ fn find_ts_method_parent(node: tree_sitter::Node, source: &[u8]) -> Option<Strin
     None
 }
 
-const SOURCE_EXTENSIONS: &[&str] = &["rs", "go", "py", "ts", "tsx"];
+pub const SOURCE_EXTENSIONS: &[&str] = &["rs", "go", "py", "ts", "tsx"];
 
 /// Collect all indexable source files under `root`, respecting .gitignore via
 /// `fd`.
