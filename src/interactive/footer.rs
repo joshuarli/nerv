@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::agent::types::*;
+use crate::agent::types::{EffortLevel, Model, ModelPricing, ThinkingLevel, Usage};
 use crate::interactive::theme;
 use crate::tui::tui::Component;
 use crate::tui::utils::{visible_width, wrap_text_with_ansi};

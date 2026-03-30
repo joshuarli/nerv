@@ -11,7 +11,10 @@ use crate::core::model_registry::ModelRegistry;
 use crate::core::resource_loader::LoadedResources;
 use crate::core::tool_registry::{ToolDefinition, ToolRegistry};
 use crate::session::SessionManager;
-use crate::tools::*;
+use crate::tools::{
+    BashTool, CodemapTool, EditTool, FileMutationQueue, FindTool, GrepTool, LsTool, MemoryTool,
+    ReadTool, SymbolsTool, WriteTool,
+};
 
 /// Everything needed to run the agent, constructed from disk config.
 pub struct Bootstrap {

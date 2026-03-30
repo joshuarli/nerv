@@ -7,9 +7,13 @@ use crossbeam_channel as channel;
 use super::layout::AppLayout;
 use super::theme;
 use crate::agent::provider::{CancelFlag, ProviderRegistry};
-use crate::agent::types::*;
+use crate::agent::types::{
+    AgentEvent, AgentMessage, ContentBlock, ContentItem, EffortLevel, Model, StreamDelta,
+    ThinkingLevel, Usage,
+};
+use crate::core::agent_session::{AgentSessionEvent, CompactionReason, SessionCommand};
+use crate::core::config::NervConfig;
 use crate::core::model_registry::ModelRegistry;
-use crate::core::*;
 use crate::session::types::SessionTreeNode;
 use crate::tui;
 
