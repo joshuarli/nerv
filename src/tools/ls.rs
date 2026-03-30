@@ -98,6 +98,7 @@ impl AgentTool for LsTool {
     fn name(&self) -> &str {
         "ls"
     }
+    fn is_readonly(&self) -> bool { true }
     fn description(&self) -> &str {
         "List directory contents as a tree."
     }
