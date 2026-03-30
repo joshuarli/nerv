@@ -1,6 +1,5 @@
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 use crossbeam_channel as channel;
 
@@ -11,7 +10,7 @@ use crate::agent::types::{
     AgentEvent, AgentMessage, ContentBlock, ContentItem, EffortLevel, Model, StreamDelta,
     ThinkingLevel, Usage,
 };
-use crate::core::agent_session::{AgentSessionEvent, AllowedDirs, CompactionReason, SessionCommand};
+use crate::core::agent_session::{AgentSessionEvent, AllowedDirs, SessionCommand};
 use crate::core::config::NervConfig;
 use crate::core::model_registry::ModelRegistry;
 use crate::session::types::SessionTreeNode;

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::Ordering;
 
 /// Typed wrapper around the shared allowed-directories list.
 ///
@@ -34,7 +34,7 @@ use crate::agent::types::{
 };
 use crate::now_millis;
 use crate::compaction::summarize::{generate_session_name, generate_summary};
-use crate::compaction::{self, CompactionResult, CompactionSettings};
+use crate::compaction::{self, CompactionResult};
 use super::compaction_controller::CompactionController;
 use crate::core::config::NervConfig;
 use crate::session::SessionManager;
