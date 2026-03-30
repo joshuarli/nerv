@@ -587,11 +587,17 @@ impl Component for FooterComponent {
         let cache_stats = {
             let mut parts = String::new();
             if self.total_cache_read > 0 {
+                let hit_rate = self.total_cache_read as f64
+                    / (self.total_input + self.total_cache_read) as f64
+                    * 100.0;
                 parts.push_str(&format!(
-                    " {}Rc{}{}",
+                    " {}Rc{}{} {}({:.0}%){}",
                     dim,
                     fmt_tokens_u64(self.total_cache_read),
-                    r
+                    r,
+                    dim,
+                    hit_rate,
+                    r,
                 ));
             }
             if self.total_cache_write > 0 {
