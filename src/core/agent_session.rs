@@ -876,12 +876,29 @@ impl AgentSession {
         let tokens_before =
             to_summarize.iter().map(compaction::estimate_tokens).sum::<usize>() as u32;
 
+        // Estimate tokens remaining after compaction: the verbatim window that
+        // stays in the DB untouched. Display-only — not sent to any model.
+        let tokens_after = branch[cut.verbatim_start_index..]
+            .iter()
+            .filter_map(|e| {
+                if let crate::session::types::SessionEntry::Message(me) = e {
+                    Some(&me.message)
+                } else {
+                    None
+                }
+            })
+            .map(compaction::estimate_tokens)
+            .sum::<usize>() as u32;
+
         match generate_summary(&to_summarize, None, provider, &model_id) {
             Ok(summary) => {
                 let _ = self.session_manager.append_compaction(
                     summary.clone(),
                     first_kept_id.clone(),
                     tokens_before,
+                    tokens_after,
+                    model_id.clone(),
+                    to_summarize.clone(),
                 );
                 // Fire onCompactionDone hooks (fire-and-forget).
                 super::notifications::fire(
@@ -892,6 +909,8 @@ impl AgentSession {
                     summary,
                     first_kept_entry_id: first_kept_id,
                     tokens_before,
+                    tokens_after,
+                    model_id,
                 }))
             }
             Err(e) => {

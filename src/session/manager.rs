@@ -298,6 +298,9 @@ impl SessionManager {
         summary: String,
         first_kept_entry_id: String,
         tokens_before: u32,
+        tokens_after: u32,
+        model_id: String,
+        archived_messages: Vec<crate::agent::types::AgentMessage>,
     ) -> anyhow::Result<()> {
         if self.session_id.is_none() {
             anyhow::bail!("no active session");
@@ -346,6 +349,9 @@ impl SessionManager {
             summary,
             first_kept_entry_id,
             tokens_before,
+            tokens_after,
+            model_id,
+            archived_messages,
         });
         self.append_entry(entry)?;
 

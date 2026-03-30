@@ -144,6 +144,20 @@ pub struct CompactionEntry {
     pub summary: String,
     pub first_kept_entry_id: String,
     pub tokens_before: u32,
+    /// Estimated tokens remaining in context after compaction (verbatim window).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub tokens_after: u32,
+    /// Model used to generate the compaction summary.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model_id: String,
+    /// The messages that were summarised away, preserved for export/debugging.
+    /// Not sent to any LLM — display only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived_messages: Vec<crate::agent::types::AgentMessage>,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
