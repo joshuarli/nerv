@@ -182,9 +182,7 @@ impl MessageMeta {
         let already_filtered_ids: std::collections::HashSet<String> = messages
             .iter()
             .filter_map(|m| match m {
-                AgentMessage::ToolResult { tool_call_id, details: Some(d), .. }
-                    if d.get("filtered").and_then(|v| v.as_bool()).unwrap_or(false) =>
-                {
+                AgentMessage::ToolResult { tool_call_id, details: Some(d), .. } if d.filtered => {
                     Some(tool_call_id.clone())
                 }
                 _ => None,
@@ -339,13 +337,13 @@ fn transform_tool_result(
         if filtered != raw {
             // Rebuild, preserving display (used by TUI renderer) and marking
             // filtered:true so subsequent transform_context calls are idempotent.
-            let new_details = match details {
+            let new_details = Some(match details {
                 Some(mut d) => {
-                    d["filtered"] = serde_json::json!(true);
-                    Some(d)
+                    d.filtered = true;
+                    d
                 }
-                None => Some(serde_json::json!({"filtered": true})),
-            };
+                None => ToolDetails { filtered: true, ..Default::default() },
+            });
             return Some(AgentMessage::ToolResult {
                 tool_call_id,
                 content: vec![ContentItem::Text { text: filtered.into_owned() }],
@@ -1363,7 +1361,7 @@ mod tests {
             tool_result_with_details(
                 "r1",
                 "fn main() {}",
-                serde_json::json!({"filtered": true, "some_flag": 42}),
+                ToolDetails { filtered: true, ..Default::default() },
             ),
             assistant_tool_call("r2", "read", serde_json::json!({"path": "src/main.rs"})),
             tool_result("r2", "fn main() { updated }"),
@@ -1386,8 +1384,8 @@ mod tests {
             _ => panic!("expected ToolResult for b1"),
         };
         let filtered =
-            details.as_ref().and_then(|d| d.get("some_flag")).and_then(|v| v.as_i64()).unwrap_or(0);
-        assert_eq!(filtered, 42, "details should survive superseded rewrite");
+            details.as_ref().map_or(false, |d| d.filtered);
+        assert!(filtered, "details should survive superseded rewrite");
     }
 
     #[test]
@@ -2119,11 +2117,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         );
     }
 
-    fn tool_result_with_details(
-        id: &str,
-        content: &str,
-        details: serde_json::Value,
-    ) -> AgentMessage {
+    fn tool_result_with_details(id: &str, content: &str, details: ToolDetails) -> AgentMessage {
         AgentMessage::ToolResult {
             tool_call_id: id.into(),
             content: vec![ContentItem::Text { text: content.into() }],
@@ -2147,7 +2141,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         let content = "line\nline\nline\nline\nline\n";
         let msgs = vec![
             assistant_tool_call("c1", "bash", serde_json::json!({"command": "echo line"})),
-            tool_result_with_details("c1", content, serde_json::json!({"filtered": true})),
+            tool_result_with_details("c1", content, ToolDetails { filtered: true, ..Default::default() }),
             // A response to terminate the sequence
             AgentMessage::Assistant(AssistantMessage {
                 content: vec![ContentBlock::Text { text: "done".into() }],
@@ -2227,14 +2221,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         // display should survive the rewrite
         assert!(display.is_some(), "display field should be preserved after filtering");
         // details should now have filtered:true so the next transform call skips this
-        let filtered_flag = details
-            .as_ref()
-            .and_then(|d| d.get("filtered"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        assert!(
-            filtered_flag,
-            "details[\"filtered\"] should be true after transform_context filters"
-        );
+        let filtered_flag = details.as_ref().map_or(false, |d| d.filtered);
+        assert!(filtered_flag, "details.filtered should be true after transform_context filters");
     }
 }

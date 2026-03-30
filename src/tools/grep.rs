@@ -4,6 +4,7 @@ use std::process::Command;
 use super::truncate::{DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncate_tail};
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use crate::agent::provider::CancelFlag;
+use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
 
 const GREP_MAX_LINE_LENGTH: usize = 500;
@@ -174,7 +175,7 @@ impl AgentTool for GrepTool {
                 };
                 ToolResult::ok_with_details(
                     content,
-                    serde_json::json!({"truncated": tr.truncated, "display": display}),
+                    ToolDetails { display: Some(display), ..Default::default() },
                 )
             }
             Err(e) => ToolResult::error(format!("Error running rg: {}", e)),

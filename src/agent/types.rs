@@ -79,11 +79,10 @@ pub enum AgentMessage {
         /// the LLM.
         #[serde(skip_serializing_if = "Option::is_none")]
         display: Option<String>,
-        /// Tool-level metadata for transform_context (e.g. `{"filtered":true}`
-        /// from bash). Not sent to the LLM. Optional so old serialized
-        /// sessions deserialize fine.
+        /// Typed tool-level metadata. Not sent to the LLM. Optional so old
+        /// serialized sessions without this field deserialize fine.
         #[serde(skip_serializing_if = "Option::is_none")]
-        details: Option<serde_json::Value>,
+        details: Option<ToolDetails>,
         timestamp: u64,
     },
     #[serde(rename = "custom")]
@@ -275,6 +274,25 @@ pub struct ToolResultData {
     /// instead of the full content. Content still goes to the LLM.
     pub display: Option<String>,
     pub is_error: bool,
+}
+
+/// Typed metadata attached to a `ToolResult` / `AgentMessage::ToolResult`.
+/// Not sent to the LLM — used by the TUI, transform_context, and export.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolDetails {
+    /// Short display summary shown in the TUI instead of the raw content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+    /// Unified diff string (edit/write tools). Used for HTML export.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    /// True when the bash output filter has already been applied at execution
+    /// time, so transform_context can skip it on subsequent passes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub filtered: bool,
+    /// Exit code from bash. Informational only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 pub use crate::now_millis;

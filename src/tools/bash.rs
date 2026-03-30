@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use crate::agent::provider::CancelFlag;
+use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
 use crate::tools::output_filter;
 
@@ -190,10 +191,7 @@ impl AgentTool for BashTool {
 
         // filtered: true tells transform_context to skip the bash filter step
         // (it has already been applied here).
-        let mut details = serde_json::json!({"exit_code": exit_code, "filtered": true});
-        if let Some(disp) = display {
-            details["display"] = serde_json::json!(disp);
-        }
+        let details = ToolDetails { display, filtered: true, exit_code, diff: None };
         if exit_code != Some(0) {
             ToolResult { content, details: Some(details), is_error: true }
         } else {

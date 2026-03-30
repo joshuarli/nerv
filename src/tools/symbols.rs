@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use crate::agent::provider::CancelFlag;
+use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
 use crate::index::{SymbolIndex, SymbolKind};
 
@@ -190,7 +191,7 @@ impl AgentTool for SymbolsTool {
         } else {
             format!("{} definitions", def_count)
         };
-        ToolResult::ok_with_details(out, serde_json::json!({"display": display}))
+        ToolResult::ok_with_details(out, ToolDetails { display: Some(display), ..Default::default() })
     }
 }
 

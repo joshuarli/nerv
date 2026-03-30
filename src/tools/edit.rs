@@ -5,6 +5,7 @@ use std::sync::Arc;
 use super::file_mutation_queue::FileMutationQueue;
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use crate::agent::provider::CancelFlag;
+use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
 
 pub struct EditTool {
@@ -267,9 +268,11 @@ fn apply_single_edit(
                 );
                 return ToolResult {
                     content: format!("Edited {} (fuzzy match)\n{}", path_str, diff_str),
-                    details: Some(
-                        serde_json::json!({"diff": diff_str, "display": diff_str, "path": path_str, "fuzzy": true}),
-                    ),
+                    details: Some(ToolDetails {
+                        display: Some(diff_str.clone()),
+                        diff: Some(diff_str),
+                        ..Default::default()
+                    }),
                     is_error: false,
                 };
             }
@@ -318,7 +321,11 @@ fn apply_single_edit(
     );
     ToolResult {
         content: format!("Edited {}\n{}", path_str, diff_str),
-        details: Some(serde_json::json!({"diff": diff_str, "display": diff_str, "path": path_str})),
+        details: Some(ToolDetails {
+            display: Some(diff_str.clone()),
+            diff: Some(diff_str),
+            ..Default::default()
+        }),
         is_error: false,
     }
 }
@@ -462,9 +469,11 @@ fn apply_multi_edit(
     );
     ToolResult {
         content: format!("Applied {} edits to {}\n{}", edits.len(), path_str, diff_str),
-        details: Some(
-            serde_json::json!({"diff": diff_str, "display": diff_str, "path": path_str, "edits": edits.len()}),
-        ),
+        details: Some(ToolDetails {
+            display: Some(diff_str.clone()),
+            diff: Some(diff_str),
+            ..Default::default()
+        }),
         is_error: false,
     }
 }

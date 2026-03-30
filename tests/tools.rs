@@ -346,7 +346,7 @@ fn edit_multi_returns_diff() {
     assert!(result.content.contains("Applied 2 edits"));
     // Diff is in details, not content
     let details = result.details.unwrap();
-    let diff = details["diff"].as_str().unwrap();
+    let diff = details.diff.as_deref().unwrap();
     assert!(diff.contains("-foo"), "diff missing -foo: {}", diff);
     assert!(diff.contains("+FOO"), "diff missing +FOO: {}", diff);
     assert!(diff.contains("-baz"), "diff missing -baz: {}", diff);

@@ -4,6 +4,7 @@ use std::process::Command;
 use super::truncate::{DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncate_tail};
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use crate::agent::provider::CancelFlag;
+use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
 
 pub struct FindTool {
@@ -87,7 +88,7 @@ impl AgentTool for FindTool {
                         .filter(|l| !l.starts_with("[stderr]") && !l.is_empty())
                         .count();
                     let display = format!("{} files", file_count);
-                    ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
+                    ToolResult::ok_with_details(content, ToolDetails { display: Some(display), ..Default::default() })
                 }
             }
             Err(e) => ToolResult::error(format!("Error running fd: {}", e)),

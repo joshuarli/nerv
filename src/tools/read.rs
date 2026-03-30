@@ -5,6 +5,7 @@ use std::time::SystemTime;
 use super::truncate::{DEFAULT_MAX_LINES, truncate_head};
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use crate::agent::provider::CancelFlag;
+use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
 
 struct ReadCacheEntry {
@@ -87,7 +88,7 @@ impl AgentTool for ReadTool {
                 );
                 return ToolResult::ok_with_details(
                     msg,
-                    serde_json::json!({"display": format!("{} (unchanged)", path_str)}),
+                    ToolDetails { display: Some(format!("{} (unchanged)", path_str)), ..Default::default() },
                 );
             }
             // Range dedup: if this range is fully covered by a previous read, skip.
@@ -103,7 +104,7 @@ impl AgentTool for ReadTool {
                 );
                 return ToolResult::ok_with_details(
                     msg,
-                    serde_json::json!({"display": format!("{} (already read)", path_str)}),
+                    ToolDetails { display: Some(format!("{} (already read)", path_str)), ..Default::default() },
                 );
             }
         }
@@ -181,7 +182,7 @@ impl AgentTool for ReadTool {
                     entry.ranges_served.push(range);
                 }
 
-                ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
+                ToolResult::ok_with_details(content, ToolDetails { display: Some(display), ..Default::default() })
             }
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::NotFound {

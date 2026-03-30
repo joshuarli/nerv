@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
 use crate::agent::provider::CancelFlag;
+use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
 
 pub struct LsTool {
@@ -139,7 +140,7 @@ impl AgentTool for LsTool {
         render_tree(&resolved, depth, &mut content, &mut entry_count);
 
         let display = format!("{} ({} entries)", path_str, entry_count);
-        ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
+        ToolResult::ok_with_details(content, ToolDetails { display: Some(display), ..Default::default() })
     }
 }
 

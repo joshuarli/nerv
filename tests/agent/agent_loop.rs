@@ -382,7 +382,7 @@ impl AgentTool for BigBashTool {
     ) -> ToolResult {
         ToolResult::ok_with_details(
             self.output.clone(),
-            serde_json::json!({"exit_code": 0, "filtered": true}),
+            ToolDetails { filtered: true, exit_code: Some(0), ..Default::default() },
         )
     }
 }

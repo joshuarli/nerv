@@ -41,7 +41,7 @@ pub trait AgentTool: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct ToolResult {
     pub content: String,
-    pub details: Option<serde_json::Value>,
+    pub details: Option<ToolDetails>,
     pub is_error: bool,
 }
 
@@ -54,7 +54,7 @@ impl ToolResult {
         Self { content: content.into(), details: None, is_error: true }
     }
 
-    pub fn ok_with_details(content: impl Into<String>, details: serde_json::Value) -> Self {
+    pub fn ok_with_details(content: impl Into<String>, details: ToolDetails) -> Self {
         Self { content: content.into(), details: Some(details), is_error: false }
     }
 }
@@ -602,10 +602,7 @@ impl Agent {
             hook(name, args);
         }
 
-        let display = result
-            .details
-            .as_ref()
-            .and_then(|d| d.get("display").and_then(|v| v.as_str()).map(|s| s.to_string()));
+        let display = result.details.as_ref().and_then(|d| d.display.clone());
 
         on_event(AgentEvent::ToolExecutionEnd {
             id: id.clone(),
