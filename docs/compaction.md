@@ -74,7 +74,7 @@ Compaction is handled by `run_compaction` in `src/core/agent_session.rs` and
 ### Trigger conditions
 
 - **Proactive** (threshold): after each turn, if total context tokens exceed
-  `threshold_pct` (default 50%) of the model's context window, compaction fires before
+  `threshold_pct` of the model's context window, compaction fires before
   the next user turn
 - **Reactive** (overflow): if the API returns a context-too-long error, compact and retry
 - **Manual**: `/compact` slash command
@@ -148,7 +148,7 @@ conversation portion. System prompt and tool definitions never go cold.
 {
   "compaction": {
     "enabled": true,
-    "threshold_pct": 0.50,        // compact at 50% of context window
+    "threshold_pct": 0.80,        // compact at this % of context window
     "keep_recent_tokens": 20000,  // token budget for post-compaction context
     "verbatim_window_tokens": 5000 // tail of kept window to preserve verbatim
   }
@@ -162,6 +162,7 @@ conversation portion. System prompt and tool definitions never go cold.
 | Concern | File |
 |---------|------|
 | Cache breakpoints (system, tools, last-user) | `src/agent/anthropic.rs` |
+| Compaction trigger/threshold | `src/core/compaction_controller.rs` |
 | `CompactionSettings`, `find_cut_point`, token estimation | `src/compaction/mod.rs` |
 | `run_compaction`, trigger logic | `src/core/agent_session.rs` |
 | Summarization prompt and LLM call | `src/compaction/summarize.rs` |

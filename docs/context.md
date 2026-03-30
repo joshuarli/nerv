@@ -7,8 +7,8 @@ transforms reduce token usage without losing information the model needs.
 
 ```
 AgentMessage[]
-  → transform_context()    7 optimizations: strip thinking/orphans/denied args,
-                           truncate stale, supersede reads, bash output filters, strip edit args
+  → transform_context()    strip orphans/thinking/denied args,
+                           truncate stale, supersede reads
   → context gate           circuit breaker for unexpected context growth
   → convert_to_llm()       AgentMessage → LlmMessage (merge consecutive same-role)
   → build_request_body()   LlmMessage → provider-specific JSON
@@ -24,9 +24,11 @@ bash.execute() raw output
   → AgentMessage::ToolResult              details.filtered: true tells transform_context to skip
 ```
 
-## transform_context (`src/agent/convert.rs`)
+## transform_context (`src/agent/transform.rs`)
 
-Applied before every LLM request. Seven optimizations (all zero-LLM-cost):
+Applied before every LLM request. Five optimizations (all zero-LLM-cost), plus
+tool-level optimizations (read mtime cache, grep context, bash output filter)
+that run at execution time:
 
 ### 1. Strip thinking blocks
 
@@ -74,7 +76,7 @@ path are marked as superseded. Error reads are preserved.
 **Savings**: 200-2k+ tokens per redundant read. In a typical mass-edit session
 with 8 redundant reads, saves ~4-8k tokens.
 
-### 6. Bash output filter pipeline
+## Bash output filter pipeline (tool-level, not in transform_context)
 
 Every bash `ToolResult` passes through `tools::output_filter::filter_bash_output`
 **at execution time** (inside `bash.execute()`, before the result enters
@@ -120,20 +122,11 @@ no content to compress, so unrecognised output is never mangled.
 filters extract just the relevant failures/errors, discarding progress
 noise and unrelated stdout.
 
-### 7. Strip stale edit/write arguments
-
-For tool calls in stale turns (before the `RECENT_TURNS` cutoff), edit and
-write tool call arguments are reduced to just the `path` field. The `old_text`,
-`new_text`, and `content` fields are stripped — the edit already happened and
-the model doesn't need the full payload to understand what was changed.
-
-**Savings**: 100-5k tokens per stale edit (depends on payload size).
-
 ## Tool-level optimizations
 
 These are applied at tool execution time, not in `transform_context`.
 
-### 8. Read tool: mtime cache + range dedup (`src/tools/read.rs`)
+### Read tool: mtime cache + range dedup (`src/tools/read.rs`)
 
 The read tool supports optional `offset`/`limit` parameters for reading
 specific line ranges. An in-memory cache tracks `path → (mtime, line_count,
@@ -150,7 +143,7 @@ Cache invalidates automatically when writes change the file (mtime check).
 
 **Savings**: eliminates redundant re-reads (200-12k+ tokens each).
 
-### 9. Grep context lines (`src/tools/grep.rs`)
+### Grep context lines (`src/tools/grep.rs`)
 
 The grep tool passes `--context=3` to ripgrep, so the model gets surrounding
 lines with each match. Reduces follow-up read calls for understanding call
@@ -211,7 +204,7 @@ The two are complementary:
 Separate from `transform_context`. Compaction summarizes and removes old
 messages entirely, triggered by:
 
-- **Threshold**: context usage exceeds 80% of window (proactive)
+- **Threshold**: context usage exceeds configured % of window (proactive)
 - **Overflow**: API returns context-too-long error (reactive, retry after)
 - **Manual**: user runs `/compact`
 
