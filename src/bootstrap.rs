@@ -9,7 +9,7 @@ use crate::core::agent_session::AgentSession;
 use crate::core::config::NervConfig;
 use crate::core::model_registry::ModelRegistry;
 use crate::core::resource_loader::LoadedResources;
-use crate::core::tool_registry::{ToolDefinition, ToolRegistry};
+use crate::core::tool_registry::ToolRegistry;
 use crate::index::SOURCE_EXTENSIONS;
 use crate::session::SessionManager;
 use crate::tools::{
@@ -112,7 +112,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
         };
 
         for tool in tools {
-            tool_registry.register(ToolDefinition { tool });
+            tool_registry.register(tool);
         }
 
         // After file-writing tools, update the symbol index for the affected file.

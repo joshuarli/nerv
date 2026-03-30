@@ -487,7 +487,7 @@ impl Agent {
                         // Only create a tool call block if we actually have a tool in progress
                         if !current_tool_id.is_empty() {
                             let arguments = serde_json::from_str(&current_tool_args)
-                                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                                .unwrap_or_else(|_| serde_json::json!({}));
                             content_blocks.push(ContentBlock::ToolCall {
                                 id: std::mem::take(&mut current_tool_id),
                                 name: std::mem::take(&mut current_tool_name),
@@ -497,8 +497,8 @@ impl Agent {
                         }
                     }
                     ProviderEvent::UsageUpdate(u) => {
-                        usage = u.clone();
                         on_event(AgentEvent::UsageUpdate { usage: u });
+                        usage = u;
                     }
                     ProviderEvent::MessageStop { stop_reason: sr, usage: u } => {
                         stop_reason = sr;
@@ -542,7 +542,7 @@ impl Agent {
             }
             if !current_tool_id.is_empty() {
                 let arguments = serde_json::from_str(&current_tool_args)
-                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                    .unwrap_or_else(|_| serde_json::json!({}));
                 content_blocks.push(ContentBlock::ToolCall {
                     id: current_tool_id,
                     name: current_tool_name,

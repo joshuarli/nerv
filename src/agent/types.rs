@@ -35,11 +35,15 @@ impl Cost {
         // usage.input includes cache_read + cache_write — subtract them to avoid
         // double-counting.
         let uncached = usage.input.saturating_sub(usage.cache_read + usage.cache_write);
-        self.input += (pricing.input / 1_000_000.0) * uncached as f64;
-        self.output += (pricing.output / 1_000_000.0) * usage.output as f64;
-        self.cache_read += (pricing.cache_read / 1_000_000.0) * usage.cache_read as f64;
-        self.cache_write += (pricing.cache_write / 1_000_000.0) * usage.cache_write as f64;
-        self.total = self.input + self.output + self.cache_read + self.cache_write;
+        let di = (pricing.input / 1_000_000.0) * uncached as f64;
+        let do_ = (pricing.output / 1_000_000.0) * usage.output as f64;
+        let dr = (pricing.cache_read / 1_000_000.0) * usage.cache_read as f64;
+        let dw = (pricing.cache_write / 1_000_000.0) * usage.cache_write as f64;
+        self.input += di;
+        self.output += do_;
+        self.cache_read += dr;
+        self.cache_write += dw;
+        self.total += di + do_ + dr + dw;
     }
 }
 
@@ -110,6 +114,10 @@ impl AgentMessage {
 
     pub fn is_assistant(&self) -> bool {
         matches!(self, Self::Assistant(_))
+    }
+
+    pub fn as_assistant(&self) -> Option<&AssistantMessage> {
+        if let Self::Assistant(a) = self { Some(a) } else { None }
     }
 }
 
@@ -208,7 +216,7 @@ impl StopReason {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Usage {
     pub input: u32,
     pub output: u32,

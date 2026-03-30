@@ -8,7 +8,7 @@ use super::theme;
 use crate::agent::provider::{CancelFlag, ProviderRegistry};
 use crate::agent::types::{
     AgentEvent, AgentMessage, ContentBlock, ContentItem, EffortLevel, Model, StreamDelta,
-    ThinkingLevel, Usage,
+    ThinkingLevel,
 };
 use crate::core::agent_session::{AgentSessionEvent, AllowedDirs, SessionCommand};
 use crate::core::config::NervConfig;

@@ -20,4 +20,4 @@ pub use compaction_controller::CompactionController;
 pub use config::NervConfig;
 pub use model_registry::ModelRegistry;
 pub use session_runner::session_task;
-pub use tool_registry::{ToolDefinition, ToolRegistry};
+pub use tool_registry::ToolRegistry;

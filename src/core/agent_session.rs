@@ -342,12 +342,12 @@ impl AgentSession {
         self.prepare_callbacks(event_tx);
 
         // Reset in case a previous prompt left it set (e.g. abort during compaction).
-        self.compaction.triggered.store(false, Ordering::Relaxed);
+        self.compaction.reset_triggered();
         let new_messages = self.run_agent_prompt(vec![user_msg], event_tx);
 
         // Mid-stream auto-compaction: the on_event callback detected the context
         // exceeded the threshold and cancelled the stream. Compact now and retry.
-        if self.compaction.triggered.swap(false, Ordering::Relaxed) {
+        if self.compaction.check_and_clear_triggered() {
             crate::log::info("mid-stream auto-compact: running compaction");
             let _ = event_tx.send(AgentSessionEvent::AutoCompactionStart {
                 reason: CompactionReason::Threshold,
@@ -423,7 +423,7 @@ impl AgentSession {
             self.agent.set_permission_fn(
                 Some(std::sync::Arc::new(move |tool: &str, args: &serde_json::Value| {
                     let args_json = serde_json::to_string(args).unwrap_or_default();
-                    let key = format!("{}:{}", tool, args_json);
+                    let key = permission_key(tool, &args_json);
                     if cache.lock().unwrap().contains(&key) {
                         return true;
                     }
@@ -598,22 +598,24 @@ impl AgentSession {
         // Reload memory in case it was updated by a tool call
         self.resources.memory = std::fs::read_to_string(crate::nerv_dir().join("memory.md")).ok();
 
-        self.agent.set_tools(self.tool_registry.active_tools());
-        let tool_names: Vec<&str> = self.agent.state.tools.iter().map(|t| t.name()).collect();
+        let tools = self.tool_registry.active_tools();
+        let tool_names: Vec<String> = tools.iter().map(|t| t.name().to_string()).collect();
+        self.agent.set_tools(tools);
         let snippets = self.tool_registry.prompt_snippets();
         let guidelines = self.tool_registry.prompt_guidelines();
-        let model_id = self.agent.state.model.as_ref().map(|m| m.id.as_str());
-        self.agent.set_system_prompt(build_system_prompt_for_model(
+        let tool_name_refs: Vec<&str> = tool_names.iter().map(String::as_str).collect();
+        let model_id = self.agent.model().map(|m| m.id.as_str());
+        let mut prompt = build_system_prompt_for_model(
             &self.cwd,
             &self.resources,
-            &tool_names,
+            &tool_name_refs,
             &snippets,
             &guidelines,
             model_id,
-        ));
+        );
 
         if let Some(ref wt) = self.worktree {
-            self.agent.state.system_prompt.push_str(&format!(
+            prompt.push_str(&format!(
                 "\n\nYou are working in a git worktree at {}. \
                  All file paths and commands run from this directory, not the original repo. \
                  Do not cd to other directories.",
@@ -622,7 +624,7 @@ impl AgentSession {
         }
 
         if self.plan_mode {
-            self.agent.state.system_prompt.push_str(
+            prompt.push_str(
                 "\n\n# Plan Mode\n\n\
                  You are in plan mode. Research the codebase and outline an implementation plan. \
                  Do not modify any files — the edit and write tools are unavailable. \
@@ -630,6 +632,8 @@ impl AgentSession {
                  and producing a clear step-by-step plan.",
             );
         }
+
+        self.agent.set_system_prompt(prompt);
     }
 
     /// Run agent.prompt() with event forwarding and per-iteration persistence.
@@ -1069,15 +1073,13 @@ impl AgentSession {
     /// in this session. Args should be serialized to JSON for consistent
     /// hashing.
     pub fn is_permission_cached(&self, tool: &str, args_json: &str) -> bool {
-        let key = format!("{}:{}", tool, args_json);
-        self.permission_cache.lock().unwrap().contains(&key)
+        self.permission_cache.lock().unwrap().contains(&permission_key(tool, args_json))
     }
 
     /// Record a permission accept in the session. Writes to DB and updates
     /// in-memory cache.
     pub fn accept_permission(&mut self, tool: &str, args_json: &str) {
-        let key = format!("{}:{}", tool, args_json);
-        self.permission_cache.lock().unwrap().insert(key);
+        self.permission_cache.lock().unwrap().insert(permission_key(tool, args_json));
 
         // Write to session database
         use crate::session::types::{PermissionAcceptEntry, SessionEntry, gen_entry_id, now_iso};
@@ -1100,8 +1102,7 @@ impl AgentSession {
         let mut cache = self.permission_cache.lock().unwrap();
         for entry in entries {
             if let SessionEntry::PermissionAccept(pe) = entry {
-                let key = format!("{}:{}", pe.tool, pe.args);
-                cache.insert(key);
+                cache.insert(permission_key(&pe.tool, &pe.args));
             }
         }
     }
@@ -1113,9 +1114,10 @@ impl AgentSession {
     }
 }
 
+fn permission_key(tool: &str, args_json: &str) -> String {
+    format!("{}:{}", tool, args_json)
+}
+
 pub(crate) fn last_assistant(messages: &[AgentMessage]) -> Option<&AssistantMessage> {
-    messages.iter().rev().find_map(|m| match m {
-        AgentMessage::Assistant(a) => Some(a),
-        _ => None,
-    })
+    messages.iter().rev().find_map(AgentMessage::as_assistant)
 }

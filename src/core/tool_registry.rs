@@ -2,12 +2,8 @@ use std::sync::Arc;
 
 use crate::agent::agent::AgentTool;
 
-pub struct ToolDefinition {
-    pub tool: Arc<dyn AgentTool>,
-}
-
 pub struct ToolRegistry {
-    all: Vec<(String, ToolDefinition)>,
+    all: Vec<Arc<dyn AgentTool>>,
     active: Vec<String>,
 }
 
@@ -22,9 +18,8 @@ impl ToolRegistry {
         Self { all: Vec::new(), active: Vec::new() }
     }
 
-    pub fn register(&mut self, def: ToolDefinition) {
-        let name = def.tool.name().to_string();
-        self.all.push((name, def));
+    pub fn register(&mut self, tool: Arc<dyn AgentTool>) {
+        self.all.push(tool);
     }
 
     pub fn set_active(&mut self, names: &[&str]) {
@@ -33,26 +28,22 @@ impl ToolRegistry {
 
     pub fn active_tools(&self) -> Vec<Arc<dyn AgentTool>> {
         if self.active.is_empty() {
-            return self.all.iter().map(|(_, d)| d.tool.clone()).collect();
+            return self.all.clone();
         }
         self.active
             .iter()
-            .filter_map(|name| {
-                self.all.iter().find(|(n, _)| n == name).map(|(_, d)| d.tool.clone())
-            })
+            .filter_map(|name| self.all.iter().find(|t| t.name() == name).cloned())
             .collect()
     }
 
     pub fn prompt_snippets(&self) -> Vec<(String, String)> {
         self.all
             .iter()
-            .filter_map(|(name, def)| {
-                def.tool.prompt_snippet().map(|s| (name.clone(), s.to_string()))
-            })
+            .filter_map(|t| t.prompt_snippet().map(|s| (t.name().to_string(), s.to_string())))
             .collect()
     }
 
     pub fn prompt_guidelines(&self) -> Vec<String> {
-        self.all.iter().flat_map(|(_, def)| def.tool.prompt_guidelines()).collect()
+        self.all.iter().flat_map(|t| t.prompt_guidelines()).collect()
     }
 }

@@ -2,7 +2,6 @@ use std::sync::atomic::Ordering;
 
 use crossbeam_channel::Sender;
 
-use crate::agent::types::{AgentMessage, AssistantMessage};
 use crate::agent::types::Cost;
 
 use super::agent_session::{AgentSession, AgentSessionEvent, CompactionReason, SessionCommand};

@@ -8,7 +8,7 @@ use nerv::agent::types::*;
 use nerv::core::agent_session::AgentSession;
 use nerv::core::model_registry::ModelRegistry;
 use nerv::core::resource_loader::LoadedResources;
-use nerv::core::tool_registry::{ToolDefinition, ToolRegistry};
+use nerv::core::tool_registry::ToolRegistry;
 use nerv::core::*;
 use nerv::errors::ToolError;
 use nerv::session::SessionManager;
@@ -185,7 +185,7 @@ pub fn mock_session(
     let model_registry = Arc::new(ModelRegistry::empty());
     let mut tool_registry = ToolRegistry::new();
     if with_echo_tool {
-        tool_registry.register(ToolDefinition { tool: Arc::new(EchoTool) });
+        tool_registry.register(Arc::new(EchoTool));
     }
 
     let session_manager = SessionManager::new(&nerv_dir);

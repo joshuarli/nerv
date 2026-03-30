@@ -66,8 +66,8 @@ pub fn generate_summary(
     let request = CompletionRequest {
         model_id: model_id.to_string(),
         system_prompt: "You are a conversation summarizer.".to_string(),
-        messages: vec![crate::agent::convert::LlmMessage::User {
-            content: vec![crate::agent::convert::LlmContent::Text(prompt)],
+        messages: vec![LlmMessage::User {
+            content: vec![LlmContent::Text(prompt)],
         }],
         tools: vec![],
         max_tokens: 4096,

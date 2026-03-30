@@ -149,10 +149,7 @@ fn check_bash(args: &serde_json::Value, repo_root: Option<&Path>) -> Permission 
             if token.starts_with("~/")
                 && !token.starts_with(&format!("~/{}", root_str.trim_start_matches('/')))
             {
-                if token.starts_with("~/.nerv")
-                    || token.starts_with("~/.config")
-                    || token.starts_with("~/.cargo")
-                {
+                if is_safe_home_dir_token(token) {
                     continue;
                 }
                 return Permission::Ask(format!("home path: {}", token));
@@ -192,18 +189,20 @@ fn is_safe_system_path(path: &str) -> bool {
         || is_safe_home_path(path)
 }
 
+/// Home subdirectories that are always safe to access without a permission
+/// prompt (the app's own data dir, common toolchain dirs).
+const SAFE_HOME_DIRS: &[&str] = &[".nerv", ".config", ".cargo"];
+
+fn is_safe_home_dir_token(token: &str) -> bool {
+    SAFE_HOME_DIRS.iter().any(|d| token.starts_with(&format!("~/{}", d)))
+}
+
 fn is_safe_home_path(path: &str) -> bool {
     let Some(home) = crate::home_dir() else {
         return false;
     };
     let home = home.to_string_lossy();
-    // Same directories exempted for ~/ prefixed paths (check_bash line 97-101)
-    for dir in &[".nerv", ".config", ".cargo"] {
-        if path.starts_with(&format!("{}/{}", home, dir)) {
-            return true;
-        }
-    }
-    false
+    SAFE_HOME_DIRS.iter().any(|d| path.starts_with(&format!("{}/{}", home, d)))
 }
 
 /// Extract tokens that might be paths, including redirect targets.

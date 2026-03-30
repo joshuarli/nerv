@@ -261,8 +261,6 @@ fn find_references(symbol: &str, cwd: &std::path::Path) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::agent::agent::AgentTool;
     use crate::agent::provider::new_cancel_flag;
