@@ -9,7 +9,7 @@ pub fn read_jsonc<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_str(&strip_jsonc_comments(&text)).ok()
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NervConfig {
     #[serde(default)]
     pub custom_providers: Vec<CustomProviderConfig>,

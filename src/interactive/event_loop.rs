@@ -94,6 +94,8 @@ pub struct InteractiveMode {
     /// Shared compact threshold (percent 0–100) — written directly so `/compact
     /// at N` takes effect before the next turn without going through
     /// cmd_tx.
+    /// Config loaded once at startup — used for notifications, etc.
+    config: NervConfig,
     pub compact_threshold_arc: Arc<AtomicU32>,
 }
 
@@ -106,6 +108,7 @@ impl InteractiveMode {
         initial_model: Option<Model>,
         initial_thinking: ThinkingLevel,
         initial_effort: Option<EffortLevel>,
+        config: NervConfig,
     ) -> Self {
         Self {
             cmd_tx,
@@ -139,6 +142,7 @@ impl InteractiveMode {
             allowed_dirs: Arc::new(Mutex::new(Vec::new())),
             cancel_flag: Arc::new(AtomicBool::new(false)),
             compact_threshold_arc: Arc::new(AtomicU32::new(50)),
+            config,
         }
     }
 
@@ -739,10 +743,9 @@ impl InteractiveMode {
         // Fire onUserInput hooks (e.g. reset tmux window colour set by
         // onResponseComplete).
         {
-            let cfg = crate::core::config::NervConfig::load(crate::nerv_dir());
             crate::core::notifications::fire(
                 crate::core::notifications::NotificationMatcher::OnUserInput,
-                &cfg.notifications,
+                &self.config.notifications,
             );
         }
 

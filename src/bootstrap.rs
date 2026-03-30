@@ -152,6 +152,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
         model_registry.clone(),
         resources.clone(),
         cwd.to_path_buf(),
+        config.clone(),
     );
     session.permissions_enabled = opts.permissions;
     session.talk_mode = opts.talk_mode;

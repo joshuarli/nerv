@@ -211,6 +211,8 @@ pub struct AgentSession {
     pub agent: Agent,
     pub session_manager: SessionManager,
     pub tool_registry: ToolRegistry,
+    /// Config loaded once at startup. Immutable for the lifetime of the session.
+    pub config: NervConfig,
     compaction_settings: CompactionSettings,
     /// Shared with the interactive thread so `/compact at N` takes effect
     /// immediately without going through cmd_tx. Range 0–100; default 80.
@@ -253,11 +255,13 @@ impl AgentSession {
         model_registry: Arc<ModelRegistry>,
         resources: LoadedResources,
         cwd: PathBuf,
+        config: NervConfig,
     ) -> Self {
         Self {
             agent,
             session_manager,
             tool_registry,
+            config,
             compaction_settings: CompactionSettings::default(),
             compact_threshold_pct: Arc::new(AtomicU32::new(80)),
             model_registry,
@@ -405,6 +409,7 @@ impl AgentSession {
             let perm_tx = event_tx.clone();
             let cache = self.permission_cache.clone();
             let allowed_dirs = self.allowed_dirs.clone();
+            let notifications = self.config.notifications.clone();
 
             self.agent.state.permission_fn =
                 Some(std::sync::Arc::new(move |tool: &str, args: &serde_json::Value| {
@@ -443,10 +448,9 @@ impl AgentSession {
                                 c.insert(reason_key);
                             } else {
                                 // Fire onPermissionDenied hooks (fire-and-forget).
-                                let cfg = NervConfig::load(crate::nerv_dir());
                                 super::notifications::fire(
                                     super::notifications::NotificationMatcher::OnPermissionDenied,
-                                    &cfg.notifications,
+                                    &notifications,
                                 );
                             }
                             approved
@@ -741,10 +745,9 @@ impl AgentSession {
             && !last.stop_reason.is_error()
             && !last.stop_reason.is_context_overflow()
         {
-            let cfg = NervConfig::load(crate::nerv_dir());
             super::notifications::fire(
                 super::notifications::NotificationMatcher::OnResponseComplete,
-                &cfg.notifications,
+                &self.config.notifications,
             );
         }
 
@@ -804,9 +807,8 @@ impl AgentSession {
         &mut self,
         _custom_instructions: Option<String>,
     ) -> Result<Option<CompactionResult>, String> {
-        let config = NervConfig::load(crate::nerv_dir());
         let (provider, model_id) =
-            self.resolve_utility_provider(config.compaction_model.as_deref()).ok_or_else(|| {
+            self.resolve_utility_provider(self.config.compaction_model.as_deref()).ok_or_else(|| {
                 "No provider available for compaction. \
                      Set compaction_model in ~/.nerv/config.json or log in to Anthropic (/login)."
                     .to_string()
@@ -869,10 +871,9 @@ impl AgentSession {
                     tokens_before,
                 );
                 // Fire onCompactionDone hooks (fire-and-forget).
-                let cfg = NervConfig::load(crate::nerv_dir());
                 super::notifications::fire(
                     super::notifications::NotificationMatcher::OnCompactionDone,
-                    &cfg.notifications,
+                    &self.config.notifications,
                 );
                 Ok(Some(CompactionResult {
                     summary,
@@ -952,9 +953,8 @@ impl AgentSession {
                     } else {
                         // Model not in registry — check if it's a custom provider we can
                         // re-register
-                        let config = crate::core::config::NervConfig::load(crate::nerv_dir());
                         if let Some(pcfg) =
-                            config.custom_providers.iter().find(|p| p.name == provider)
+                            self.config.custom_providers.iter().find(|p| p.name == provider)
                         {
                             let p = std::sync::Arc::new(crate::agent::OpenAICompatProvider::new(
                                 pcfg.name.clone(),
@@ -1136,9 +1136,8 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
                     auth.set("anthropic", super::auth::Credential::OAuth(creds));
 
                     // Register the provider (OAuth uses Bearer auth)
-                    let nerv_config = super::config::NervConfig::load(nerv_dir);
                     let extra_headers: Vec<(String, String)> =
-                        nerv_config.effective_headers("anthropic");
+                        session.config.effective_headers("anthropic");
                     let provider = std::sync::Arc::new(
                         crate::agent::AnthropicProvider::new_oauth(api_key)
                             .with_headers(extra_headers),

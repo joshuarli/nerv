@@ -204,6 +204,7 @@ pub fn mock_session(
         model_registry,
         resources,
         tmp.path().to_path_buf(),
+        nerv::core::config::NervConfig::default(),
     );
     // Prevent mock provider from being consumed by background session-naming calls.
     session.disable_session_naming();

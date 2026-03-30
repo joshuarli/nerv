@@ -1083,6 +1083,7 @@ fn main() {
         model_registry.default_model(&config).cloned(),
         initial_thinking_level,
         initial_effort_level,
+        config.clone(),
     );
     interactive.set_repo_root(repo_root);
     interactive.set_repo_id(repo_id);
