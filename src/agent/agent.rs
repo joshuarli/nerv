@@ -1,5 +1,5 @@
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use super::convert::convert_to_llm;
@@ -134,6 +134,10 @@ pub struct Agent {
     /// Estimated token count from the previous API call (for circuit breaker
     /// delta).
     prev_estimated_tokens: usize,
+    /// Mid-turn message injection slot. When the event loop writes a message
+    /// here at TurnEnd, the agent loop picks it up as a User message before
+    /// the next API call instead of waiting for AgentEnd.
+    pub midturn_inject: Arc<Mutex<Option<String>>>,
 }
 
 impl Agent {
@@ -155,6 +159,7 @@ impl Agent {
             cancel: new_cancel_flag(),
             provider_registry,
             prev_estimated_tokens: 0,
+            midturn_inject: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -309,7 +314,22 @@ impl Agent {
 
             on_event(AgentEvent::TurnEnd);
 
+            // Pick up any message the UI injected while tools were running.
+            // The on_event(TurnEnd) call above is the signal to the event loop
+            // to write into this slot; check it immediately after.
             if has_tool_calls && !self.cancel.load(Ordering::Relaxed) {
+                if let Some(text) = self.midturn_inject.lock().unwrap().take() {
+                    let msg = AgentMessage::User {
+                        content: vec![ContentItem::Text { text }],
+                        timestamp: crate::now_millis(),
+                    };
+                    self.state.messages.push(msg.clone());
+                    new_messages.push(msg.clone());
+                    if let Some(ref mut f) = persist_fn {
+                        f(&msg);
+                    }
+                    on_event(AgentEvent::MessageStart { message: msg });
+                }
                 on_event(AgentEvent::TurnStart);
             }
         }

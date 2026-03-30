@@ -24,6 +24,8 @@ pub struct Bootstrap {
     pub model_registry: Arc<ModelRegistry>,
     pub resources: LoadedResources,
     pub cancel_flag: crate::agent::provider::CancelFlag,
+    /// Shared mid-turn injection slot — same Arc as agent.midturn_inject.
+    pub midturn_inject: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// Warnings from config validation (unknown model ids, etc.).
     pub config_warnings: Vec<String>,
 }
@@ -143,6 +145,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     }
 
     let cancel_flag = agent.cancel.clone();
+    let midturn_inject = agent.midturn_inject.clone();
 
     let session_manager = SessionManager::new(&crate::repo_data_dir(cwd));
 
@@ -179,7 +182,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     let known_ids: Vec<&str> = model_registry.all_models().iter().map(|m| m.id.as_str()).collect();
     let config_warnings = config.validate_model_ids(&known_ids);
 
-    Bootstrap { session, config, model_registry, resources, cancel_flag, config_warnings }
+    Bootstrap { session, config, model_registry, resources, cancel_flag, midturn_inject, config_warnings }
 }
 
 /// Resolve a model by name (fuzzy match or provider/id).

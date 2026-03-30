@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
 
 /// Typed wrapper around the shared allowed-directories list.
@@ -256,6 +256,10 @@ pub struct AgentSession {
     /// True once the session has been given an auto-generated name, to avoid
     /// re-naming.
     pub(crate) session_named: bool,
+    /// Shared slot for mid-turn message injection. The event loop writes a
+    /// queued message here at TurnEnd; the agent loop picks it up before the
+    /// next API call. Cloned from agent.midturn_inject on construction.
+    pub midturn_inject: Arc<Mutex<Option<String>>>,
 }
 
 impl AgentSession {
@@ -268,6 +272,7 @@ impl AgentSession {
         cwd: PathBuf,
         config: NervConfig,
     ) -> Self {
+        let midturn_inject = agent.midturn_inject.clone();
         Self {
             agent,
             session_manager,
@@ -286,7 +291,7 @@ impl AgentSession {
             plan_mode: false,
             talk_mode: false,
             session_named: false,
-
+            midturn_inject,
         }
     }
 

@@ -90,6 +90,9 @@ pub struct InteractiveMode {
     pub allowed_dirs: AllowedDirs,
     /// Shared cancel flag — set this to interrupt a running stream immediately.
     pub cancel_flag: CancelFlag,
+    /// Shared mid-turn injection slot. On TurnEnd, pop the first pending
+    /// message here so the agent loop injects it before the next API call.
+    pub midturn_inject: Arc<std::sync::Mutex<Option<String>>>,
     /// Shared compact threshold (percent 0–100) — written directly so `/compact
     /// at N` takes effect before the next turn without going through
     /// cmd_tx.
@@ -140,6 +143,7 @@ impl InteractiveMode {
             compact_threshold: 50,
             allowed_dirs: AllowedDirs::default(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
+            midturn_inject: Arc::new(std::sync::Mutex::new(None)),
             compact_threshold_arc: Arc::new(AtomicU32::new(50)),
             config,
         }
@@ -601,7 +605,13 @@ impl InteractiveMode {
                 self.is_streaming = false;
                 layout.chat.cancel_stream();
                 layout.statusbar.finish();
-                if !self.pending_messages.is_empty() {
+                // The TurnEnd handler may have moved a pending message into the
+                // midturn_inject slot. If the agent loop exited without consuming
+                // it (pure-text turn, no tool calls), reclaim it here so it fires
+                // as the next prompt instead of being lost.
+                if let Some(msg) = self.midturn_inject.lock().unwrap().take() {
+                    let _ = self.cmd_tx.send(SessionCommand::Prompt { text: msg });
+                } else if !self.pending_messages.is_empty() {
                     let msg = self.pending_messages.remove(0);
                     self.editing_queue_idx = None;
                     let _ = self.cmd_tx.send(SessionCommand::Prompt { text: msg });
@@ -696,7 +706,20 @@ impl InteractiveMode {
                 layout.chat.push_tool_result(text, result.is_error);
                 tui.request_render(false);
             }
-            AgentEvent::TurnStart | AgentEvent::TurnEnd => {}
+            AgentEvent::TurnStart => {}
+            AgentEvent::TurnEnd => {
+                // If the user queued a message while tools were running, write it
+                // into the shared slot now. The agent loop checks this slot right
+                // after emitting TurnEnd and injects it as a User message before
+                // the next API call, so the model sees the follow-up immediately
+                // instead of waiting until AgentEnd.
+                if !self.pending_messages.is_empty() {
+                    let msg = self.pending_messages.remove(0);
+                    self.editing_queue_idx = self.editing_queue_idx.and_then(|i| i.checked_sub(1));
+                    *self.midturn_inject.lock().unwrap() = Some(msg);
+                    layout.statusbar.set_queue(&self.pending_messages, self.editing_queue_idx);
+                }
+            }
             AgentEvent::Retrying { attempt, wait_secs, reason: _ } => {
                 self.status_message = Some(format!(
                     "Overloaded — retrying in {}s (attempt {}/3)…",
@@ -767,10 +790,16 @@ impl InteractiveMode {
         // without waiting for the session thread to dequeue the Abort command.
         self.cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = self.cmd_tx.send(SessionCommand::Abort);
+        // If TurnEnd already moved a message into the inject slot, reclaim it so
+        // it fires as the first prompt after the abort. Otherwise fall back to
+        // the head of pending_messages.
         // Immediately queue the top pending message behind the Abort so the
         // session thread starts on it as soon as the current turn is cancelled,
         // without waiting for AgentEnd to round-trip through the main loop.
-        if !self.pending_messages.is_empty() {
+        let inject = self.midturn_inject.lock().unwrap().take();
+        if let Some(msg) = inject {
+            let _ = self.cmd_tx.send(SessionCommand::Prompt { text: msg });
+        } else if !self.pending_messages.is_empty() {
             let msg = self.pending_messages.remove(0);
             self.editing_queue_idx = self.editing_queue_idx.and_then(|i| i.checked_sub(1));
             let _ = self.cmd_tx.send(SessionCommand::Prompt { text: msg });

@@ -332,6 +332,7 @@ fn main() {
     interactive.set_repo_id(repo_id);
     interactive.set_skills(skills);
     interactive.cancel_flag = cancel_flag.clone();
+    interactive.midturn_inject = b.midturn_inject;
     interactive.compact_threshold_arc = compact_threshold_arc;
 
     layout.editor.set_completions(interactive.slash_completions());
