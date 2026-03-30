@@ -82,7 +82,7 @@ impl AgentTool for ReadTool {
             if !has_range {
                 // Full re-read of unchanged file
                 let msg = format!(
-                    "[unchanged since last read: {} ({} lines)]",
+                    "[unchanged since last read: {} ({} lines) — re-reading will return this same message. If an edit failed, use grep to find current text; do not re-read.]",
                     path_str, entry.line_count
                 );
                 return ToolResult::ok_with_details(
@@ -96,7 +96,7 @@ impl AgentTool for ReadTool {
             let covered = entry.ranges_served.iter().any(|&(s, e)| s <= req_start && e >= req_end);
             if covered {
                 let msg = format!(
-                    "[already read {} lines {}-{} \u{2014} use content from earlier in this conversation]",
+                    "[already read {} lines {}-{} \u{2014} use content from earlier in this conversation. Re-reading returns this same message; use grep to locate specific text.]",
                     path_str,
                     req_start + 1,
                     req_end

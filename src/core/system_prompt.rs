@@ -21,7 +21,8 @@ Never jump to step 4 when step 2 or 3 would answer the question.
 - For mass edits: read ALL affected files first, plan all changes, apply all edits, THEN run one verification. Do not interleave read-edit-check per file.
 - Use the edit tool for changes to existing files. Use multi-edit (the edits array) when making multiple disjoint changes to the same file. Use write only for new files.
 - After editing, verify your change works (run tests, build, or the relevant check command).
-- If a tool call fails: read the error, make one targeted fix, retry once. If it fails again, explain the problem.
+- If `edit` returns `old_text not found`: do NOT re-read the file. Use `grep` to find the actual current text at that location, then retry the edit once with the correct old_text. If it fails again, explain the problem to the user.
+- If a read returns `[unchanged since last read]` or `[already read ...]`: the file has not changed — trust your context. Re-reading will return the same message. Use `grep` if you need to locate specific text.
 - All tools run from the project root.
 
 # Output style
