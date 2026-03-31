@@ -3,6 +3,35 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
 
+/// Phase of the plan-mode state machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanPhase {
+    /// Model is researching + writing the initial plan draft.
+    Research,
+    /// Waiting for the user to answer the model's interview questions.
+    Interview,
+    /// Model is refining the plan based on user answers.
+    Refine,
+    /// Plan is complete — waiting for user to choose execute / follow-up / cancel.
+    Ready,
+}
+
+/// A single interview question emitted by the model.
+#[derive(Debug, Clone)]
+pub struct PlanOption {
+    pub label: String,
+    /// One-line tradeoff note shown as subtext under the choice.
+    pub subtext: String,
+    /// Whether the model recommends this option.
+    pub recommended: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlanQuestion {
+    pub q: String,
+    pub options: Vec<PlanOption>,
+}
+
 /// Typed wrapper around the shared allowed-directories list.
 ///
 /// Directories added here are granted full tool access without per-call prompts.
@@ -125,9 +154,17 @@ pub enum AgentSessionEvent {
         provider: String,
         online: bool,
     },
-    /// Permission request — agent blocks until response is sent back.
     PlanModeChanged {
         enabled: bool,
+    },
+    /// Model produced interview questions — UI should launch the interview TUI.
+    PlanQuestionsReady {
+        questions: Vec<PlanQuestion>,
+        plan_path: PathBuf,
+    },
+    /// Plan phase advanced (Research → Interview → Refine → Ready).
+    PlanPhaseChanged {
+        phase: PlanPhase,
     },
     /// Session title was generated after the first completed turn.
     SessionNamed {
@@ -218,6 +255,12 @@ pub enum SessionCommand {
     SetPlanMode {
         enabled: bool,
     },
+    /// Submit answers from the interview TUI back to the agent.
+    PlanAnswers {
+        answers: Vec<(String, String)>,
+    },
+    /// User chose to dig deeper (f) — ask the model for more questions.
+    PlanFollowUp,
     ForkSession,
     /// Persist the full input history for the current session.
     SaveInputHistory {
@@ -251,6 +294,10 @@ pub struct AgentSession {
     pub(crate) worktree: Option<PathBuf>,
     /// Plan mode: restrict tools to read-only, steer model toward planning.
     plan_mode: bool,
+    /// Path of the plan file for the current plan-mode session.
+    pub plan_path: Option<PathBuf>,
+    /// Current phase of the plan-mode state machine.
+    pub plan_phase: PlanPhase,
     /// Talk mode: no tools, no project context, pure conversational assistant.
     pub talk_mode: bool,
     /// True once the session has been given an auto-generated name, to avoid
@@ -289,20 +336,151 @@ impl AgentSession {
             allowed_dirs: AllowedDirs::default(),
             worktree: None,
             plan_mode: false,
+            plan_path: None,
+            plan_phase: PlanPhase::Research,
             talk_mode: false,
             session_named: false,
             midturn_inject,
         }
     }
 
+    /// Resolve (and cache) the plan file path. Called lazily so the session ID
+    /// exists by the time we need it.
+    fn resolve_plan_path(&mut self) -> PathBuf {
+        if let Some(ref p) = self.plan_path {
+            return p.clone();
+        }
+        let session_id = self.session_manager.session_id().to_string();
+        let repo_dir = crate::repo_data_dir(&self.cwd);
+        let _ = std::fs::create_dir_all(&repo_dir);
+        let path = repo_dir.join(format!("plan-{}.md", session_id));
+        self.plan_path = Some(path.clone());
+        path
+    }
+
     pub fn set_plan_mode(&mut self, enabled: bool, event_tx: &Sender<AgentSessionEvent>) {
         self.plan_mode = enabled;
         if enabled {
-            self.tool_registry.set_active(&["read", "bash", "grep", "find", "ls", "memory"]);
+            // plan_path is resolved lazily (session ID may not exist yet).
+            self.plan_phase = PlanPhase::Research;
+            // Read-only tools + write + edit (write/edit are gated to plan_path only
+            // via permissions).
+            self.tool_registry.set_active(&[
+                "read", "bash", "grep", "find", "ls", "symbols", "codemap", "memory",
+                "write", "edit",
+            ]);
         } else {
+            self.plan_path = None;
+            self.plan_phase = PlanPhase::Research;
             self.tool_registry.set_active(&[]);
         }
         let _ = event_tx.send(AgentSessionEvent::PlanModeChanged { enabled });
+    }
+
+    /// Extract a `{"questions":[...]}` JSON block from the tail of an assistant
+    /// response. Returns `Some(vec)` (possibly empty) when the block is present,
+    /// `None` when absent.
+    fn extract_questions(text: &str) -> Option<Vec<PlanQuestion>> {
+        // Find the last `{` that starts a JSON object containing "questions".
+        let start = text.rfind("{\"questions\"")?;
+        let fragment = &text[start..];
+        // Find the matching closing brace (simple depth counter).
+        let mut depth = 0usize;
+        let mut end = None;
+        for (i, ch) in fragment.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        end = Some(i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let json_str = &fragment[..end?];
+        let val: serde_json::Value = serde_json::from_str(json_str).ok()?;
+        let arr = val.get("questions")?.as_array()?;
+        let questions = arr
+            .iter()
+            .filter_map(|item| {
+                let obj = item.as_object()?;
+                let q = obj.get("q")?.as_str()?.to_string();
+                let options = obj
+                    .get("options")
+                    .and_then(|o| o.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| {
+                                if let Some(s) = v.as_str() {
+                                    // Backward-compat: plain string option.
+                                    Some(PlanOption {
+                                        label: s.to_string(),
+                                        subtext: String::new(),
+                                        recommended: false,
+                                    })
+                                } else if let Some(o) = v.as_object() {
+                                    let label = o.get("label")?.as_str()?.to_string();
+                                    let subtext = o.get("subtext")
+                                        .and_then(|s| s.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let recommended = o.get("recommended")
+                                        .and_then(|r| r.as_bool())
+                                        .unwrap_or(false);
+                                    Some(PlanOption { label, subtext, recommended })
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(PlanQuestion { q, options })
+            })
+            .collect();
+        Some(questions)
+    }
+
+    /// Build and send the answer injection prompt after the interview.
+    pub fn inject_plan_answers(
+        &mut self,
+        answers: Vec<(String, String)>,
+        event_tx: &Sender<AgentSessionEvent>,
+    ) {
+        let plan_path = self.resolve_plan_path().display().to_string();
+        let mut text = format!(
+            "Here are my answers to your questions:\n\n"
+        );
+        for (i, (question, answer)) in answers.iter().enumerate() {
+            if answer.is_empty() {
+                text.push_str(&format!("{}. {}\n   Answer: (no preference — use your judgment)\n\n", i + 1, question));
+            } else {
+                text.push_str(&format!("{}. {}\n   Answer: {}\n\n", i + 1, question, answer));
+            }
+        }
+        text.push_str(&format!(
+            "Please update the plan file at `{}` with a refined version incorporating these answers. \
+             Then either output a new questions JSON block if you need more clarification, or \
+             output `{{\"questions\":[]}}` when the plan is complete.",
+            plan_path
+        ));
+        self.plan_phase = PlanPhase::Refine;
+        let _ = event_tx.send(AgentSessionEvent::PlanPhaseChanged { phase: PlanPhase::Refine });
+        self.prompt(text, event_tx);
+    }
+
+    /// Inject a follow-up prompt asking the model to dig deeper.
+    pub fn inject_plan_followup(&mut self, event_tx: &Sender<AgentSessionEvent>) {
+        let text =
+            "The plan needs more depth. Please ask me more targeted clarifying questions \
+             to sharpen it further. Use the same questions JSON format."
+                .to_string();
+        self.plan_phase = PlanPhase::Refine;
+        let _ = event_tx.send(AgentSessionEvent::PlanPhaseChanged { phase: PlanPhase::Refine });
+        self.prompt(text, event_tx);
     }
 
     pub fn set_worktree(&mut self, path: PathBuf) {
@@ -424,9 +602,28 @@ impl AgentSession {
             let cache = self.permission_cache.clone();
             let allowed_dirs = self.allowed_dirs.clone();
             let notifications = self.config.notifications.clone();
+            // Write/edit to the plan file are always allowed without a gate.
+            let plan_path = Some(self.resolve_plan_path());
 
             self.agent.set_permission_fn(
                 Some(std::sync::Arc::new(move |tool: &str, args: &serde_json::Value| {
+                    // In plan mode, allow write/edit unconditionally to the plan file.
+                    if (tool == "write" || tool == "edit") && let Some(ref pp) = plan_path {
+                        let target = args["path"].as_str().unwrap_or("");
+                        let target_path = std::path::Path::new(target);
+                        if target_path == pp.as_path() {
+                            return true;
+                        }
+                        // Absolute comparison via canonicalize fallback
+                        let canon_target = std::fs::canonicalize(target_path)
+                            .unwrap_or_else(|_| target_path.to_path_buf());
+                        let canon_plan = std::fs::canonicalize(pp)
+                            .unwrap_or_else(|_| pp.clone());
+                        if canon_target == canon_plan {
+                            return true;
+                        }
+                    }
+
                     let args_json = serde_json::to_string(args).unwrap_or_default();
                     let key = permission_key(tool, &args_json);
                     if cache.lock().unwrap().contains(&key) {
@@ -588,6 +785,81 @@ impl AgentSession {
             self.session_named = true;
             let _ = event_tx.send(AgentSessionEvent::SessionNamed { name });
         }
+
+        // Plan mode: extract questions from the last assistant message.
+        // Only fire during Research/Refine — not once we've reached Interview or Ready.
+        if self.plan_mode
+            && matches!(self.plan_phase, PlanPhase::Research | PlanPhase::Refine)
+        {
+            self.handle_plan_turn(new_messages, event_tx);
+        }
+    }
+
+    /// After a plan-mode turn, parse the questions JSON block and emit the
+    /// appropriate event. If the block is missing, inject a correction prompt
+    /// once. If `questions` is empty, the plan is ready.
+    fn handle_plan_turn(
+        &mut self,
+        new_messages: Vec<AgentMessage>,
+        event_tx: &Sender<AgentSessionEvent>,
+    ) {
+        let last_text = new_messages
+            .iter()
+            .rev()
+            .find_map(|m| {
+                if let AgentMessage::Assistant(a) = m {
+                    let t: String = a
+                        .content
+                        .iter()
+                        .filter_map(|b| {
+                            if let crate::agent::types::ContentBlock::Text { text } = b {
+                                Some(text.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    if t.is_empty() { None } else { Some(t) }
+                } else {
+                    None
+                }
+            });
+
+        let Some(text) = last_text else { return };
+
+        match Self::extract_questions(&text) {
+            Some(questions) if questions.is_empty() => {
+                // Model signals it has enough information — plan is ready.
+                self.plan_phase = PlanPhase::Ready;
+                let _ =
+                    event_tx.send(AgentSessionEvent::PlanPhaseChanged { phase: PlanPhase::Ready });
+            }
+            Some(questions) => {
+                // Questions found — move to Interview phase.
+                self.plan_phase = PlanPhase::Interview;
+                let plan_path = self.resolve_plan_path();
+                let _ = event_tx.send(AgentSessionEvent::PlanPhaseChanged {
+                    phase: PlanPhase::Interview,
+                });
+                let _ = event_tx.send(AgentSessionEvent::PlanQuestionsReady {
+                    questions,
+                    plan_path,
+                });
+            }
+            None => {
+                // No JSON block — inject a one-shot correction prompt.
+                let correction =
+                    "Your response didn't include the required questions JSON block. \
+                     Reply with ONLY the JSON block — for example:\n\
+                     {\"questions\":[{\"q\":\"How should X work?\",\"options\":[{\"label\":\"A\",\"subtext\":\"Simpler but less flexible.\",\"recommended\":true},{\"label\":\"B\",\"subtext\":\"More powerful but adds complexity.\",\"recommended\":false}]}]}\n\
+                     Each option must have label, subtext, and recommended fields. \
+                     Use an empty array if you are satisfied: {\"questions\":[]}"
+                        .to_string();
+                crate::log::info("plan mode: missing questions block — injecting correction prompt");
+                self.prompt(correction, event_tx);
+            }
+        }
     }
 
     fn prepare_system_prompt(&mut self) {
@@ -629,13 +901,30 @@ impl AgentSession {
         }
 
         if self.plan_mode {
-            prompt.push_str(
+            let plan_path_str = self.resolve_plan_path().display().to_string();
+            prompt.push_str(&format!(
                 "\n\n# Plan Mode\n\n\
-                 You are in plan mode. Research the codebase and outline an implementation plan. \
-                 Do not modify any files — the edit and write tools are unavailable. \
-                 Focus on: identifying relevant files, understanding existing patterns, \
-                 and producing a clear step-by-step plan.",
-            );
+                 You are in plan mode. Your job is to produce a thorough implementation plan.\n\n\
+                 ## Workflow\n\n\
+                 1. Research the codebase using read, grep, find, ls, symbols, and codemap.\n\
+                 2. Write your initial plan to: `{plan_path}`\n\
+                    Use the write tool for this — it is the only file you may write to.\n\
+                 3. Identify 2–4 specific, targeted questions that would meaningfully improve \
+                    the plan. For each question provide 2–4 concrete options. Each option must \
+                    include a one-line tradeoff note and a recommendation flag.\n\
+                 4. **Your response MUST end with a raw JSON object on its own line, no fences:**\n\n\
+                 {{\"questions\":[{{\"q\":\"<question>\",\"options\":[{{\"label\":\"<opt>\",\"subtext\":\"<tradeoff>\",\"recommended\":false}}, ...]}}]}}\n\n\
+                 Rules:\n\
+                 - Output the JSON as the **very last line** of your response — raw, no markdown fences, no trailing text.\n\
+                 - Each option must be an object with `label` (short choice text), `subtext` (one concise sentence on tradeoffs), and `recommended` (true for the one you'd pick, false otherwise). Mark exactly one option per question as recommended.\n\
+                 - Provide 2–4 options per question. Do NOT include an 'other' option — that is \
+                    added automatically.\n\
+                 - When you have enough information to finalize the plan (after a round of \
+                    answers), output {{\"questions\":[]}} as the last line to signal completion.\n\
+                 - Only write to `{plan_path}`. Do not modify any other files.\n\
+                 - Do not make any other file mutations.",
+                plan_path = plan_path_str,
+            ));
         }
 
         self.agent.set_system_prompt(prompt);

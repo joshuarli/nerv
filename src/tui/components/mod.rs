@@ -6,6 +6,7 @@ pub mod select_list;
 pub mod spacer;
 pub mod styled_text;
 pub mod text;
+pub mod word_wrap;
 
 pub use box_::Box_;
 pub use editor::Editor;
@@ -16,3 +17,4 @@ pub use spacer::Spacer;
 pub use styled_text::StyledText;
 pub use text::Text;
 pub use text::TruncatedText;
+pub use word_wrap::WordWrap;

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -10,7 +11,9 @@ use crate::agent::types::{
     AgentEvent, AgentMessage, ContentBlock, ContentItem, EffortLevel, Model, StreamDelta,
     ThinkingLevel,
 };
-use crate::core::agent_session::{AgentSessionEvent, AllowedDirs, SessionCommand};
+use crate::core::agent_session::{
+    AgentSessionEvent, AllowedDirs, PlanPhase, PlanQuestion, SessionCommand,
+};
 use crate::core::config::NervConfig;
 use crate::core::model_registry::ModelRegistry;
 use crate::session::types::SessionTreeNode;
@@ -38,6 +41,11 @@ pub enum PickerRequest {
     },
     /// Toggle the nervHud line on/off.
     ToggleHud,
+    /// Launch the plan interview TUI.
+    PlanInterview {
+        questions: Vec<PlanQuestion>,
+        plan_path: PathBuf,
+    },
 }
 
 pub struct InteractiveMode {
@@ -82,6 +90,14 @@ pub struct InteractiveMode {
     pub pending_permission_details: Option<(String, serde_json::Value)>,
     /// Plan mode: read-only research mode, no file mutations.
     pub plan_mode: bool,
+    /// Current phase of the plan-mode state machine (mirrored from session).
+    pub plan_phase: PlanPhase,
+    /// Path of the active plan file (mirrored from session).
+    pub plan_path: Option<PathBuf>,
+    /// When plan phase is Ready, block normal key handling until user picks y/f/n.
+    pub pending_plan_ready: bool,
+    /// Mid-session plan-mode confirm: stashed text waiting for y/n.
+    pub pending_plan_confirm_text: Option<String>,
     /// Current auto-compact threshold (0–100). Mirrors what was last sent to
     /// the session.
     pub compact_threshold: u8,
@@ -140,6 +156,10 @@ impl InteractiveMode {
             pending_permission: None,
             pending_permission_details: None,
             plan_mode: false,
+            plan_phase: PlanPhase::Research,
+            plan_path: None,
+            pending_plan_ready: false,
+            pending_plan_confirm_text: None,
             compact_threshold: 50,
             allowed_dirs: AllowedDirs::default(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
@@ -174,9 +194,30 @@ impl InteractiveMode {
             }
             AgentSessionEvent::PlanModeChanged { enabled } => {
                 self.plan_mode = enabled;
+                self.plan_phase = PlanPhase::Research;
+                self.pending_plan_ready = false;
                 layout.footer.set_plan_mode(enabled);
-                let label = if enabled { "Plan mode on" } else { "Plan mode off" };
+                let label = if enabled { "Plan mode on — researching…" } else { "Plan mode off" };
                 self.status_message = Some(label.into());
+            }
+            AgentSessionEvent::PlanPhaseChanged { phase } => {
+                self.plan_phase = phase.clone();
+                let label = match phase {
+                    PlanPhase::Research => "Plan mode: researching…",
+                    PlanPhase::Interview => "Plan mode: interview ready",
+                    PlanPhase::Refine => "Plan mode: refining plan…",
+                    PlanPhase::Ready => {
+                        self.pending_plan_ready = true;
+                        "Plan ready.  e = execute  f = follow up  n = cancel"
+                    }
+                };
+                self.status_message = Some(label.into());
+                self.status_is_error = phase == PlanPhase::Ready;
+            }
+            AgentSessionEvent::PlanQuestionsReady { questions, plan_path } => {
+                self.plan_path = Some(plan_path.clone());
+                self.status_message = None;
+                return Some(PickerRequest::PlanInterview { questions, plan_path });
             }
             AgentSessionEvent::SessionNamed { name } => {
                 layout.footer.set_session_name(Some(name));
@@ -762,6 +803,28 @@ impl InteractiveMode {
             return None;
         }
 
+        // Planning intent heuristic: auto-detect on first message, or prompt to
+        // confirm mid-session. Only triggers when not already in plan mode.
+        if !self.plan_mode && has_planning_intent(&text) {
+            let is_first_message = self.message_history.len() <= 1;
+            if is_first_message {
+                // Auto-enter on first message — intent is unambiguous.
+                self.plan_mode = true;
+                let _ = self.cmd_tx.try_send(SessionCommand::SetPlanMode { enabled: true });
+                // Fall through and send the prompt as the first planning turn.
+            } else {
+                // Mid-session: stash the text and show a y/n confirmation banner.
+                // The main key handler watches pending_plan_confirm_text and handles
+                // y (enter plan mode + resend) and n (resend as normal).
+                self.pending_plan_confirm_text = Some(text);
+                self.status_message = Some(
+                    "Switch to plan mode for this request?  y = yes  n = no".into(),
+                );
+                self.status_is_error = true;
+                return None;
+            }
+        }
+
         // Fire onUserInput hooks (e.g. reset tmux window colour set by
         // onResponseComplete).
         {
@@ -1270,6 +1333,21 @@ impl InteractiveMode {
         footer.set_plan_mode(self.plan_mode);
         footer.set_compact_threshold(self.compact_threshold);
     }
+}
+
+/// Returns true if the message text suggests the user wants to plan/design
+/// something rather than immediately execute. Used to auto-activate plan mode.
+pub fn has_planning_intent(text: &str) -> bool {
+    let t = text.to_lowercase();
+    // Explicit plan/design/architect triggers
+    let triggers = [
+        "plan ", "plan\n", "design ", "architect ", "draft a plan", "write a plan",
+        "create a plan", "make a plan", "help me plan", "let's plan", "let's design",
+        "think through", "before we start", "before you start", "outline ",
+        "figure out how", "how should we", "how should i", "what's the best way",
+        "what is the best way", "propose a", "suggest a", "explore options",
+    ];
+    triggers.iter().any(|&t2| t.contains(t2))
 }
 
 /// Replace `/skillname` tokens inside `text` with the matching skill's content.

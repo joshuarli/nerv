@@ -11,6 +11,7 @@ pub enum Cmd {
         prompt: Option<String>,
         thinking: bool,
         effort: Option<EffortLevel>,
+        plan_mode: bool,
     },
     /// Interactive TUI session inside a fresh git worktree
     Wt {
@@ -20,6 +21,7 @@ pub enum Cmd {
         prompt: Option<String>,
         thinking: bool,
         effort: Option<EffortLevel>,
+        plan_mode: bool,
     },
     /// Headless: read prompt from stdin, stream JSON to stdout
     Print {
@@ -77,6 +79,8 @@ pub fn print_top_help() {
     println!();
     println!("Options:");
     println!("  --model <name>     Select model");
+    println!("  --prompt <text>    Send an initial prompt automatically");
+    println!("  --plan-mode        Enable plan mode from the first turn");
     println!("  --log-level <lvl>  Set log level (debug, info, warn, error)");
     println!("  -h, --help         Show this help");
     println!("  --version          Show version");
@@ -113,57 +117,78 @@ pub fn parse_args() -> Cmd {
     let mut log_level: Option<String> = None;
     let _wt: Option<String> = None;
 
-    // First token determines which branch we're in.
-    let first = match parser.next() {
-        Ok(Some(arg)) => arg,
-        Ok(None) => {
-            // No args — plain interactive mode.
-            return Cmd::Interactive {
-                model: None,
-                resume: ResumeOpt::None,
-                log_level: None,
-                prompt: None,
-                thinking: false,
-                effort: None,
-            };
-        }
-        Err(e) => {
-            eprintln!("error: {e}. Try: nerv --help");
-            std::process::exit(1);
+    // Read leading flags before the subcommand name, then route on the first
+    // positional value (or return Interactive if there are no positional args).
+    let mut prompt: Option<String> = None;
+    let mut thinking = false;
+    let mut effort: Option<EffortLevel> = None;
+    let mut plan_mode = false;
+
+    let first = loop {
+        match parser.next() {
+            Ok(None) => {
+                return Cmd::Interactive {
+                    model,
+                    resume: ResumeOpt::None,
+                    log_level,
+                    prompt,
+                    thinking,
+                    effort,
+                    plan_mode,
+                };
+            }
+            Err(e) => {
+                eprintln!("error: {e}. Try: nerv --help");
+                std::process::exit(1);
+            }
+            Ok(Some(Short('h') | Long("help"))) => {
+                print_top_help();
+                std::process::exit(0);
+            }
+            Ok(Some(Long("version"))) => return Cmd::Version,
+            Ok(Some(Long("model"))) => {
+                model = Some(
+                    parser
+                        .value()
+                        .unwrap_or_else(|_| { eprintln!("--model requires a value"); std::process::exit(1); })
+                        .string()
+                        .unwrap(),
+                );
+            }
+            Ok(Some(Long("log-level"))) => {
+                log_level = Some(
+                    parser
+                        .value()
+                        .unwrap_or_else(|_| { eprintln!("--log-level requires a value"); std::process::exit(1); })
+                        .string()
+                        .unwrap(),
+                );
+            }
+            Ok(Some(Long("prompt"))) => {
+                prompt = Some(
+                    parser
+                        .value()
+                        .unwrap_or_else(|_| { eprintln!("--prompt requires a value"); std::process::exit(1); })
+                        .string()
+                        .unwrap(),
+                );
+            }
+            Ok(Some(Long("thinking"))) => thinking = true,
+            Ok(Some(Long("plan-mode"))) => plan_mode = true,
+            Ok(Some(Long("effort"))) => {
+                effort = Some(parse_effort_level(
+                    &parser
+                        .value()
+                        .unwrap_or_else(|_| { eprintln!("--effort requires a value"); std::process::exit(1); })
+                        .string()
+                        .unwrap(),
+                ));
+            }
+            Ok(Some(arg)) => break arg,
         }
     };
 
     match first {
-        // ── top-level flags (interactive mode) ──────────────────────────────
-        Short('h') | Long("help") => {
-            print_top_help();
-            std::process::exit(0);
-        }
-        Long("version") => return Cmd::Version,
-        Long("model") => {
-            model = Some(
-                parser
-                    .value()
-                    .unwrap_or_else(|_| {
-                        eprintln!("--model requires a value");
-                        std::process::exit(1);
-                    })
-                    .string()
-                    .unwrap(),
-            );
-        }
-        Long("log-level") => {
-            log_level = Some(
-                parser
-                    .value()
-                    .unwrap_or_else(|_| {
-                        eprintln!("--log-level requires a value");
-                        std::process::exit(1);
-                    })
-                    .string()
-                    .unwrap(),
-            );
-        }
         // ── subcommands ──────────────────────────────────────────────────────
         Value(v) if v == "talk" => {
             // talk [-h] [--model M] [--log-level L] [--prompt P] [--thinking] [--effort E]
@@ -354,6 +379,7 @@ pub fn parse_args() -> Cmd {
             let mut wt_prompt: Option<String> = None;
             let mut wt_thinking = false;
             let mut wt_effort: Option<EffortLevel> = None;
+            let mut wt_plan_mode = false;
             let mut branch: Option<String> = None;
             loop {
                 match parser.next() {
@@ -418,6 +444,7 @@ pub fn parse_args() -> Cmd {
                         );
                     }
                     Ok(Some(Long("thinking"))) => wt_thinking = true,
+                    Ok(Some(Long("plan-mode"))) => wt_plan_mode = true,
                     Ok(Some(Long("effort"))) => {
                         wt_effort = Some(parse_effort_level(
                             &parser
@@ -455,6 +482,7 @@ pub fn parse_args() -> Cmd {
                 prompt: wt_prompt,
                 thinking: wt_thinking,
                 effort: wt_effort,
+                plan_mode: wt_plan_mode,
             };
         }
         Value(v) if v == "models" => {
@@ -552,84 +580,8 @@ pub fn parse_args() -> Cmd {
         }
     }
 
-    // Remaining args for interactive mode (--model / --log-level / --prompt /
-    // --thinking / --effort may follow).
-    let mut prompt: Option<String> = None;
-    let mut thinking = false;
-    let mut effort: Option<EffortLevel> = None;
-    loop {
-        match parser.next() {
-            Ok(None) => break,
-            Ok(Some(Long("model"))) => {
-                model = Some(
-                    parser
-                        .value()
-                        .unwrap_or_else(|_| {
-                            eprintln!("--model requires a value");
-                            std::process::exit(1);
-                        })
-                        .string()
-                        .unwrap(),
-                );
-            }
-            Ok(Some(Long("log-level"))) => {
-                log_level = Some(
-                    parser
-                        .value()
-                        .unwrap_or_else(|_| {
-                            eprintln!("--log-level requires a value");
-                            std::process::exit(1);
-                        })
-                        .string()
-                        .unwrap(),
-                );
-            }
-            Ok(Some(Long("prompt"))) => {
-                prompt = Some(
-                    parser
-                        .value()
-                        .unwrap_or_else(|_| {
-                            eprintln!("--prompt requires a value");
-                            std::process::exit(1);
-                        })
-                        .string()
-                        .unwrap(),
-                );
-            }
-            Ok(Some(Long("thinking"))) => thinking = true,
-            Ok(Some(Long("effort"))) => {
-                effort = Some(parse_effort_level(
-                    &parser
-                        .value()
-                        .unwrap_or_else(|_| {
-                            eprintln!("--effort requires a value");
-                            std::process::exit(1);
-                        })
-                        .string()
-                        .unwrap(),
-                ));
-            }
-            Ok(Some(Short('h') | Long("help"))) => {
-                print_top_help();
-                std::process::exit(0);
-            }
-            Ok(Some(Long("version"))) => {
-                println!("nerv {}", env!("CARGO_PKG_VERSION"));
-                std::process::exit(0);
-            }
-            Ok(Some(arg)) => {
-                eprintln!("unexpected argument. Try: nerv --help");
-                eprintln!("  {}", arg.unexpected());
-                std::process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("error: {e}. Try: nerv --help");
-                std::process::exit(1);
-            }
-        }
-    }
-
-    Cmd::Interactive { model, resume, log_level, prompt, thinking, effort }
+    // All interactive-mode flags were consumed in the leading-flags loop above.
+    Cmd::Interactive { model, resume, log_level, prompt, thinking, effort, plan_mode }
 }
 
 /// Parse an --effort flag value; exits on unrecognised input.

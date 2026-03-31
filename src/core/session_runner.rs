@@ -153,6 +153,12 @@ pub fn session_task(
             SessionCommand::SetPlanMode { enabled } => {
                 session.set_plan_mode(enabled, &event_tx);
             }
+            SessionCommand::PlanAnswers { answers } => {
+                session.inject_plan_answers(answers, &event_tx);
+            }
+            SessionCommand::PlanFollowUp => {
+                session.inject_plan_followup(&event_tx);
+            }
             SessionCommand::ForkSession => match session.session_manager.fork_session() {
                 Ok(new_id) => {
                     let short =

@@ -106,22 +106,23 @@ fn main() {
         opt_prompt,
         opt_thinking,
         opt_effort,
+        opt_plan_mode,
     ) = match cmd {
-        Cmd::Interactive { model, resume, log_level, prompt, thinking, effort } => {
-            (model, resume, log_level, None, false, prompt, thinking, effort)
+        Cmd::Interactive { model, resume, log_level, prompt, thinking, effort, plan_mode } => {
+            (model, resume, log_level, None, false, prompt, thinking, effort, plan_mode)
         }
-        Cmd::Wt { branch, model, log_level, prompt, thinking, effort } => {
-            (model, ResumeOpt::None, log_level, Some(branch), false, prompt, thinking, effort)
+        Cmd::Wt { branch, model, log_level, prompt, thinking, effort, plan_mode } => {
+            (model, ResumeOpt::None, log_level, Some(branch), false, prompt, thinking, effort, plan_mode)
         }
         Cmd::Resume { id } => {
             let resume = match id {
                 Some(id) => ResumeOpt::Session(id),
                 None => ResumeOpt::Picker,
             };
-            (None, resume, None, None, false, None, false, None)
+            (None, resume, None, None, false, None, false, None, false)
         }
         Cmd::Talk { model, log_level, prompt, thinking, effort } => {
-            (model, ResumeOpt::None, log_level, None, true, prompt, thinking, effort)
+            (model, ResumeOpt::None, log_level, None, true, prompt, thinking, effort, false)
         }
         _ => unreachable!(),
     };
@@ -388,6 +389,18 @@ fn main() {
             interactive.cmd_tx().try_send(SessionCommand::SetEffortLevel { level: Some(effort) });
     }
 
+    // Apply --plan-mode before --prompt so the session is already in plan mode
+    // when the first prompt is processed. Also auto-detect planning intent in
+    // the --prompt text itself so `nerv --prompt "let's plan out X"` works
+    // without needing --plan-mode.
+    if let Some(ref text) = opt_prompt {
+        if opt_plan_mode || nerv::interactive::event_loop::has_planning_intent(text) {
+            let _ = interactive.cmd_tx().send(SessionCommand::SetPlanMode { enabled: true });
+        }
+    } else if opt_plan_mode {
+        let _ = interactive.cmd_tx().send(SessionCommand::SetPlanMode { enabled: true });
+    }
+
     // Apply --prompt: send as the initial user message once the TUI is up
     if let Some(text) = opt_prompt {
         let _ = interactive.cmd_tx().send(SessionCommand::Prompt { text });
@@ -548,6 +561,70 @@ fn main() {
                                         nerv::interactive::theme::ERROR
                                     };
                                     layout.chat.push_styled(style, &format!("  → {}", label));
+                                    tui.request_render(false); render_frame!(tui, layout);
+                                }
+                                continue;
+                            }
+
+                            // Plan-ready gate: after the model produces a plan, ask e/f/n before
+                            // resuming normal input.
+                            if interactive.pending_plan_ready {
+                                let accepted = if seq == b"e" || seq == b"E" {
+                                    // Execute: exit plan mode and let the agent proceed.
+                                    interactive.pending_plan_ready = false;
+                                    interactive.plan_mode = false;
+                                    let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::SetPlanMode { enabled: false });
+                                    interactive.status_message = None;
+                                    interactive.status_is_error = false;
+                                    push_status(&mut layout, "Executing plan…", false);
+                                    tui.request_render(false); render_frame!(tui, layout);
+                                    true
+                                } else if seq == b"f" || seq == b"F" {
+                                    // Follow-up: stay in plan mode, inject a follow-up prompt.
+                                    interactive.pending_plan_ready = false;
+                                    interactive.status_message = None;
+                                    interactive.status_is_error = false;
+                                    let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::PlanFollowUp);
+                                    tui.request_render(false); render_frame!(tui, layout);
+                                    true
+                                } else if seq == b"n" || seq == b"N" || keys::matches_key(seq, "escape") {
+                                    // Cancel: leave plan mode, discard.
+                                    interactive.pending_plan_ready = false;
+                                    interactive.plan_mode = false;
+                                    let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::SetPlanMode { enabled: false });
+                                    interactive.status_message = None;
+                                    interactive.status_is_error = false;
+                                    push_status(&mut layout, "Plan cancelled.", false);
+                                    interactive.refresh_footer(&mut layout.footer);
+                                    tui.request_render(false); render_frame!(tui, layout);
+                                    true
+                                } else {
+                                    false
+                                };
+                                if accepted {
+                                    interactive.refresh_footer(&mut layout.footer);
+                                }
+                                continue;
+                            }
+
+                            // Mid-session plan-mode confirm gate: stashed text waiting for y/n.
+                            if interactive.pending_plan_confirm_text.is_some() {
+                                if seq == b"y" || seq == b"Y" {
+                                    let text = interactive.pending_plan_confirm_text.take().unwrap();
+                                    interactive.plan_mode = true;
+                                    let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::SetPlanMode { enabled: true });
+                                    interactive.status_message = None;
+                                    interactive.status_is_error = false;
+                                    interactive.refresh_footer(&mut layout.footer);
+                                    // Send the stashed prompt.
+                                    let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::Prompt { text });
+                                    tui.request_render(false); render_frame!(tui, layout);
+                                } else if seq == b"n" || seq == b"N" || keys::matches_key(seq, "escape") {
+                                    let text = interactive.pending_plan_confirm_text.take().unwrap();
+                                    interactive.status_message = None;
+                                    interactive.status_is_error = false;
+                                    // Send as a normal (non-plan) prompt.
+                                    let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::Prompt { text });
                                     tui.request_render(false); render_frame!(tui, layout);
                                 }
                                 continue;
@@ -839,6 +916,7 @@ fn launch_picker(
         Session(String),
         Tree(TreeSelection),
         Model(String),
+        PlanAnswers(Vec<(String, String)>),
         None,
     }
 
@@ -877,6 +955,12 @@ fn launch_picker(
             let current = interactive.model_name().to_owned();
             let mut picker = nerv::interactive::model_picker::ModelPicker::new(models, current);
             run_fullscreen_picker(&mut picker).map(PickResult::Model).unwrap_or(PickResult::None)
+        }
+        PickerRequest::PlanInterview { questions, plan_path } => {
+            // Run the full-screen interview; returns answered (question, answer) pairs.
+            nerv::interactive::plan_interview::run_plan_interview(questions, &plan_path)
+                .map(PickResult::PlanAnswers)
+                .unwrap_or(PickResult::None)
         }
         // BtwOverlay and ToggleHud are handled above with early returns; these arms are
         // unreachable.
@@ -919,6 +1003,11 @@ fn launch_picker(
                     model_id: model_id.to_string(),
                 });
             }
+        }
+        PickResult::PlanAnswers(answers) => {
+            let _ = interactive
+                .cmd_tx()
+                .send(nerv::core::SessionCommand::PlanAnswers { answers });
         }
         PickResult::None => {}
     }
