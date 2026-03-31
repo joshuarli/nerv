@@ -38,15 +38,26 @@ impl ModelRegistry {
 
         // Resolve all three provider credentials in parallel — each previously
         // spawned a `security` subprocess (~32ms each, ~96ms total serial).
+        // Local provider discovery runs in the same window at no extra wall cost.
         let nd = nerv_dir.to_path_buf();
         let anthropic_h = std::thread::spawn(move || AuthStorage::load(&nd).resolve("anthropic"));
         let nd = nerv_dir.to_path_buf();
         let codex_h = std::thread::spawn(move || AuthStorage::load(&nd).resolve("codex"));
         let nd = nerv_dir.to_path_buf();
         let openrouter_h = std::thread::spawn(move || AuthStorage::load(&nd).resolve("openrouter"));
+        let local_discovery_handles: Vec<_> = config
+            .local_providers
+            .iter()
+            .map(|lp| {
+                let base_url = lp.base_url.clone();
+                std::thread::spawn(move || discover_local_models(&base_url))
+            })
+            .collect();
         let anthropic_cred = anthropic_h.join().unwrap_or(None);
         let codex_cred = codex_h.join().unwrap_or(None);
         let openrouter_cred = openrouter_h.join().unwrap_or(None);
+        let local_model_ids: Vec<Vec<String>> =
+            local_discovery_handles.into_iter().map(|h| h.join().unwrap_or_default()).collect();
 
         // Register Anthropic provider if auth is available.
         if let Some((api_key, is_oauth)) = anthropic_cred {
@@ -108,6 +119,33 @@ impl ModelRegistry {
                         cache_read: 0.0,
                         cache_write: 0.0,
                     },
+                });
+            }
+        }
+
+        // Register local providers (e.g. Ollama) with auto-discovered models.
+        for (local_cfg, model_ids) in config.local_providers.iter().zip(local_model_ids.iter()) {
+            if model_ids.is_empty() {
+                // Provider is offline or returned no models — skip silently.
+                continue;
+            }
+            let provider = OpenAICompatProvider::new(
+                local_cfg.name.clone(),
+                local_cfg.base_url.clone(),
+                local_cfg.api_key.clone(),
+            );
+            registry.register(&local_cfg.name, Arc::new(provider));
+            for model_id in model_ids {
+                custom.push(Model {
+                    id: model_id.clone(),
+                    name: model_id.clone(),
+                    provider_name: local_cfg.name.clone(),
+                    context_window: 32_000,
+                    max_output_tokens: 8_192,
+                    reasoning: false,
+                    supports_adaptive_thinking: false,
+                    supports_xhigh: false,
+                    pricing: ModelPricing::default_custom(),
                 });
             }
         }
@@ -207,6 +245,25 @@ impl ModelRegistry {
 
         Ok(())
     }
+}
+
+/// Query `{base_url}/models` (OpenAI-compat) and return discovered model IDs.
+/// Returns an empty vec if the provider is unreachable or returns an error.
+fn discover_local_models(base_url: &str) -> Vec<String> {
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_millis(500)))
+        .build()
+        .new_agent();
+    let Ok(resp) = agent.get(&url).call() else { return vec![] };
+    if resp.status() != 200 {
+        return vec![];
+    }
+    let Ok(json) = resp.into_body().read_json::<serde_json::Value>() else { return vec![] };
+    json["data"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect())
+        .unwrap_or_default()
 }
 
 fn builtin_anthropic_models() -> Vec<Model> {

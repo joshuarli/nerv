@@ -15,7 +15,9 @@ nerv
 /help
 ```
 
-**local models:**
+**local models (Ollama):** auto-discovered — just `ollama pull llama3.2`
+
+**local models (llama.cpp):** nerv manages the server lifecycle
 ```
 brew install llama.cpp
 nerv add unsloth/Qwen3.5-9B-GGUF Q4_K_XL

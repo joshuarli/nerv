@@ -1,13 +1,43 @@
 # Local models
 
-nerv can download and run GGUF models via llama-server.
+nerv supports two ways to use local models:
 
-## Workflow
+| | `models.json` + `nerv load` | `local_providers` in `config.json` |
+|---|---|---|
+| **Who manages the server?** | nerv (`exec` into llama-server) | You (Ollama, your own llama-server) |
+| **Model discovery** | Declared in `models.json` | Queried from `/v1/models` at startup |
+| **Hardware tuning** | Yes — context, GPU layers, KV cache | No — server decides |
+| **Use when** | You want nerv to own the llama-server lifecycle | You already run Ollama or a standalone server |
+
+## Ollama
+
+Ollama is auto-discovered by default. Just run Ollama and pull models:
+
+```
+ollama pull llama3.2
+nerv
+```
+
+nerv queries `http://localhost:11434/v1/models` at startup and registers whatever models are pulled. If Ollama is offline, it is silently skipped.
+
+To use a non-default host or port, edit `~/.nerv/config.json`:
+
+```jsonc
+{
+  "local_providers": [
+    { "name": "ollama", "base_url": "http://localhost:11434/v1" }
+  ]
+}
+```
+
+## llama.cpp (nerv-managed)
+
+### Workflow
 
 ```
 nerv add <hf-repo> <quant>   # download GGUF
-nerv load [alias]             # exec llama-server
-nerv                          # connect via /model add local
+nerv load [alias]             # exec into llama-server (separate terminal)
+nerv                          # model appears automatically
 ```
 
 ## Download
@@ -93,10 +123,7 @@ If no alias is given, loads the first model in `models.json`.
 
 ## Connecting
 
-Once llama-server is running, nerv connects via `/model add local`
-(which probes `http://localhost:1234/v1/models`). The connection is
-also attempted automatically on startup if a `local` provider is
-configured in `~/.nerv/config.json`.
+Models declared in `models.json` are registered as `local/{alias}` providers at startup regardless of whether llama-server is running. nerv will use whichever are healthy. No manual `/model add local` step is needed.
 
 ## Health checks
 

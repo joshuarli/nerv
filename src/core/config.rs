@@ -13,6 +13,11 @@ pub fn read_jsonc<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
 pub struct NervConfig {
     #[serde(default)]
     pub custom_providers: Vec<CustomProviderConfig>,
+    /// Locally-running providers (e.g. Ollama). Models are auto-discovered
+    /// from `{base_url}/models` at startup; offline providers are silently
+    /// skipped.
+    #[serde(default)]
+    pub local_providers: Vec<LocalProviderConfig>,
     pub default_model: Option<String>,
     pub default_thinking: Option<bool>,
     pub default_effort_level: Option<EffortLevel>,
@@ -38,6 +43,17 @@ pub struct CustomProviderConfig {
     pub base_url: String,
     pub api_key: Option<String>,
     pub models: Vec<CustomModelConfig>,
+}
+
+/// A locally-running provider (e.g. Ollama) whose available models are
+/// discovered at startup by querying `{base_url}/models`. No API key is
+/// required. Registration is non-fatal if the provider is offline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalProviderConfig {
+    pub name: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +87,11 @@ impl Default for NervConfig {
     fn default() -> Self {
         Self {
             custom_providers: Vec::new(),
+            local_providers: vec![LocalProviderConfig {
+                name: "ollama".into(),
+                base_url: "http://localhost:11434/v1".into(),
+                api_key: None,
+            }],
             default_model: None,
             default_thinking: Some(true),
             default_effort_level: Some(EffortLevel::Medium),
