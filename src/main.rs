@@ -259,6 +259,10 @@ fn main() {
     // Clone compact_threshold_arc so the main thread can write it directly for
     // immediate effect without waiting for SetCompactThreshold through cmd_tx.
     let compact_threshold_arc = session.compaction.threshold_pct.clone();
+    // One AllowedDirs instance shared by both the session thread (permission gate)
+    // and the main thread (UI). Constructed here so both sides hold the same Arc.
+    let allowed_dirs = AllowedDirs::default();
+    session.allowed_dirs = allowed_dirs.clone();
     // Clone the provider_registry Arc so the main thread can make /btw overlay
     // calls.
     let provider_registry = session.agent.provider_registry.clone();
@@ -356,6 +360,7 @@ fn main() {
     interactive.cancel_flag = cancel_flag.clone();
     interactive.midturn_inject = b.midturn_inject;
     interactive.compact_threshold_arc = compact_threshold_arc;
+    interactive.allowed_dirs = allowed_dirs;
 
     layout.editor.set_completions(interactive.slash_completions());
 

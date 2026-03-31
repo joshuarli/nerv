@@ -14,7 +14,7 @@ pub mod system_prompt;
 pub mod tool_registry;
 
 pub use agent_session::{
-    AgentSession, AgentSessionEvent, CompactionReason, SessionCommand,
+    AgentSession, AgentSessionEvent, AllowedDirs, CompactionReason, SessionCommand,
 };
 pub use compaction_controller::CompactionController;
 pub use config::NervConfig;
