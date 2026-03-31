@@ -539,6 +539,45 @@ function toggleTool(header) {
         }
     }
 
+    // Build a map of MessageEntry id → (context_used, delta_from_prev) so we
+    // can show how many tokens each exchange added to the context window.
+    // Delta resets to None after a compaction.
+    let mut entry_ctx_delta: std::collections::HashMap<&str, i64> =
+        std::collections::HashMap::new();
+    {
+        let mut prev_ctx: Option<u32> = None;
+        let mut reset_next = false;
+        for entry in entries {
+            match entry {
+                SessionEntry::Message(me) => {
+                    if let AgentMessage::Assistant(_) = &me.message {
+                        if let Some(tok) = &me.tokens {
+                            if tok.context_used > 0 {
+                                if !reset_next {
+                                    if let Some(prev) = prev_ctx {
+                                        entry_ctx_delta.insert(
+                                            me.id.as_str(),
+                                            tok.context_used as i64 - prev as i64,
+                                        );
+                                    }
+                                }
+                                prev_ctx = Some(tok.context_used);
+                                reset_next = false;
+                            }
+                        }
+                    }
+                }
+                SessionEntry::Compaction(_) => {
+                    // After compaction, skip the delta on the first post-compaction
+                    // turn (the drop is shown on the compaction banner instead).
+                    reset_next = true;
+                    prev_ctx = None;
+                }
+                _ => {}
+            }
+        }
+    }
+
     // Build a map of compaction entry id → first post-compaction context_used,
     // so the banner can show the actual vs estimated tokens_after.
     let mut compaction_actual_ctx: std::collections::HashMap<&str, u32> =
@@ -816,6 +855,12 @@ function toggleTool(header) {
                             " · {}/{} context",
                             tok.context_used, tok.context_window
                         ));
+                        if let Some(&delta) = entry_ctx_delta.get(me.id.as_str()) {
+                            let sign = if delta >= 0 { "+" } else { "" };
+                            meta.push_str(&format!(
+                                " <span style='color:#ef4444'>({sign}{delta})</span>",
+                            ));
+                        }
                         html.push_str(&format!("<div class='meta'>{}</div>", meta));
                     }
                     html.push_str("</div>\n");

@@ -156,6 +156,8 @@ pub struct CompactionResult {
     pub tokens_before: u32,
     pub tokens_after: u32,
     pub model_id: String,
+    /// DB entry id of the compaction row, for retroactive tokens_after update.
+    pub entry_id: String,
 }
 
 #[cfg(test)]
