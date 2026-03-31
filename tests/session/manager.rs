@@ -156,7 +156,15 @@ fn compaction_preserves_messages_after_cut_point() {
     }
 
     let entry7_id = mgr.entries()[7].id().to_string();
-    mgr.append_compaction("summary of 0-6".into(), entry7_id, 3000, 0, String::new(), 0.0, vec![]).unwrap();
+    mgr.append_compaction(nerv::session::types::CompactionRecord {
+        summary: "summary of 0-6".into(),
+        first_kept_entry_id: entry7_id,
+        tokens_before: 3000,
+        tokens_after: 0,
+        model_id: String::new(),
+        cost_usd_before: 0.0,
+        archived_messages: vec![],
+    }).unwrap();
 
     let ctx = mgr.build_session_context();
     // compaction summary + msgs 7,8,9 = 4
@@ -179,7 +187,15 @@ fn compaction_survives_reload() {
     }
 
     let entry5_id = mgr.entries()[5].id().to_string();
-    mgr.append_compaction("summary".into(), entry5_id, 2000, 0, String::new(), 0.0, vec![]).unwrap();
+    mgr.append_compaction(nerv::session::types::CompactionRecord {
+        summary: "summary".into(),
+        first_kept_entry_id: entry5_id,
+        tokens_before: 2000,
+        tokens_after: 0,
+        model_id: String::new(),
+        cost_usd_before: 0.0,
+        archived_messages: vec![],
+    }).unwrap();
 
     let session_id = mgr.session_id().to_string();
     let ctx = mgr.load_session(&session_id).unwrap();
@@ -205,7 +221,15 @@ fn compaction_with_tool_calls_across_boundary() {
     mgr.append_message(&assistant_msg("here it is"), None).unwrap();
 
     let cut_id = mgr.entries()[kept_id_entry].id().to_string();
-    mgr.append_compaction("old conversation summary".into(), cut_id, 1000, 0, String::new(), 0.0, vec![]).unwrap();
+    mgr.append_compaction(nerv::session::types::CompactionRecord {
+        summary: "old conversation summary".into(),
+        first_kept_entry_id: cut_id,
+        tokens_before: 1000,
+        tokens_after: 0,
+        model_id: String::new(),
+        cost_usd_before: 0.0,
+        archived_messages: vec![],
+    }).unwrap();
 
     let ctx = mgr.build_session_context();
     assert_eq!(ctx.messages.len(), 5);
@@ -409,7 +433,15 @@ fn compaction_only_removes_current_branch_entries() {
     // Re-enter branch A
     mgr.branch(&branch_a_keep_id);
     // Compact branch A: remove entries before branch_a_keep_id
-    mgr.append_compaction("summary of A".into(), branch_a_keep_id.clone(), 500, 0, String::new(), 0.0, vec![]).unwrap();
+    mgr.append_compaction(nerv::session::types::CompactionRecord {
+        summary: "summary of A".into(),
+        first_kept_entry_id: branch_a_keep_id.clone(),
+        tokens_before: 500,
+        tokens_after: 0,
+        model_id: String::new(),
+        cost_usd_before: 0.0,
+        archived_messages: vec![],
+    }).unwrap();
 
     // Branch B sentinel should still be in the DB
     let all_entries = mgr.entries();
@@ -435,7 +467,15 @@ fn compaction_removes_pre_cut_entries_on_current_branch() {
 
     // Cut at entry index 3 (keep entries 3,4,5)
     let cut_id = mgr.get_branch()[3].id().to_string();
-    mgr.append_compaction("summary".into(), cut_id, 1000, 0, String::new(), 0.0, vec![]).unwrap();
+    mgr.append_compaction(nerv::session::types::CompactionRecord {
+        summary: "summary".into(),
+        first_kept_entry_id: cut_id,
+        tokens_before: 1000,
+        tokens_after: 0,
+        model_id: String::new(),
+        cost_usd_before: 0.0,
+        archived_messages: vec![],
+    }).unwrap();
 
     let ctx = mgr.build_session_context();
     // summary + 3 kept messages
@@ -731,7 +771,15 @@ fn compaction_removes_fts_entries() {
 
     // Compact away the first message (entry 0), keeping from entry 1
     let kept_id = mgr.entries()[1].id().to_string();
-    mgr.append_compaction("summary".into(), kept_id, 1000, 0, String::new(), 0.0, vec![]).unwrap();
+    mgr.append_compaction(nerv::session::types::CompactionRecord {
+        summary: "summary".into(),
+        first_kept_entry_id: kept_id,
+        tokens_before: 1000,
+        tokens_after: 0,
+        model_id: String::new(),
+        cost_usd_before: 0.0,
+        archived_messages: vec![],
+    }).unwrap();
 
     // The compacted message's text should be gone from search
     let results = mgr.search_sessions("garblotz");

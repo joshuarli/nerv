@@ -127,17 +127,16 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
                     session.agent.provider_registry.write().unwrap().register("codex", provider);
 
                     // Default to the first available codex model if none is set.
-                    if session.agent.state.model.is_none() {
-                        if let Some(model) = session
+                    if session.agent.state.model.is_none()
+                        && let Some(model) = session
                             .model_registry
                             .all_models()
                             .into_iter()
                             .find(|m| m.provider_name == "codex")
                             .cloned()
-                        {
-                            session.agent.set_model(Some(model.clone()));
-                            let _ = event_tx.send(AgentSessionEvent::ModelChanged { model });
-                        }
+                    {
+                        session.agent.set_model(Some(model.clone()));
+                        let _ = event_tx.send(AgentSessionEvent::ModelChanged { model });
                     }
 
                     let mut msg = String::from("Logged in to Codex.\n\nAvailable models:");

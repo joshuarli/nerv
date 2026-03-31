@@ -305,6 +305,9 @@ fn stream_btw(
     let mut agent = Agent::new(provider_registry);
     // Strip tool_use/tool_result blocks so the API call is valid without tools.
     agent.state.messages = strip_tool_content(messages);
+    // Direct assignment is safe here: this is a freshly constructed single-shot
+    // Agent for the /btw overlay. `prev_estimated_tokens` is 0 and will remain
+    // so; the context gate won't fire on a one-call agent.
     agent.state.model = Some(model);
     agent.state.system_prompt = BTW_SYSTEM_PROMPT.into();
     agent.cancel = cancel;

@@ -312,7 +312,7 @@ impl Provider for OpenAICompatProvider {
                 };
                 usage.output = u.completion_tokens;
                 usage.cache_read = chunk.timings.cache_n;
-                on_event(ProviderEvent::UsageUpdate(usage.clone()));
+                on_event(ProviderEvent::UsageUpdate(usage));
             }
             let Some(choice) = chunk.choices.into_iter().next() else {
                 // Usage-only chunk (no choices) — keep going to get [DONE].

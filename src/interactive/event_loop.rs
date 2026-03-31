@@ -121,6 +121,7 @@ pub struct InteractiveMode {
 }
 
 impl InteractiveMode {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cmd_tx: channel::Sender<SessionCommand>,
         model_registry: Arc<ModelRegistry>,
@@ -709,7 +710,7 @@ impl InteractiveMode {
 
                 // Output tokens: use API value if available, otherwise chars/4 heuristic (local
                 // models)
-                let raw = message.usage.clone().unwrap_or_default();
+                let raw = message.usage.unwrap_or_default();
                 let output_tokens = if raw.output > 0 {
                     raw.output
                 } else {

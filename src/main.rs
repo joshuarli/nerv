@@ -649,8 +649,8 @@ fn main() {
                             {
                                 if let Some(panel) = layout.btw_panel.take() {
                                     // Save to session if the call completed.
-                                    if panel.done && !panel.response().is_empty() {
-                                        if let Some(model) = interactive.current_model() {
+                                    if panel.done && !panel.response().is_empty()
+                                        && let Some(model) = interactive.current_model() {
                                             let _ = interactive.cmd_tx().try_send(
                                                 nerv::core::SessionCommand::RecordBtw {
                                                     note: panel.note.clone(),
@@ -659,16 +659,15 @@ fn main() {
                                                 },
                                             );
                                         }
-                                    }
                                     panel.cancel();
                                 }
                                 tui.request_render(false); render_frame!(tui, layout);
                                 continue;
                             }
                             // Copy btw response to clipboard.
-                            if layout.btw_panel.is_some() && seq == b"c" {
-                                if let Some(panel) = &layout.btw_panel {
-                                    if panel.done {
+                            if layout.btw_panel.is_some() && seq == b"c"
+                                && let Some(panel) = &layout.btw_panel
+                                    && panel.done {
                                         let text = panel.response().to_string();
                                         match nerv::interactive::event_loop::copy_to_clipboard(&text) {
                                             Ok(()) => push_status(&mut layout, "Copied btw response.", false),
@@ -677,8 +676,6 @@ fn main() {
                                         tui.request_render(false); render_frame!(tui, layout);
                                         continue;
                                     }
-                                }
-                            }
                             // Scroll the btw panel.
                             if let Some(panel) = &mut layout.btw_panel {
                                 let cols = tui.width();
@@ -1285,8 +1282,8 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
                         if let Some(ref model) = model_ref {
                             m.cost.add_usage(usage, &model.pricing);
                         }
-                        m.last_usage = Some(usage.clone());
-                        m.usages.push(usage.clone());
+                        m.last_usage = Some(*usage);
+                        m.usages.push(*usage);
                     }
                 }
                 AgentEvent::Retrying { attempt, wait_secs, reason } if m.verbose => {

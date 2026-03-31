@@ -234,6 +234,7 @@ fn builtin_anthropic_models() -> Vec<Model> {
 }
 
 fn builtin_codex_models() -> Vec<Model> {
+    #[allow(clippy::too_many_arguments)]
     fn m(id: &str, name: &str, ctx: u32, max_out: u32, reasoning: bool, inp: f64, out: f64, cr: f64) -> Model {
         Model {
             id: id.into(),

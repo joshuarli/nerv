@@ -6,7 +6,7 @@
 //! skips with Tab, and submits all answers with Ctrl+D.
 
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -79,7 +79,7 @@ impl QuestionState {
 /// or `None` if the user cancelled with Ctrl+C / Escape.
 pub fn run_plan_interview(
     questions: Vec<PlanQuestion>,
-    plan_path: &PathBuf,
+    plan_path: &Path,
 ) -> Option<Vec<(String, String)>> {
     if questions.is_empty() {
         return Some(Vec::new());
@@ -88,7 +88,7 @@ pub fn run_plan_interview(
     let mut states: Vec<QuestionState> =
         questions.into_iter().map(QuestionState::new).collect();
     let total = states.len();
-    let mut current = 0usize;
+    let current = 0usize;
 
     // Enter alt-screen
     let stdout = io::stdout();
@@ -110,11 +110,11 @@ pub fn run_plan_interview(
 }
 
 fn interview_loop(
-    states: &mut Vec<QuestionState>,
+    states: &mut [QuestionState],
     total: usize,
     mut current: usize,
     out: &mut impl Write,
-    plan_path: &PathBuf,
+    plan_path: &Path,
     sigwinch: &AtomicBool,
 ) -> Option<Vec<(String, String)>> {
     render_question(states, current, total, plan_path, out);
@@ -187,7 +187,7 @@ fn interview_loop(
                 // Printable chars
                 _ => {
                     for &b in bytes {
-                        if b >= 0x20 && b < 0x7f {
+                        if (0x20..0x7f).contains(&b) {
                             st.custom_text.push(b as char);
                         }
                     }
@@ -200,9 +200,7 @@ fn interview_loop(
 
                 // Up arrow
                 b"\x1b[A" => {
-                    if states[current].cursor > 0 {
-                        states[current].cursor -= 1;
-                    }
+                    states[current].cursor = states[current].cursor.saturating_sub(1);
                 }
 
                 // Down arrow
@@ -215,9 +213,7 @@ fn interview_loop(
 
                 // Left arrow — go back one question
                 b"\x1b[D" => {
-                    if current > 0 {
-                        current -= 1;
-                    }
+                    current = current.saturating_sub(1);
                 }
 
                 // Tab — skip this question
@@ -261,7 +257,7 @@ fn interview_loop(
 /// Advance to the next unanswered question. Returns `Some(answers)` when all
 /// questions are answered (caller should return it), or `None` to continue.
 fn advance(
-    states: &mut Vec<QuestionState>,
+    states: &mut [QuestionState],
     current: &mut usize,
     total: usize,
 ) -> Option<Option<Vec<(String, String)>>> {
@@ -287,7 +283,7 @@ fn render_question(
     states: &[QuestionState],
     current: usize,
     total: usize,
-    plan_path: &PathBuf,
+    plan_path: &Path,
     out: &mut impl Write,
 ) {
     let (cols, rows) = terminal_size();

@@ -104,7 +104,6 @@ pub fn print_top_help() {
 }
 
 /// Parse CLI args with lexopt. Returns the resolved Cmd or exits on error.
-
 pub fn parse_args() -> Cmd {
     use lexopt::prelude::*;
 
@@ -113,7 +112,6 @@ pub fn parse_args() -> Cmd {
     // Peek at the first positional to route subcommands.
     // lexopt doesn't have lookahead, so we collect args into a command.
     let mut model: Option<String> = None;
-    let resume = ResumeOpt::None;
     let mut log_level: Option<String> = None;
     let _wt: Option<String> = None;
 
@@ -275,13 +273,13 @@ pub fn parse_args() -> Cmd {
                     }
                 }
             }
-            return Cmd::Talk {
+            Cmd::Talk {
                 model: talk_model,
                 log_level: talk_log,
                 prompt: talk_prompt,
                 thinking: talk_thinking,
                 effort: talk_effort,
-            };
+            }
         }
         Value(v) if v == "resume" => {
             // resume [-h] [id]
@@ -296,9 +294,9 @@ pub fn parse_args() -> Cmd {
                     std::process::exit(0);
                 }
                 Ok(Some(Value(id))) => {
-                    return Cmd::Resume { id: Some(id.string().unwrap()) };
+                    Cmd::Resume { id: Some(id.string().unwrap()) }
                 }
-                Ok(None) => return Cmd::Resume { id: None },
+                Ok(None) => Cmd::Resume { id: None },
                 Ok(Some(arg)) => {
                     eprintln!("nerv resume: unexpected argument '{}'", arg.unexpected());
                     std::process::exit(1);
@@ -369,7 +367,7 @@ pub fn parse_args() -> Cmd {
                     }
                 }
             }
-            return Cmd::Print { model: p_model, max_turns, verbose };
+            Cmd::Print { model: p_model, max_turns, verbose }
         }
         Value(v) if v == "wt" => {
             // wt [-h] <branch> [--model M] [--log-level L] [--prompt P] [--thinking]
@@ -475,7 +473,7 @@ pub fn parse_args() -> Cmd {
                 eprintln!("nerv wt: branch name required. Try: nerv wt --help");
                 std::process::exit(1);
             });
-            return Cmd::Wt {
+            Cmd::Wt {
                 branch,
                 model: wt_model,
                 log_level: wt_log,
@@ -483,7 +481,7 @@ pub fn parse_args() -> Cmd {
                 thinking: wt_thinking,
                 effort: wt_effort,
                 plan_mode: wt_plan_mode,
-            };
+            }
         }
         Value(v) if v == "models" => {
             if matches!(parser.next(), Ok(Some(Short('h') | Long("help")))) {
@@ -492,7 +490,7 @@ pub fn parse_args() -> Cmd {
                 println!("List all configured models and their online status.");
                 std::process::exit(0);
             }
-            return Cmd::Models;
+            Cmd::Models
         }
         Value(v) if v == "export" => match parser.next() {
             Ok(Some(Short('h') | Long("help"))) => {
@@ -502,7 +500,7 @@ pub fn parse_args() -> Cmd {
                 std::process::exit(0);
             }
             Ok(Some(Value(id))) => {
-                return Cmd::Export { id: id.string().unwrap() };
+                Cmd::Export { id: id.string().unwrap() }
             }
             _ => {
                 eprintln!("Usage: nerv export <session-id>");
@@ -520,7 +518,7 @@ pub fn parse_args() -> Cmd {
                 println!("  quant     Quantization level (e.g. Q4_K_M)");
                 std::process::exit(0);
             }
-            return Cmd::Add { rest: remaining_strings(parser) };
+            Cmd::Add { rest: remaining_strings(parser) }
         }
         Value(v) if v == "load" => {
             if matches!(parser.clone().next(), Ok(Some(Short('h') | Long("help")))) {
@@ -530,7 +528,7 @@ pub fn parse_args() -> Cmd {
                 println!("Replaces this process via exec — Ctrl+C to stop.");
                 std::process::exit(0);
             }
-            return Cmd::Load { rest: remaining_strings(parser) };
+            Cmd::Load { rest: remaining_strings(parser) }
         }
         Value(v) if v == "unload" => {
             if matches!(parser.next(), Ok(Some(Short('h') | Long("help")))) {
@@ -539,7 +537,7 @@ pub fn parse_args() -> Cmd {
                 println!("Stop the running llama-server (Ctrl+C the process directly).");
                 std::process::exit(0);
             }
-            return Cmd::Unload;
+            Cmd::Unload
         }
         Value(v) if v == "codemap" => {
             if matches!(parser.clone().next(), Ok(Some(Short('h') | Long("help")))) {
@@ -554,7 +552,7 @@ pub fn parse_args() -> Cmd {
                 println!("  --depth full|signatures  Output verbosity (default: full)");
                 std::process::exit(0);
             }
-            return Cmd::Codemap { rest: remaining_strings(parser) };
+            Cmd::Codemap { rest: remaining_strings(parser) }
         }
         Value(v) if v == "symbols" => {
             if matches!(parser.clone().next(), Ok(Some(Short('h') | Long("help")))) {
@@ -567,7 +565,7 @@ pub fn parse_args() -> Cmd {
                 println!("  --refs          Also show call sites via ripgrep");
                 std::process::exit(0);
             }
-            return Cmd::Symbols { rest: remaining_strings(parser) };
+            Cmd::Symbols { rest: remaining_strings(parser) }
         }
         Value(v) => {
             eprintln!("unknown command '{}'. Try: nerv --help", v.to_string_lossy());
@@ -579,13 +577,9 @@ pub fn parse_args() -> Cmd {
             std::process::exit(1);
         }
     }
-
-    // All interactive-mode flags were consumed in the leading-flags loop above.
-    Cmd::Interactive { model, resume, log_level, prompt, thinking, effort, plan_mode }
 }
 
 /// Parse an --effort flag value; exits on unrecognised input.
-
 pub fn parse_effort_level(s: &str) -> EffortLevel {
     match s {
         "low" => EffortLevel::Low,
@@ -616,7 +610,6 @@ pub fn remaining_strings(mut parser: lexopt::Parser) -> Vec<String> {
 }
 
 /// Outcome of the pre-TUI repository gate check.
-
 pub enum RepoGateResult {
     /// Proceed into normal TUI mode.
     Continue,

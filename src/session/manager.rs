@@ -296,17 +296,21 @@ impl SessionManager {
 
     pub fn append_compaction(
         &mut self,
-        summary: String,
-        first_kept_entry_id: String,
-        tokens_before: u32,
-        tokens_after: u32,
-        model_id: String,
-        cost_usd_before: f64,
-        archived_messages: Vec<crate::agent::types::AgentMessage>,
+        record: CompactionRecord,
     ) -> anyhow::Result<()> {
         if self.session_id.is_none() {
             anyhow::bail!("no active session");
         }
+
+        let CompactionRecord {
+            summary,
+            first_kept_entry_id,
+            tokens_before,
+            tokens_after,
+            model_id,
+            cost_usd_before,
+            archived_messages,
+        } = record;
 
         // Collect the IDs of branch ancestors that fall before the cut point.
         // We only delete entries on the current branch (root → leaf), not siblings.

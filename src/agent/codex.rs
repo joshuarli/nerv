@@ -5,7 +5,7 @@
 //!   - Auth:      Bearer token + `chatgpt-account-id` extracted from the JWT
 //!   - Body:      `input` (not `messages`), system prompt in `instructions`
 //!   - SSE:       `response.output_text.delta`, `response.function_call_arguments.delta`,
-//!                `response.output_item.added/done`, `response.completed`, `response.failed`
+//!     `response.output_item.added/done`, `response.completed`, `response.failed`
 use std::io::BufRead;
 use std::sync::atomic::Ordering;
 
@@ -32,6 +32,7 @@ struct EvOutputItemDone {
 
 #[derive(Deserialize)]
 struct EvTextDelta {
+    #[allow(dead_code)]
     output_index: usize,
     delta: String,
 }
@@ -55,7 +56,7 @@ enum OutputItem {
 #[serde(tag = "type")]
 enum OutputItemDone {
     #[serde(rename = "function_call")]
-    FunctionCall { index: usize },
+    FunctionCall { #[allow(dead_code)] index: usize },
     #[serde(other)]
     Other,
 }
@@ -335,37 +336,37 @@ impl Provider for CodexProvider {
 
             match event_type {
                 "response.output_item.added" => {
-                    if let Ok(ev) = serde_json::from_value::<EvOutputItemAdded>(raw) {
-                        if let OutputItem::FunctionCall { index, call_id, name } = ev.item {
-                            pending_fn = Some((index, call_id.clone()));
-                            on_event(ProviderEvent::ToolCallStart { id: call_id, name });
-                        }
+                    if let Ok(ev) = serde_json::from_value::<EvOutputItemAdded>(raw)
+                        && let OutputItem::FunctionCall { index, call_id, name } = ev.item
+                    {
+                        pending_fn = Some((index, call_id.clone()));
+                        on_event(ProviderEvent::ToolCallStart { id: call_id, name });
                     }
                 }
                 "response.output_text.delta" => {
-                    if let Ok(ev) = serde_json::from_value::<EvTextDelta>(raw) {
-                        if !ev.delta.is_empty() {
-                            on_event(ProviderEvent::TextDelta(ev.delta));
-                        }
+                    if let Ok(ev) = serde_json::from_value::<EvTextDelta>(raw)
+                        && !ev.delta.is_empty()
+                    {
+                        on_event(ProviderEvent::TextDelta(ev.delta));
                     }
                 }
                 "response.function_call_arguments.delta" => {
-                    if let Ok(ev) = serde_json::from_value::<EvFnArgsDelta>(raw) {
-                        if !ev.delta.is_empty() {
-                            let id = pending_fn
-                                .as_ref()
-                                .filter(|(i, _)| *i == ev.output_index)
-                                .map(|(_, id)| id.clone())
-                                .unwrap_or_default();
-                            on_event(ProviderEvent::ToolCallArgsDelta { id, delta: ev.delta });
-                        }
+                    if let Ok(ev) = serde_json::from_value::<EvFnArgsDelta>(raw)
+                        && !ev.delta.is_empty()
+                    {
+                        let id = pending_fn
+                            .as_ref()
+                            .filter(|(i, _)| *i == ev.output_index)
+                            .map(|(_, id)| id.clone())
+                            .unwrap_or_default();
+                        on_event(ProviderEvent::ToolCallArgsDelta { id, delta: ev.delta });
                     }
                 }
                 "response.output_item.done" => {
-                    if let Ok(ev) = serde_json::from_value::<EvOutputItemDone>(raw) {
-                        if matches!(ev.item, OutputItemDone::FunctionCall { .. }) {
-                            pending_fn = None;
-                        }
+                    if let Ok(ev) = serde_json::from_value::<EvOutputItemDone>(raw)
+                        && matches!(ev.item, OutputItemDone::FunctionCall { .. })
+                    {
+                        pending_fn = None;
                     }
                 }
                 "response.completed" | "response.done" | "response.incomplete" => {
@@ -377,7 +378,7 @@ impl Provider for CodexProvider {
                             cache_read: u.input_tokens_details.cached_tokens,
                             cache_write: 0,
                         };
-                        on_event(ProviderEvent::UsageUpdate(usage.clone()));
+                        on_event(ProviderEvent::UsageUpdate(usage));
 
                         if let Some(err) = ev.response.error {
                             let msg = err.message.unwrap_or_else(|| "response failed".into());

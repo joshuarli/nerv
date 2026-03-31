@@ -13,11 +13,16 @@ pub struct Model {
     pub pricing: ModelPricing,
 }
 
+/// Per-token pricing for a model. All values are **USD per million tokens**.
 #[derive(Debug, Clone)]
 pub struct ModelPricing {
+    /// Cost of uncached input tokens (USD / 1 000 000 tokens).
     pub input: f64,
+    /// Cost of output tokens (USD / 1 000 000 tokens).
     pub output: f64,
+    /// Cost of cache-read input tokens (USD / 1 000 000 tokens).
     pub cache_read: f64,
+    /// Cost of cache-write input tokens (USD / 1 000 000 tokens).
     pub cache_write: f64,
 }
 
@@ -218,6 +223,9 @@ impl StopReason {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Usage {
+    /// Total input tokens charged (includes `cache_read` and `cache_write`).
+    /// When computing uncached cost, subtract those fields to avoid
+    /// double-counting: `uncached = input - cache_read - cache_write`.
     pub input: u32,
     pub output: u32,
     pub cache_read: u32,

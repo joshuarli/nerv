@@ -358,6 +358,9 @@ fn stream_btw(
     // Use the exact same messages, system prompt, and tools as the main agent so
     // Anthropic's cache breakpoints match and the prefix is a cache hit.
     agent.state.messages = messages;
+    // Direct assignment is safe here: this is a freshly constructed single-shot
+    // Agent for the /btw panel. `prev_estimated_tokens` is 0; the context gate
+    // will not fire on a one-call agent.
     agent.state.model = Some(model);
     // Append the btw instruction to the existing system prompt rather than
     // replacing it — keeps the cached system prompt prefix identical.

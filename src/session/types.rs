@@ -130,6 +130,9 @@ pub struct ThinkingLevelChangeEntry {
     pub id: String,
     pub parent_id: Option<String>,
     pub timestamp: String,
+    /// Serialized `ThinkingLevel` value (e.g. `"off"`, `"on"`). Stored as a
+    /// plain string rather than the enum so that unknown future variants
+    /// survive round-trips through the session DB without breaking old clients.
     pub thinking_level: String,
 }
 
@@ -232,10 +235,25 @@ pub struct PermissionAcceptEntry {
     pub id: String,
     pub parent_id: Option<String>,
     pub timestamp: String,
-    /// Tool name (e.g., "bash", "write")
+    /// Tool name (e.g. `"bash"`, `"write"`).
     pub tool: String,
-    /// Arguments to the tool (serialized as JSON for consistency)
+    /// Tool arguments serialized as a JSON string. Used as a cache key — the
+    /// exact bytes must match the serialization produced at permission-check
+    /// time (`serde_json::to_string(args)`).  Do not pretty-print or
+    /// re-serialize; that would invalidate the cache lookup.
     pub args: String,
+}
+
+/// All data needed to record a compaction event in the session DB.
+/// Passed to `SessionManager::append_compaction` to keep the signature short.
+pub struct CompactionRecord {
+    pub summary: String,
+    pub first_kept_entry_id: String,
+    pub tokens_before: u32,
+    pub tokens_after: u32,
+    pub model_id: String,
+    pub cost_usd_before: f64,
+    pub archived_messages: Vec<crate::agent::types::AgentMessage>,
 }
 
 /// Per-session config overrides. Stored as a JSON blob in the sessions table.

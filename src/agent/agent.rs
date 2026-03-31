@@ -171,6 +171,11 @@ impl Agent {
         self.cancel.store(false, Ordering::Relaxed);
     }
 
+    /// Set the active model. Resets `prev_estimated_tokens` when the model
+    /// changes so the context-gate delta is computed correctly for the new
+    /// model's window. **Always use this method** rather than assigning to
+    /// `state.model` directly — the reset is a correctness invariant for the
+    /// circuit-breaker logic.
     pub fn set_model(&mut self, model: Option<Model>) {
         if self.state.model.as_ref().map(|m| &m.id) != model.as_ref().map(|m| &m.id) {
             self.prev_estimated_tokens = 0;
