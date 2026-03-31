@@ -297,7 +297,7 @@ impl SessionManager {
     pub fn append_compaction(
         &mut self,
         record: CompactionRecord,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<()> {
         if self.session_id.is_none() {
             anyhow::bail!("no active session");
         }
@@ -360,36 +360,12 @@ impl SessionManager {
             cost_usd_before,
             archived_messages,
         });
-        let entry_id = match &entry {
-            SessionEntry::Compaction(ce) => ce.id.clone(),
-            _ => unreachable!(),
-        };
         self.append_entry(entry)?;
 
         // Reload in-memory cache
         self.reload_entries()?;
 
-        Ok(entry_id)
-    }
-
-    /// Update a compaction entry's tokens_after with the real context_used
-    /// from the first post-compaction API response.
-    pub fn confirm_compaction_tokens(&mut self, entry_id: &str, real_tokens_after: u32) {
-        // Update in-memory entry
-        for e in self.entries.iter_mut() {
-            if let SessionEntry::Compaction(ce) = e {
-                if ce.id == entry_id {
-                    ce.tokens_after = real_tokens_after;
-                    break;
-                }
-            }
-        }
-        // Update DB
-        let data_patch = serde_json::json!({ "tokens_after": real_tokens_after });
-        let _ = self.db.execute(
-            "UPDATE entries SET data = json_patch(data, ?1) WHERE id = ?2",
-            rusqlite::params![data_patch.to_string(), entry_id],
-        );
+        Ok(())
     }
 
     pub fn append_model_change(&mut self, provider: &str, model_id: &str) -> anyhow::Result<()> {

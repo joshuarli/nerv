@@ -302,9 +302,6 @@ pub struct AgentSession {
     pub(crate) worktree: Option<PathBuf>,
     /// Plan mode: restrict tools to read-only, steer model toward planning.
     plan_mode: bool,
-    /// Entry id of the most recent compaction, pending confirmation of its
-    /// tokens_after from the first real post-compaction API response.
-    pending_compaction_confirm: Option<String>,
     /// Path of the plan file for the current plan-mode session.
     pub plan_path: Option<PathBuf>,
     /// Current phase of the plan-mode state machine.
@@ -342,7 +339,6 @@ impl AgentSession {
             cwd,
             session_cost: Cost::default(),
             last_input_tokens: 0,
-            pending_compaction_confirm: None,
             permissions_enabled: false,
             permission_cache: Arc::new(std::sync::Mutex::new(HashSet::new())),
             allowed_dirs: AllowedDirs::default(),
@@ -971,7 +967,6 @@ impl AgentSession {
             ref mut session_manager,
             ref mut session_cost,
             ref mut last_input_tokens,
-            ref mut pending_compaction_confirm,
             ..
         } = *self;
 
@@ -1008,17 +1003,7 @@ impl AgentSession {
             } else {
                 None
             };
-            let _ = session_manager.append_message(msg, tokens.clone());
-
-            // If a compaction just ran, confirm its tokens_after with the
-            // real context_used from the first post-compaction API response.
-            if let Some(ref cid) = pending_compaction_confirm.take() {
-                if let Some(ref tok) = tokens {
-                    if tok.context_used > 0 {
-                        session_manager.confirm_compaction_tokens(cid, tok.context_used);
-                    }
-                }
-            }
+            let _ = session_manager.append_message(msg, tokens);
 
             if let AgentMessage::Assistant(assistant) = msg
                 && let Some(ref usage) = assistant.usage
@@ -1225,7 +1210,7 @@ impl AgentSession {
                     &summary,
                     &branch[cut.verbatim_start_index..],
                 );
-                let entry_id = self.session_manager.append_compaction(
+                let _ = self.session_manager.append_compaction(
                     crate::session::types::CompactionRecord {
                         summary: summary.clone(),
                         first_kept_entry_id: first_kept_id.clone(),
@@ -1235,7 +1220,7 @@ impl AgentSession {
                         cost_usd_before: self.session_cost.total,
                         archived_messages,
                     },
-                ).unwrap_or_default();
+                );
                 // Fire onCompactionDone hooks (fire-and-forget).
                 super::notifications::fire(
                     super::notifications::NotificationMatcher::OnCompactionDone,
@@ -1247,7 +1232,6 @@ impl AgentSession {
                     tokens_before,
                     tokens_after,
                     model_id,
-                    entry_id,
                 }))
             }
             Err(e) => {
