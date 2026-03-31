@@ -911,12 +911,12 @@ impl AgentSession {
                     Use the write tool for this — it is the only file you may write to.\n\
                  3. Identify 2–4 specific, targeted questions that would meaningfully improve \
                     the plan. For each question provide 2–4 concrete options. Each option must \
-                    include a one-line tradeoff note and a recommendation flag.\n\
+                    include a non-empty `subtext` (tradeoffs + reason why if recommended) and a `recommended` flag.\
                  4. **Your response MUST end with a raw JSON object on its own line, no fences:**\n\n\
                  {{\"questions\":[{{\"q\":\"<question>\",\"options\":[{{\"label\":\"<opt>\",\"subtext\":\"<tradeoff>\",\"recommended\":false}}, ...]}}]}}\n\n\
                  Rules:\n\
                  - Output the JSON as the **very last line** of your response — raw, no markdown fences, no trailing text.\n\
-                 - Each option must be an object with `label` (short choice text), `subtext` (one concise sentence on tradeoffs), and `recommended` (true for the one you'd pick, false otherwise). Mark exactly one option per question as recommended.\n\
+                 - Each option must have `label` (short choice text), `subtext` (one or two sentences explaining the tradeoffs — and if this option is recommended, explicitly why you recommend it), and `recommended` (true for exactly one option per question, false for the rest). Every option, including the recommended one, must have a non-empty `subtext`.\
                  - Provide 2–4 options per question. Do NOT include an 'other' option — that is \
                     added automatically.\n\
                  - When you have enough information to finalize the plan (after a round of \

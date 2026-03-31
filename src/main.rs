@@ -616,14 +616,14 @@ fn main() {
                                     interactive.status_message = None;
                                     interactive.status_is_error = false;
                                     interactive.refresh_footer(&mut layout.footer);
-                                    // Send the stashed prompt.
+                                    layout.chat.push_user(&text);
                                     let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::Prompt { text });
                                     tui.request_render(false); render_frame!(tui, layout);
                                 } else if seq == b"n" || seq == b"N" || keys::matches_key(seq, "escape") {
                                     let text = interactive.pending_plan_confirm_text.take().unwrap();
                                     interactive.status_message = None;
                                     interactive.status_is_error = false;
-                                    // Send as a normal (non-plan) prompt.
+                                    layout.chat.push_user(&text);
                                     let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::Prompt { text });
                                     tui.request_render(false); render_frame!(tui, layout);
                                 }
@@ -917,6 +917,7 @@ fn launch_picker(
         Tree(TreeSelection),
         Model(String),
         PlanAnswers(Vec<(String, String)>),
+        PlanInterviewCancelled,
         None,
     }
 
@@ -958,9 +959,17 @@ fn launch_picker(
         }
         PickerRequest::PlanInterview { questions, plan_path } => {
             // Run the full-screen interview; returns answered (question, answer) pairs.
-            nerv::interactive::plan_interview::run_plan_interview(questions, &plan_path)
-                .map(PickResult::PlanAnswers)
-                .unwrap_or(PickResult::None)
+            match nerv::interactive::plan_interview::run_plan_interview(questions.clone(), &plan_path) {
+                Some(answers) => PickResult::PlanAnswers(answers),
+                None => {
+                    // User cancelled (Ctrl+C / Escape). Stash so /interview can re-open.
+                    interactive.pending_interview = Some(PickerRequest::PlanInterview {
+                        questions,
+                        plan_path,
+                    });
+                    PickResult::PlanInterviewCancelled
+                }
+            }
         }
         // BtwOverlay and ToggleHud are handled above with early returns; these arms are
         // unreachable.
@@ -1008,6 +1017,12 @@ fn launch_picker(
             let _ = interactive
                 .cmd_tx()
                 .send(nerv::core::SessionCommand::PlanAnswers { answers });
+        }
+        PickResult::PlanInterviewCancelled => {
+            layout.chat.push_styled(
+                nerv::interactive::theme::DIM,
+                "  Interview exited — /interview to re-open",
+            );
         }
         PickResult::None => {}
     }

@@ -268,12 +268,9 @@ fn render_question(
     // Clear screen, home cursor
     buf.push_str("\x1b[2J\x1b[H");
 
-    // Header bar
-    let plan_str = plan_path.display().to_string();
-    let header = format!("  Plan: {}", plan_str);
-    let header = truncate_to_cols(&header, cols);
-    buf.push_str("\x1b[1m");
-    buf.push_str(&header);
+    // Header bar — show full path, let the terminal scroll/wrap naturally.
+    buf.push_str("\x1b[1m  Plan: ");
+    buf.push_str(&plan_path.display().to_string());
     buf.push_str("\x1b[0m\r\n");
 
     // Divider
@@ -286,8 +283,8 @@ fn render_question(
     buf.push_str(&progress);
     buf.push_str("\x1b[0m\r\n\r\n");
 
-    // Question text (word-wrapped to cols-4, ANSI-aware)
-    let q_width = (cols as u16).saturating_sub(4);
+    // Question text — 2 char left indent + 4 char right pad.
+    let q_width = (cols as u16).saturating_sub(6);
     for line in wrap_text_with_ansi(&st.question.q, q_width) {
         buf.push_str("  ");
         buf.push_str(&line);
@@ -295,8 +292,10 @@ fn render_question(
     }
     buf.push_str("\r\n");
 
-    // Options
-    let opt_width = (cols as u16).saturating_sub(8); // indent 6 + 2 padding
+    // Options: label indent = 6 chars ("    ● "), subtext indent = 8 chars.
+    // Both get 4 char right pad baked into the wrap width.
+    let label_width = (cols as u16).saturating_sub(10); // 6 indent + 4 right pad
+    let subtext_width = (cols as u16).saturating_sub(12); // 8 indent + 4 right pad
     for (i, opt) in st.display_options.iter().enumerate() {
         let selected = i == st.cursor;
         let answered = st.answer.as_ref().map(|a| match a {
@@ -326,13 +325,9 @@ fn render_question(
             buf.push_str(&st.custom_text);
             buf.push('_'); // cursor
         } else {
-            // Label line — include ★ recommended badge inline
-            let badge = if plan_opt.map(|o| o.recommended).unwrap_or(false) {
-                " \x1b[0m\x1b[33m★ recommended\x1b[0m"
-            } else {
-                ""
-            };
-            buf.push_str(&format!("    {} {}{}", marker, opt, badge));
+            // Label line — badge moves to subtext area for proper wrapping.
+            let display_label = truncate_to_cols(opt, label_width as usize);
+            buf.push_str(&format!("    {} {}", marker, display_label));
 
             // Show already-typed custom text if set
             if is_custom_opt {
@@ -348,15 +343,28 @@ fn render_question(
 
         buf.push_str("\x1b[0m\r\n");
 
-        // Subtext line — only for structured options that have it
+        // Subtext + recommended badge — word-wrapped, rendered for all structured opts.
         if let Some(po) = plan_opt {
-            if !po.subtext.is_empty() {
-                let subtext_color = if selected { "\x1b[36m" } else { "\x1b[2m" };
-                buf.push_str(subtext_color);
-                for line in wrap_text_with_ansi(&po.subtext, opt_width) {
-                    buf.push_str(&format!("        {}\r\n", line));
+            // Prepend color so wrap_text_with_ansi carries it across wrapped lines.
+            let subtext_color = if selected { "\x1b[36m" } else { "\x1b[38;5;245m" };
+            // Badge prefix: amber ★ recommended, then resume subtext color.
+            let badge = if po.recommended {
+                format!("\x1b[33m★ recommended\x1b[0m {} ", subtext_color)
+            } else {
+                String::new()
+            };
+            let subtext_str = if po.subtext.is_empty() && po.recommended {
+                // Fallback when model omitted subtext on recommended option.
+                format!("{}{}(recommended)", subtext_color, badge)
+            } else if !po.subtext.is_empty() || po.recommended {
+                format!("{}{}{}", subtext_color, badge, po.subtext)
+            } else {
+                String::new()
+            };
+            if !subtext_str.is_empty() {
+                for line in wrap_text_with_ansi(&subtext_str, subtext_width) {
+                    buf.push_str(&format!("        {}\x1b[0m\r\n", line));
                 }
-                buf.push_str("\x1b[0m");
             }
         }
     }

@@ -98,6 +98,8 @@ pub struct InteractiveMode {
     pub pending_plan_ready: bool,
     /// Mid-session plan-mode confirm: stashed text waiting for y/n.
     pub pending_plan_confirm_text: Option<String>,
+    /// Stashed interview request so `/interview` can re-open after a Ctrl+C.
+    pub pending_interview: Option<PickerRequest>,
     /// Current auto-compact threshold (0–100). Mirrors what was last sent to
     /// the session.
     pub compact_threshold: u8,
@@ -160,6 +162,7 @@ impl InteractiveMode {
             plan_path: None,
             pending_plan_ready: false,
             pending_plan_confirm_text: None,
+            pending_interview: None,
             compact_threshold: 50,
             allowed_dirs: AllowedDirs::default(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
@@ -1012,6 +1015,13 @@ impl InteractiveMode {
                 self.plan_mode = enabled;
                 let _ = self.cmd_tx.try_send(SessionCommand::SetPlanMode { enabled });
             }
+            "/interview" => {
+                if let Some(req) = self.pending_interview.take() {
+                    return Some(req);
+                } else {
+                    self.status_message = Some("No pending interview.".into());
+                }
+            }
             "/hud" => {
                 return Some(PickerRequest::ToggleHud);
             }
@@ -1217,6 +1227,7 @@ impl InteractiveMode {
             "/resume".into(),
             "/tree".into(),
             "/plan".into(),
+            "/interview".into(),
             "/hud".into(),
             "/btw".into(),
             "/fork".into(),
