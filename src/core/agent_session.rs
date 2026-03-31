@@ -261,6 +261,8 @@ pub enum SessionCommand {
     },
     /// User chose to dig deeper (f) — ask the model for more questions.
     PlanFollowUp,
+    /// Exit plan mode and immediately prompt the agent to implement the plan.
+    ExecutePlan,
     ForkSession,
     /// Persist the full input history for the current session.
     SaveInputHistory {
@@ -457,16 +459,15 @@ impl AgentSession {
         event_tx: &Sender<AgentSessionEvent>,
     ) {
         let plan_path = self.resolve_plan_path().display().to_string();
-        let mut text = format!(
-            "Here are my answers to your questions:\n\n"
-        );
-        for (i, (question, answer)) in answers.iter().enumerate() {
+        let mut text = String::from("Here are my answers:\n\n");
+        for (i, (_question, answer)) in answers.iter().enumerate() {
             if answer.is_empty() {
-                text.push_str(&format!("{}. {}\n   Answer: (no preference — use your judgment)\n\n", i + 1, question));
+                text.push_str(&format!("{}. (no preference — use your judgment)\n", i + 1));
             } else {
-                text.push_str(&format!("{}. {}\n   Answer: {}\n\n", i + 1, question, answer));
+                text.push_str(&format!("{}. {}\n", i + 1, answer));
             }
         }
+        text.push('\n');
         text.push_str(&format!(
             "Please update the plan file at `{}` with a refined version incorporating these answers. \
              Then either output a new questions JSON block if you need more clarification, or \

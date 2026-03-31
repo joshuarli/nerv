@@ -224,6 +224,18 @@ pub fn session_task(
             SessionCommand::PlanFollowUp => {
                 session.inject_plan_followup(&event_tx);
             }
+            SessionCommand::ExecutePlan => {
+                // Capture path before set_plan_mode clears it.
+                let plan_path = session.plan_path.clone();
+                session.set_plan_mode(false, &event_tx);
+                if let Some(path) = plan_path {
+                    let text = format!(
+                        "Implement the plan at `{}`. Work through it step by step.",
+                        path.display()
+                    );
+                    session.prompt(text, &event_tx);
+                }
+            }
             SessionCommand::ForkSession => match session.session_manager.fork_session() {
                 Ok(new_id) => {
                     let short =

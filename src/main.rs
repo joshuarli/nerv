@@ -573,7 +573,8 @@ fn main() {
                                     // Execute: exit plan mode and let the agent proceed.
                                     interactive.pending_plan_ready = false;
                                     interactive.plan_mode = false;
-                                    let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::SetPlanMode { enabled: false });
+                                    interactive.plan_path = None;
+                                    let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::ExecutePlan);
                                     interactive.status_message = None;
                                     interactive.status_is_error = false;
                                     push_status(&mut layout, "Executing plan…", false);
