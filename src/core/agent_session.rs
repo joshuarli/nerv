@@ -1183,22 +1183,11 @@ impl AgentSession {
             return Ok(None);
         }
 
-        let tokens_before =
-            to_summarize.iter().map(compaction::estimate_tokens).sum::<usize>() as u32;
-
-        // Estimate tokens remaining after compaction: the verbatim window that
-        // stays in the DB untouched. Display-only — not sent to any model.
-        let tokens_after = branch[cut.verbatim_start_index..]
-            .iter()
-            .filter_map(|e| {
-                if let crate::session::types::SessionEntry::Message(me) = e {
-                    Some(&me.message)
-                } else {
-                    None
-                }
-            })
-            .map(compaction::estimate_tokens)
-            .sum::<usize>() as u32;
+        // tokens_before: the actual context size at the moment compaction fires.
+        // Delegates to the helper which walks the branch in reverse for
+        // the most recent API-reported context_used, falling back to
+        // estimate_tokens sum when no usage data exists yet.
+        let tokens_before: u32 = compaction::tokens_before_compaction(&branch);
 
         // Archive the full branch (to_summarize + verbatim window) so the export
         // contains the complete pre-compaction transcript. The verbatim window
@@ -1217,6 +1206,11 @@ impl AgentSession {
 
         match generate_summary(&to_summarize, None, provider, &model_id, summarizer_context_window) {
             Ok(summary) => {
+                // Estimated context size after compaction: summary + verbatim window.
+                let tokens_after = compaction::tokens_after_compaction(
+                    &summary,
+                    &branch[cut.verbatim_start_index..],
+                );
                 let _ = self.session_manager.append_compaction(
                     crate::session::types::CompactionRecord {
                         summary: summary.clone(),

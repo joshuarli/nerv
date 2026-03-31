@@ -92,6 +92,56 @@ pub fn calculate_context_tokens(usage: &Usage) -> u32 {
     usage.input + usage.output + usage.cache_read + usage.cache_write
 }
 
+/// Find the true context size right before compaction fires.
+///
+/// Walks the branch in reverse to find the most recent assistant message whose
+/// `TokenInfo.context_used` is non-zero — that is the API-reported context the
+/// user sees in the footer. Falls back to summing `estimate_tokens` across all
+/// branch messages if no usage data exists (e.g. first turn not yet complete).
+pub fn tokens_before_compaction(branch: &[SessionEntry]) -> u32 {
+    branch
+        .iter()
+        .rev()
+        .find_map(|e| {
+            if let SessionEntry::Message(me) = e {
+                let info = me.tokens.as_ref()?;
+                if info.context_used > 0 { Some(info.context_used) } else { None }
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| {
+            branch
+                .iter()
+                .filter_map(|e| {
+                    if let SessionEntry::Message(me) = e {
+                        Some(estimate_tokens(&me.message) as u32)
+                    } else {
+                        None
+                    }
+                })
+                .sum()
+        })
+}
+
+/// Estimated context size after compaction: summary tokens + verbatim window tokens.
+///
+/// This represents what will actually be sent on the next API call — the
+/// replacement summary plus the unmodified verbatim window entries.
+pub fn tokens_after_compaction(summary: &str, verbatim_window: &[SessionEntry]) -> u32 {
+    let verbatim_tokens: u32 = verbatim_window
+        .iter()
+        .filter_map(|e| {
+            if let SessionEntry::Message(me) = e {
+                Some(estimate_tokens(&me.message) as u32)
+            } else {
+                None
+            }
+        })
+        .sum();
+    count_tokens(summary) as u32 + verbatim_tokens
+}
+
 pub fn should_compact(tokens: usize, context_window: u32, settings: &CompactionSettings) -> bool {
     if !settings.enabled {
         return false;
@@ -106,6 +156,206 @@ pub struct CompactionResult {
     pub tokens_before: u32,
     pub tokens_after: u32,
     pub model_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::types::{AgentMessage, AssistantMessage, ContentBlock, StopReason};
+    use crate::session::types::{MessageEntry, TokenInfo};
+
+    fn user_entry(text: &str, context_used: u32) -> SessionEntry {
+        SessionEntry::Message(MessageEntry {
+            id: "test".into(),
+            parent_id: None,
+            timestamp: String::new(),
+            message: AgentMessage::User {
+                content: vec![crate::agent::types::ContentItem::Text { text: text.to_string() }],
+                timestamp: 0,
+            },
+            tokens: if context_used > 0 {
+                Some(TokenInfo {
+                    input: context_used / 2,
+                    output: context_used / 2,
+                    cache_read: 0,
+                    cache_write: 0,
+                    context_used,
+                    context_window: 200_000,
+                    cost_usd: 0.0,
+                })
+            } else {
+                None
+            },
+        })
+    }
+
+    fn assistant_entry(text: &str, context_used: u32) -> SessionEntry {
+        SessionEntry::Message(MessageEntry {
+            id: "test".into(),
+            parent_id: None,
+            timestamp: String::new(),
+            message: AgentMessage::Assistant(AssistantMessage {
+                content: vec![ContentBlock::Text { text: text.to_string() }],
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+                timestamp: 0,
+            }),
+            tokens: if context_used > 0 {
+                Some(TokenInfo {
+                    input: context_used / 2,
+                    output: context_used / 2,
+                    cache_read: 0,
+                    cache_write: 0,
+                    context_used,
+                    context_window: 200_000,
+                    cost_usd: 0.0,
+                })
+            } else {
+                None
+            },
+        })
+    }
+
+    // tokens_before_compaction
+
+    #[test]
+    fn tokens_before_uses_last_context_used() {
+        // Simulates a resumed session: first message starts at 100k context
+        // because it carries over prior history.
+        let branch = vec![
+            user_entry("first prompt", 0),
+            assistant_entry("first reply", 100_477),
+            user_entry("second prompt", 0),
+            assistant_entry("second reply", 102_000),
+        ];
+        // Must pick the *last* assistant context_used (102_000), not estimate sums.
+        assert_eq!(tokens_before_compaction(&branch), 102_000);
+    }
+
+    #[test]
+    fn tokens_before_picks_most_recent_nonzero() {
+        // Only the first message has usage data — later ones don't.
+        let branch = vec![
+            assistant_entry("a", 85_301),
+            user_entry("b", 0),
+        ];
+        assert_eq!(tokens_before_compaction(&branch), 85_301);
+    }
+
+    #[test]
+    fn tokens_before_falls_back_to_estimate_when_no_usage() {
+        // No TokenInfo at all — must fall back to estimate_tokens sum.
+        let branch = vec![
+            user_entry("hello world", 0),
+            user_entry("another message", 0),
+        ];
+        let estimated: u32 = branch
+            .iter()
+            .filter_map(|e| {
+                if let SessionEntry::Message(me) = e {
+                    Some(estimate_tokens(&me.message) as u32)
+                } else {
+                    None
+                }
+            })
+            .sum();
+        assert!(estimated > 0);
+        assert_eq!(tokens_before_compaction(&branch), estimated);
+    }
+
+    #[test]
+    fn tokens_before_ignores_zero_context_used() {
+        // An aborted assistant message has context_used=0 and must not win.
+        let branch = vec![
+            assistant_entry("good reply", 80_000),
+            user_entry("follow up", 0),
+            // aborted assistant — context_used=0
+            SessionEntry::Message(MessageEntry {
+                id: "aborted".into(),
+                parent_id: None,
+                timestamp: String::new(),
+                message: AgentMessage::Assistant(AssistantMessage {
+                    content: vec![],
+                    stop_reason: StopReason::EndTurn,
+                    usage: None,
+                    timestamp: 0,
+                }),
+                tokens: Some(TokenInfo {
+                    input: 0,
+                    output: 0,
+                    cache_read: 0,
+                    cache_write: 0,
+                    context_used: 0,
+                    context_window: 200_000,
+                    cost_usd: 0.0,
+                }),
+            }),
+        ];
+        assert_eq!(tokens_before_compaction(&branch), 80_000);
+    }
+
+    // tokens_after_compaction
+
+    #[test]
+    fn tokens_after_includes_summary_and_verbatim() {
+        let summary = "a".repeat(400); // 400 chars / 4 = 100 tokens
+        let verbatim = vec![
+            user_entry("recent user message", 0),   // ~4 chars/4 + 4 overhead = ~5
+            assistant_entry("recent reply", 0),     // ~12 chars/4 + 4 overhead = ~7
+        ];
+        let result = tokens_after_compaction(&summary, &verbatim);
+        let summary_toks = count_tokens(&summary) as u32;
+        let verbatim_toks: u32 = verbatim
+            .iter()
+            .filter_map(|e| {
+                if let SessionEntry::Message(me) = e {
+                    Some(estimate_tokens(&me.message) as u32)
+                } else {
+                    None
+                }
+            })
+            .sum();
+        assert_eq!(result, summary_toks + verbatim_toks);
+    }
+
+    #[test]
+    fn tokens_after_degenerate_verbatim_still_counts_summary() {
+        // Old bug: when verbatim window = aborted message (4 tok), tokens_after
+        // was reported as 4. Now it must include the summary.
+        let summary = "a".repeat(2560); // ~640 tokens (typical compaction summary)
+        let aborted_verbatim = vec![SessionEntry::Message(MessageEntry {
+            id: "aborted".into(),
+            parent_id: None,
+            timestamp: String::new(),
+            message: AgentMessage::Assistant(AssistantMessage {
+                content: vec![],
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+                timestamp: 0,
+            }),
+            tokens: None,
+        })];
+        let result = tokens_after_compaction(&summary, &aborted_verbatim);
+        // Must be much more than 4 — summary alone is ~640 tokens
+        assert!(result > 100, "tokens_after was {result}, expected > 100 (summary not counted)");
+    }
+
+    #[test]
+    fn tokens_after_empty_verbatim_is_just_summary() {
+        let summary = "a".repeat(800); // 200 tokens
+        let result = tokens_after_compaction(&summary, &[]);
+        assert_eq!(result, count_tokens(&summary) as u32);
+    }
+
+    // count_tokens / estimate_tokens sanity
+
+    #[test]
+    fn count_tokens_div_ceil() {
+        assert_eq!(count_tokens("abcd"), 1);
+        assert_eq!(count_tokens("abcde"), 2);
+        assert_eq!(count_tokens(""), 0);
+        assert_eq!(count_tokens("a"), 1);
+    }
 }
 
 /// Result of finding a cut point for compaction.
