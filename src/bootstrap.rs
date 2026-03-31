@@ -188,7 +188,10 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
 /// Resolve a model by name (fuzzy match or provider/id).
 pub fn resolve_model(registry: &ModelRegistry, name: &str) -> Option<crate::agent::types::Model> {
     if let Some((p, m)) = name.split_once('/') {
-        registry.get_model(p, m).cloned()
+        // Try exact provider/id split first, but fall back to find_model with
+        // the full string for models whose id contains a slash (e.g. OpenRouter
+        // models like "qwen/qwen3.6-plus-preview:free").
+        registry.get_model(p, m).or_else(|| registry.find_model(name)).cloned()
     } else {
         registry.find_model(name).cloned()
     }

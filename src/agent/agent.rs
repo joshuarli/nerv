@@ -372,10 +372,18 @@ impl Agent {
                 let msg = AssistantMessage {
                     content: vec![],
                     stop_reason: StopReason::Error {
-                        message: format!(
-                            "provider '{}' not found — run `/login {}`",
-                            model.provider_name, model.provider_name
-                        ),
+                        message: {
+                            let p = &model.provider_name;
+                            match p.as_str() {
+                                "openrouter" => format!(
+                                    "provider '{p}' not found — set $OPENROUTER_API_KEY"
+                                ),
+                                "codex" => format!(
+                                    "provider '{p}' not found — set $OPENAI_API_KEY or run `/login {p}`"
+                                ),
+                                _ => format!("provider '{p}' not found — run `/login {p}`"),
+                            }
+                        },
                     },
                     usage: None,
                     timestamp: now_millis(),

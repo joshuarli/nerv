@@ -350,7 +350,9 @@ fn main() {
     // Apply --model flag (interactive mode)
     if let Some(ref name) = opt_model {
         let found = if let Some((p, m)) = name.split_once('/') {
-            model_registry.get_model(p, m)
+            // Fall back to find_model for models whose id contains a slash
+            // (e.g. OpenRouter models like "qwen/qwen3.6-plus-preview:free").
+            model_registry.get_model(p, m).or_else(|| model_registry.find_model(name))
         } else {
             model_registry.find_model(name)
         };
