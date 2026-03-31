@@ -28,6 +28,9 @@ pub struct Bootstrap {
     pub midturn_inject: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// Warnings from config validation (unknown model ids, etc.).
     pub config_warnings: Vec<String>,
+    /// Background symbol index scan — join after the first TUI frame renders
+    /// so the UI appears before blocking on the scan completing.
+    pub symbols_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 pub struct BootstrapOptions {
@@ -50,22 +53,60 @@ impl Default for BootstrapOptions {
 /// Construct agent + tools + session from disk config.
 /// Both interactive and headless modes call this.
 pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstrap {
+    // Symbol index scan is the most expensive startup cost — kick it off first
+    // so it overlaps with everything else. Joined explicitly at the bottom of
+    // bootstrap so the index is ready before the session is returned.
+    let (symbols, symbols_handle) = if !opts.talk_mode {
+        let symbols_tool = Arc::new(SymbolsTool::new_with_cache(cwd.to_path_buf(), nerv_dir));
+        let symbol_index = symbols_tool.index();
+        let idx = symbol_index.clone();
+        let root = cwd.to_path_buf();
+        let handle = std::thread::Builder::new()
+            .name("nerv-index".into())
+            .stack_size(1024 * 1024)
+            .spawn(move || {
+                if let Ok(mut index) = idx.write() {
+                    index.force_index_dir(&root);
+                }
+            })
+            .expect("failed to spawn index thread");
+        (Some((symbols_tool, symbol_index)), Some(handle))
+    } else {
+        (None, None)
+    };
+
+    // Resource loading (ancestor AGENTS.md walk, skills scan, memory, etc.) is
+    // I/O-bound and independent of config/auth/registry — run it concurrently.
+    let resources_handle = if !opts.talk_mode {
+        let cwd_buf = cwd.to_path_buf();
+        let nerv_dir_buf = nerv_dir.to_path_buf();
+        Some(
+            std::thread::Builder::new()
+                .name("nerv-resources".into())
+                .spawn(move || {
+                    crate::core::resource_loader::load_resources(&cwd_buf, &nerv_dir_buf)
+                })
+                .expect("failed to spawn resources thread"),
+        )
+    } else {
+        None
+    };
+
     let config = NervConfig::load(nerv_dir);
     let mut auth = crate::core::auth::AuthStorage::load(nerv_dir);
     let model_registry = Arc::new(ModelRegistry::new(&config, &mut auth, nerv_dir));
 
     // In talk mode we skip all project context, memory, and the symbol index
     // scan — the session is a plain conversational assistant with no tools.
-    let resources = if opts.talk_mode {
-        LoadedResources {
+    let resources = match resources_handle {
+        Some(handle) => handle.join().expect("resources thread panicked"),
+        None => LoadedResources {
             context_files: Vec::new(),
             system_prompt: None,
             append_prompts: Vec::new(),
             memory: None,
             skills: Vec::new(),
-        }
-    } else {
-        crate::core::resource_loader::load_resources(cwd, nerv_dir)
+        },
     };
 
     let mutation_queue = Arc::new(FileMutationQueue::new());
@@ -75,27 +116,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     // registry.
     let mut agent = Agent::new(model_registry.provider_registry.clone());
 
-    if !opts.talk_mode {
-        // Symbol index scan is the most expensive startup cost — kick it off
-        // immediately so it runs in parallel with config/auth/resource loading.
-        // The mutex serves as the join: if `symbols` is called before this
-        // finishes, it blocks on lock() until the scan completes.
-        let symbols_tool = Arc::new(SymbolsTool::new_with_cache(cwd.to_path_buf(), nerv_dir));
-        let symbol_index = symbols_tool.index();
-        {
-            let idx = symbol_index.clone();
-            let root = cwd.to_path_buf();
-            std::thread::Builder::new()
-                .name("nerv-index".into())
-                .stack_size(1024 * 1024)
-                .spawn(move || {
-                    if let Ok(mut index) = idx.write() {
-                        index.force_index_dir(&root);
-                    }
-                })
-                .expect("failed to spawn index thread");
-        }
-
+    if let Some((symbols_tool, symbol_index)) = symbols {
         let tools: Vec<Arc<dyn crate::agent::agent::AgentTool>> = {
             let mut t: Vec<Arc<dyn crate::agent::agent::AgentTool>> = vec![
                 Arc::new(ReadTool::new(cwd.to_path_buf())),
@@ -183,7 +204,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     let known_ids: Vec<&str> = model_registry.all_models().iter().map(|m| m.id.as_str()).collect();
     let config_warnings = config.validate_model_ids(&known_ids);
 
-    Bootstrap { session, config, model_registry, resources, cancel_flag, midturn_inject, config_warnings }
+    Bootstrap { session, config, model_registry, resources, cancel_flag, midturn_inject, config_warnings, symbols_handle }
 }
 
 /// Resolve a model by name (fuzzy match or provider/id).

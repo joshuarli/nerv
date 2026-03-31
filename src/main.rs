@@ -329,6 +329,10 @@ fn main() {
     tui.request_render(true); // initial render
     render_frame!(tui, layout);
 
+    if let Some(handle) = b.symbols_handle {
+        handle.join().expect("nerv-index thread panicked");
+    }
+
     let repo_root_path = nerv::find_repo_root(&cwd);
     let repo_id = repo_root_path.as_deref().and_then(nerv::repo_fingerprint);
     let repo_root = repo_root_path.map(|p| p.to_string_lossy().to_string());

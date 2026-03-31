@@ -52,6 +52,10 @@ harness = false
 name = "output_filter"
 harness = false
 
+[[bench]]
+name = "bootstrap"
+harness = false
+
 [profile.dev]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
