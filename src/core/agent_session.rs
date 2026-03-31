@@ -1085,7 +1085,7 @@ impl AgentSession {
     /// Resolve the provider and model id to use for background utility tasks
     /// (compaction). Resolution order:
     ///   1. The `model_override` from config (fuzzy-matched via ModelRegistry).
-    ///   2. claude-haiku-4-5 on the anthropic provider (if registered).
+    ///   2. DEFAULT_COMPACTION_MODEL on the anthropic provider (if registered).
     ///   3. The active session model as fallback.
     fn resolve_utility_provider(
         &self,
@@ -1103,7 +1103,7 @@ impl AgentSession {
 
         // 2. Default utility model (haiku) on anthropic
         if let Some(provider) = registry.get("anthropic") {
-            return Some((provider, "claude-haiku-4-5".to_string()));
+            return Some((provider, crate::core::model_registry::DEFAULT_COMPACTION_MODEL.to_string()));
         }
 
         // 3. Fall back to the current session model
@@ -1130,6 +1130,15 @@ impl AgentSession {
         // Operate only on the current branch (root → leaf), not the whole tree.
         // Using entries() would compact entries from sibling branches too.
         let branch = self.session_manager.current_branch_entries();
+
+        // Resolve the summariser model's context window so generate_summary can
+        // clamp the prompt. Fall back to Haiku's known 200k window if the model
+        // isn't in the registry (e.g. a custom/local model with no explicit entry).
+        let summarizer_context_window: u32 = self
+            .model_registry
+            .find_model(&model_id)
+            .map(|m| m.context_window)
+            .unwrap_or(200_000);
         if branch.is_empty() {
             return Ok(None);
         }
@@ -1205,7 +1214,7 @@ impl AgentSession {
             })
             .collect();
 
-        match generate_summary(&to_summarize, None, provider, &model_id) {
+        match generate_summary(&to_summarize, None, provider, &model_id, summarizer_context_window) {
             Ok(summary) => {
                 let _ = self.session_manager.append_compaction(
                     summary.clone(),

@@ -7,6 +7,10 @@ use crate::agent::provider::ProviderRegistry;
 use crate::agent::types::{Model, ModelPricing};
 use crate::agent::{AnthropicProvider, OpenAICompatProvider};
 
+/// Default model used for background compaction summarisation when no
+/// `compaction_model` is set in config and the Anthropic provider is available.
+pub const DEFAULT_COMPACTION_MODEL: &str = "claude-haiku-4-5";
+
 pub struct ModelRegistry {
     built_in: Vec<Model>,
     custom: Vec<Model>,
