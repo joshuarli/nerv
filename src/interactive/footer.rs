@@ -627,7 +627,7 @@ impl Component for FooterComponent {
             String::new()
         };
         let api_info = format!(
-            "{}({} calls, {} tok in{}, {} tok out{}){}",
+            "{}{} calls, {} tok in{}, {} tok out{}{}",
             dim,
             self.api_calls,
             fmt_tokens_u64(self.total_input),
