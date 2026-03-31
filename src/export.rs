@@ -95,13 +95,47 @@ fn fmt_tokens(n: u64) -> String {
     }
 }
 
+/// Find the repo-scoped DB directory that contains a session matching the given prefix.
+/// Searches `nerv_dir/repos/*/sessions.db` and returns the repo dir on the first match.
+fn find_repo_dir_for_session(session_id: &str, nerv_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let repos_dir = nerv_dir.join("repos");
+    let entries = std::fs::read_dir(&repos_dir).ok()?;
+    for entry in entries.flatten() {
+        let repo_dir = entry.path();
+        let db_path = repo_dir.join("sessions.db");
+        if !db_path.exists() {
+            continue;
+        }
+        // Quick prefix check directly against the DB — avoids loading all entries.
+        let check = rusqlite::Connection::open(&db_path)
+            .ok()
+            .and_then(|db| {
+                db.query_row(
+                    "SELECT id FROM sessions WHERE id LIKE ?1 LIMIT 1",
+                    rusqlite::params![format!("{}%", session_id)],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+            });
+        if check.is_some() {
+            return Some(repo_dir);
+        }
+    }
+    None
+}
+
+/// Resolve a session-id prefix to its repo dir, falling back to nerv_dir itself.
+fn repo_dir_for(session_id: &str, nerv_dir: &std::path::Path) -> std::path::PathBuf {
+    find_repo_dir_for_session(session_id, nerv_dir).unwrap_or_else(|| nerv_dir.to_path_buf())
+}
+
 /// Export a session from the database by ID as JSONL.
 pub fn export_session_jsonl(
     session_id: &str,
     path: &std::path::Path,
     nerv_dir: &std::path::Path,
 ) -> Result<String, String> {
-    let mut session_manager = crate::session::SessionManager::new(nerv_dir);
+    let mut session_manager = crate::session::SessionManager::new(&repo_dir_for(session_id, nerv_dir));
     session_manager.load_session(session_id).map_err(|e| e.to_string())?;
     let mut content =
         session_manager.export_jsonl().ok_or_else(|| "no session content".to_string())?;
@@ -139,7 +173,7 @@ pub fn export_session_html(
     path: &std::path::Path,
     nerv_dir: &std::path::Path,
 ) -> Result<String, String> {
-    let mut session_manager = crate::session::SessionManager::new(nerv_dir);
+    let mut session_manager = crate::session::SessionManager::new(&repo_dir_for(session_id, nerv_dir));
     session_manager.load_session(session_id).map_err(|e| e.to_string())?;
     let entries = session_manager.entries().to_vec();
     render_html_to_file(&entries, path)
