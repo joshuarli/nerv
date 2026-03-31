@@ -633,7 +633,6 @@ impl InteractiveMode {
         match event {
             AgentEvent::AgentStart => {
                 self.is_streaming = true;
-                layout.chat.begin_stream();
                 layout.statusbar.start_streaming();
                 tui.request_render(false);
             }
@@ -750,7 +749,10 @@ impl InteractiveMode {
                 layout.chat.push_tool_result(text, result.is_error);
                 tui.request_render(false);
             }
-            AgentEvent::TurnStart => {}
+            AgentEvent::TurnStart => {
+                layout.chat.begin_stream();
+                tui.request_render(false);
+            }
             AgentEvent::TurnEnd => {
                 // If the user queued a message while tools were running, write it
                 // into the shared slot now. The agent loop checks this slot right
