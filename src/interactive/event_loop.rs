@@ -1417,7 +1417,7 @@ fn count_tree_nodes(tree: &[crate::session::types::SessionTreeNode]) -> usize {
 /// Copy `text` to the system clipboard.
 ///
 /// Tries, in order: `pbcopy` (macOS), `wl-copy` (Wayland), `xclip`, `xsel`.
-fn copy_to_clipboard(text: &str) -> Result<(), String> {
+pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 

@@ -266,6 +266,12 @@ pub enum SessionCommand {
     SaveInputHistory {
         history: Vec<String>,
     },
+    /// Record a completed /btw call to the session history.
+    RecordBtw {
+        note: String,
+        response: String,
+        model_id: String,
+    },
 }
 
 pub struct AgentSession {

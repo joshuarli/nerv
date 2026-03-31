@@ -530,6 +530,21 @@ function toggleTool(header) {
             ));
             continue;
         }
+        if let SessionEntry::Btw(bw) = entry {
+            html.push_str(&format!(
+                "<div style='margin:1.5rem 0;padding:0.75rem 1rem;\
+                background:#1e293b;border-radius:6px;border:1px solid #334155;\
+                font-size:0.85rem'>\
+                <div style='color:#a78bfa;font-weight:600;margin-bottom:0.4rem'>\
+                ◆ /btw</div>\
+                <div style='color:#94a3b8;margin-bottom:0.5rem'>{}</div>\
+                <div style='color:#e2e8f0'>{}</div>\
+                </div>\n",
+                html_escape_no_br(&bw.note),
+                markdown_to_html(&bw.response),
+            ));
+            continue;
+        }
         if let SessionEntry::SystemPrompt(sp) = entry {
             html.push_str(&format!(
                 "<details><summary class='meta'>System prompt ({} tok)</summary><pre class='tool'>{}</pre></details>\n",

@@ -39,6 +39,8 @@ pub struct BtwPanel {
     cost: crate::agent::types::Cost,
     /// Pricing table for the model used (needed to compute cost from Usage).
     pricing: crate::agent::types::ModelPricing,
+    /// How many wrapped lines to scroll up from the bottom (0 = tail).
+    pub scroll_offset: usize,
 }
 
 impl BtwPanel {
@@ -63,6 +65,7 @@ impl BtwPanel {
                 cache_write: 0,
             },
             pricing,
+            scroll_offset: 0,
         }
     }
 
@@ -104,6 +107,25 @@ impl BtwPanel {
         self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// The accumulated response text (for copying / saving).
+    pub fn response(&self) -> &str {
+        &self.response
+    }
+
+    /// Scroll up by `n` wrapped lines.
+    pub fn scroll_up(&mut self, n: usize, width: usize) {
+        let inner = width.saturating_sub(4);
+        let total = self.all_content_lines(inner).len();
+        let visible = MAX_CONTENT_LINES;
+        let max_offset = total.saturating_sub(visible);
+        self.scroll_offset = (self.scroll_offset + n).min(max_offset);
+    }
+
+    /// Scroll down by `n` wrapped lines.
+    pub fn scroll_down(&mut self, n: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(n);
+    }
+
     /// Number of terminal lines this panel will occupy when rendered.
     pub fn line_count(&self, width: usize) -> usize {
         let inner = width.saturating_sub(4); // "│ " + " │"
@@ -112,7 +134,7 @@ impl BtwPanel {
         1 + content.len().max(1) + 1
     }
 
-    fn content_lines(&self, inner_width: usize) -> Vec<String> {
+    fn all_content_lines(&self, inner_width: usize) -> Vec<String> {
         if let Some(err) = &self.error {
             return wrap_text(&format!("error: {}", err), inner_width);
         }
@@ -122,13 +144,19 @@ impl BtwPanel {
             }
             return vec!["…".into()];
         }
-        let mut lines = wrap_text(&self.response, inner_width);
-        // Keep only the last MAX_CONTENT_LINES lines so the panel doesn't grow
-        // unboundedly.
-        if lines.len() > MAX_CONTENT_LINES {
-            lines = lines[lines.len() - MAX_CONTENT_LINES..].to_vec();
+        wrap_text(&self.response, inner_width)
+    }
+
+    fn content_lines(&self, inner_width: usize) -> Vec<String> {
+        let all = self.all_content_lines(inner_width);
+        let total = all.len();
+        if total <= MAX_CONTENT_LINES {
+            return all;
         }
-        lines
+        // scroll_offset=0 → tail (most recent); higher → further up
+        let end = total.saturating_sub(self.scroll_offset);
+        let start = end.saturating_sub(MAX_CONTENT_LINES);
+        all[start..end].to_vec()
     }
 }
 
@@ -195,14 +223,21 @@ impl Component for BtwPanel {
             String::new()
         };
         let dismiss = if self.done { " ↵ dismiss " } else { "" };
-        // stats on the left of the dashes, dismiss hint on the right
-        let fixed = stats_str.chars().count() + dismiss.len() + 2; // 2 for ╰ ╯
+        let copy_hint = if self.done && !self.response.is_empty() { " c copy " } else { "" };
+        // Show scroll hint when there is more content than fits.
+        let inner_w = w.saturating_sub(4);
+        let total_lines = self.all_content_lines(inner_w).len();
+        let scroll_hint = if total_lines > MAX_CONTENT_LINES { " ↑↓ scroll " } else { "" };
+        // stats on the left of the dashes, hints on the right
+        let fixed = stats_str.chars().count() + dismiss.len() + copy_hint.len() + scroll_hint.len() + 2; // 2 for ╰ ╯
         let bottom_dashes = w.saturating_sub(fixed);
         lines.push(format!(
-            "{}╰{}{}{}╯{}",
+            "{}╰{}{}{}{}{}╯{}",
             theme::ACCENT,
             stats_str,
             "─".repeat(bottom_dashes),
+            scroll_hint,
+            copy_hint,
             dismiss,
             theme::RESET,
         ));

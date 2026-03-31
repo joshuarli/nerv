@@ -247,6 +247,9 @@ pub fn session_task(
             SessionCommand::SaveInputHistory { history } => {
                 session.session_manager.save_input_history(&history);
             }
+            SessionCommand::RecordBtw { note, response, model_id } => {
+                let _ = session.session_manager.append_btw(&note, &response, &model_id);
+            }
             SessionCommand::SetCompactThreshold { pct } => {
                 let frac = (pct as f64 / 100.0).clamp(0.01, 1.0);
                 session.compaction.settings.threshold_pct = frac;
