@@ -7,6 +7,10 @@
 
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use libc;
 
 use crate::core::agent_session::{PlanOption, PlanQuestion};
 use crate::tui::utils::wrap_text_with_ansi;
@@ -92,7 +96,11 @@ pub fn run_plan_interview(
     write!(out, "\x1b[?1049h\x1b[?25l").ok(); // alt screen + hide cursor
     out.flush().ok();
 
-    let result = interview_loop(&mut states, total, current, &mut out, plan_path);
+    // Register SIGWINCH so the screen redraws on terminal resize.
+    let sigwinch = Arc::new(AtomicBool::new(false));
+    let _ = signal_hook::flag::register(signal_hook::consts::SIGWINCH, sigwinch.clone());
+
+    let result = interview_loop(&mut states, total, current, &mut out, plan_path, &sigwinch);
 
     // Leave alt-screen
     write!(out, "\x1b[?1049l\x1b[?25h").ok(); // main screen + show cursor
@@ -107,6 +115,7 @@ fn interview_loop(
     mut current: usize,
     out: &mut impl Write,
     plan_path: &PathBuf,
+    sigwinch: &AtomicBool,
 ) -> Option<Vec<(String, String)>> {
     render_question(states, current, total, plan_path, out);
 
@@ -114,6 +123,25 @@ fn interview_loop(
     let mut buf = [0u8; 32];
 
     loop {
+        // Use poll() with a short timeout so SIGWINCH causes a timely redraw
+        // even without a keypress (plain read() would block indefinitely).
+        let mut pfd = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut pfd, 1, 50) };
+
+        // SIGWINCH check — fires after poll() returns (timeout or input).
+        if sigwinch.swap(false, Ordering::Relaxed) {
+            render_question(states, current, total, plan_path, out);
+            continue;
+        }
+
+        if ready <= 0 {
+            continue; // timeout or error
+        }
+
         let n = match stdin.lock().read(&mut buf) {
             Ok(n) if n > 0 => n,
             _ => continue,
@@ -224,6 +252,8 @@ fn interview_loop(
             }
         }
 
+        // Re-render always (covers both normal input and SIGWINCH resize).
+        sigwinch.store(false, Ordering::Relaxed);
         render_question(states, current, total, plan_path, out);
     }
 }
@@ -324,24 +354,41 @@ fn render_question(
             buf.push_str("\x1b[0m\x1b[1m");
             buf.push_str(&st.custom_text);
             buf.push('_'); // cursor
+            buf.push_str("\x1b[0m\r\n");
         } else {
-            // Label line — badge moves to subtext area for proper wrapping.
-            let display_label = truncate_to_cols(opt, label_width as usize);
-            buf.push_str(&format!("    {} {}", marker, display_label));
+            // Label — word-wrapped. First line gets the marker; continuation
+            // lines are indented by the same 6-char prefix ("    ○ ").
+            let wrapped_label = wrap_text_with_ansi(opt, label_width);
+            for (li, line) in wrapped_label.iter().enumerate() {
+                if li == 0 {
+                    buf.push_str(&format!("    {} {}", marker, line));
+                } else {
+                    buf.push_str(&format!("      {}", line));
+                }
+                buf.push_str("\x1b[0m\r\n");
+                // Re-apply color for continuation lines (color was reset by \x1b[0m).
+                if li + 1 < wrapped_label.len() {
+                    if selected {
+                        buf.push_str("\x1b[1;36m");
+                    } else if answered {
+                        buf.push_str("\x1b[32m");
+                    } else {
+                        buf.push_str("\x1b[2m");
+                    }
+                }
+            }
 
             // Show already-typed custom text if set
             if is_custom_opt {
                 if let Some(Answer::Custom(ref c)) = st.answer {
-                    buf.push_str("\x1b[0m\x1b[2m");
-                    buf.push_str(&format!("  → {}", c));
+                    buf.push_str("\x1b[2m");
+                    buf.push_str(&format!("      → {}\x1b[0m\r\n", c));
                 } else if !st.custom_text.is_empty() {
-                    buf.push_str("\x1b[0m\x1b[2m");
-                    buf.push_str(&format!("  → {}", st.custom_text));
+                    buf.push_str("\x1b[2m");
+                    buf.push_str(&format!("      → {}\x1b[0m\r\n", st.custom_text));
                 }
             }
         }
-
-        buf.push_str("\x1b[0m\r\n");
 
         // Subtext + recommended badge — word-wrapped, rendered for all structured opts.
         if let Some(po) = plan_opt {
@@ -378,29 +425,6 @@ fn render_question(
 
     out.write_all(buf.as_bytes()).ok();
     out.flush().ok();
-}
-
-fn truncate_to_cols(s: &str, cols: usize) -> String {
-    let mut width = 0usize;
-    let mut end = s.len();
-    for (i, ch) in s.char_indices() {
-        let w = unicode_width(ch);
-        if width + w > cols {
-            end = i;
-            break;
-        }
-        width += w;
-    }
-    s[..end].to_string()
-}
-
-fn unicode_width(ch: char) -> usize {
-    // CJK wide chars are 2; everything else 1.
-    if (ch as u32) > 0x2E7F {
-        2
-    } else {
-        1
-    }
 }
 
 fn terminal_size() -> (usize, usize) {
