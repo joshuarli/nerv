@@ -6,6 +6,7 @@
 //!   - Body:      `input` (not `messages`), system prompt in `instructions`
 //!   - SSE:       `response.output_text.delta`, `response.function_call_arguments.delta`,
 //!     `response.output_item.added/done`, `response.completed`, `response.failed`
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::sync::atomic::Ordering;
 
@@ -22,11 +23,14 @@ const BASE_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 
 #[derive(Deserialize)]
 struct EvOutputItemAdded {
+    // output_index lives on the outer event, not inside the item object.
+    output_index: usize,
     item: OutputItem,
 }
 
 #[derive(Deserialize)]
 struct EvOutputItemDone {
+    output_index: usize,
     item: OutputItemDone,
 }
 
@@ -47,7 +51,7 @@ struct EvFnArgsDelta {
 #[serde(tag = "type")]
 enum OutputItem {
     #[serde(rename = "function_call")]
-    FunctionCall { index: usize, call_id: String, name: String },
+    FunctionCall { call_id: String, name: String },
     #[serde(other)]
     Other,
 }
@@ -56,14 +60,16 @@ enum OutputItem {
 #[serde(tag = "type")]
 enum OutputItemDone {
     #[serde(rename = "function_call")]
-    FunctionCall { #[allow(dead_code)] index: usize },
+    FunctionCall,
     #[serde(other)]
     Other,
 }
 
 #[derive(Deserialize)]
 struct EvCompleted {
-    response: EvCompletedResponse,
+    // Optional: the Codex backend sometimes omits this field on certain
+    // response.completed events (e.g., for cancelled/failed states).
+    response: Option<EvCompletedResponse>,
 }
 
 #[derive(Deserialize)]
@@ -93,6 +99,23 @@ struct EvInputTokensDetails {
 #[derive(Deserialize)]
 struct EvError {
     message: Option<String>,
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Deserialize a known SSE event, logging a warning on struct mismatch so
+/// schema bugs don't silently swallow events.
+fn parse_ev<T: serde::de::DeserializeOwned>(
+    event_type: &str,
+    raw: serde_json::Value,
+) -> Option<T> {
+    match serde_json::from_value::<T>(raw) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            crate::log::warn(&format!("codex: failed to parse {}: {}", event_type, e));
+            None
+        }
+    }
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────
@@ -217,12 +240,12 @@ impl CodexProvider {
             "input": input,
             "text": { "verbosity": "medium" },
             "include": ["reasoning.encrypted_content"],
+            "tool_choice": "auto",
             "parallel_tool_calls": true,
         });
 
         if !tools.is_empty() {
             body["tools"] = serde_json::json!(tools);
-            body["tool_choice"] = serde_json::json!("auto");
         }
 
         if request.thinking.is_some() {
@@ -254,7 +277,7 @@ impl Provider for CodexProvider {
             .header("authorization", &format!("Bearer {}", self.api_key))
             .header("chatgpt-account-id", &account_id)
             .header("openai-beta", "responses=experimental")
-            .header("originator", "codex");
+            .header("originator", "pi");
         for (k, v) in &self.extra_headers {
             req = req.header(k, v);
         }
@@ -290,8 +313,9 @@ impl Provider for CodexProvider {
             })
             .expect("failed to spawn SSE reader thread");
 
-        // Track the active function call so arg deltas can be matched to their call_id.
-        let mut pending_fn: Option<(usize, String)> = None; // (output_index, call_id)
+        // Track in-flight function calls keyed by output_index so arg deltas
+        // from parallel tool calls don't clobber each other.
+        let mut pending_fns: HashMap<usize, String> = HashMap::new(); // output_index → call_id
         let mut usage = Usage::default();
         let poll = std::time::Duration::from_millis(50);
 
@@ -320,9 +344,11 @@ impl Provider for CodexProvider {
             if line.is_empty() || line.starts_with(':') {
                 continue;
             }
-            let Some(data) = line.strip_prefix("data: ") else {
+            // SSE spec allows "data:" with or without a trailing space.
+            let Some(data) = line.strip_prefix("data:") else {
                 continue;
             };
+            let data = data.trim_start();
             if data == "[DONE]" {
                 on_event(ProviderEvent::MessageStop { stop_reason: StopReason::EndTurn, usage });
                 return Ok(());
@@ -339,60 +365,71 @@ impl Provider for CodexProvider {
 
             match event_type {
                 "response.output_item.added" => {
-                    if let Ok(ev) = serde_json::from_value::<EvOutputItemAdded>(raw)
-                        && let OutputItem::FunctionCall { index, call_id, name } = ev.item
+                    if let Some(ev) = parse_ev::<EvOutputItemAdded>("response.output_item.added", raw)
+                        && let OutputItem::FunctionCall { call_id, name } = ev.item
                     {
-                        pending_fn = Some((index, call_id.clone()));
+                        pending_fns.insert(ev.output_index, call_id.clone());
                         on_event(ProviderEvent::ToolCallStart { id: call_id, name });
                     }
                 }
                 "response.output_text.delta" => {
-                    if let Ok(ev) = serde_json::from_value::<EvTextDelta>(raw)
+                    if let Some(ev) = parse_ev::<EvTextDelta>("response.output_text.delta", raw)
                         && !ev.delta.is_empty()
                     {
                         on_event(ProviderEvent::TextDelta(ev.delta));
                     }
                 }
                 "response.function_call_arguments.delta" => {
-                    if let Ok(ev) = serde_json::from_value::<EvFnArgsDelta>(raw)
+                    if let Some(ev) = parse_ev::<EvFnArgsDelta>("response.function_call_arguments.delta", raw)
                         && !ev.delta.is_empty()
                     {
-                        let id = pending_fn
-                            .as_ref()
-                            .filter(|(i, _)| *i == ev.output_index)
-                            .map(|(_, id)| id.clone())
+                        let id = pending_fns
+                            .get(&ev.output_index)
+                            .cloned()
                             .unwrap_or_default();
                         on_event(ProviderEvent::ToolCallArgsDelta { id, delta: ev.delta });
                     }
                 }
                 "response.output_item.done" => {
-                    if let Ok(ev) = serde_json::from_value::<EvOutputItemDone>(raw)
-                        && matches!(ev.item, OutputItemDone::FunctionCall { .. })
+                    if let Some(ev) = parse_ev::<EvOutputItemDone>("response.output_item.done", raw)
+                        && let OutputItemDone::FunctionCall = ev.item
                     {
-                        pending_fn = None;
+                        if let Some(call_id) = pending_fns.remove(&ev.output_index) {
+                            on_event(ProviderEvent::ToolCallEnd { id: call_id });
+                        }
                     }
                 }
                 "response.completed" | "response.done" | "response.incomplete" => {
-                    if let Ok(ev) = serde_json::from_value::<EvCompleted>(raw) {
-                        let u = &ev.response.usage;
-                        usage = Usage {
-                            input: u.input_tokens,
-                            output: u.output_tokens,
-                            cache_read: u.input_tokens_details.cached_tokens,
-                            cache_write: 0,
-                        };
-                        on_event(ProviderEvent::UsageUpdate(usage));
+                    if let Some(ev) = parse_ev::<EvCompleted>("response.completed", raw) {
+                        if let Some(resp) = &ev.response {
+                            let u = &resp.usage;
+                            usage = Usage {
+                                input: u.input_tokens,
+                                output: u.output_tokens,
+                                cache_read: u.input_tokens_details.cached_tokens,
+                                cache_write: 0,
+                            };
+                            on_event(ProviderEvent::UsageUpdate(usage));
 
-                        if let Some(err) = ev.response.error {
-                            let msg = err.message.unwrap_or_else(|| "response failed".into());
-                            return Err(ProviderError::Server { status: 200, message: msg });
+                            if let Some(err) = &resp.error {
+                                let msg = err
+                                    .message
+                                    .clone()
+                                    .unwrap_or_else(|| "response failed".into());
+                                return Err(ProviderError::Server { status: 200, message: msg });
+                            }
                         }
 
-                        let stop_reason = match ev.response.status.as_deref() {
-                            Some("incomplete") => StopReason::MaxTokens,
-                            Some("cancelled") => StopReason::Aborted,
-                            _ => StopReason::EndTurn,
-                        };
+                        let stop_reason = ev
+                            .response
+                            .as_ref()
+                            .and_then(|r| r.status.as_deref())
+                            .map(|s| match s {
+                                "incomplete" => StopReason::MaxTokens,
+                                "cancelled" => StopReason::Aborted,
+                                _ => StopReason::EndTurn,
+                            })
+                            .unwrap_or(StopReason::EndTurn);
                         on_event(ProviderEvent::MessageStop { stop_reason, usage });
                         return Ok(());
                     }
