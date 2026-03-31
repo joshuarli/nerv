@@ -118,6 +118,8 @@ pub struct InteractiveMode {
     /// Config loaded once at startup — used for notifications, etc.
     config: NervConfig,
     pub compact_threshold_arc: Arc<AtomicU32>,
+    /// When true, log cache stats from the first post-compaction API response.
+    post_compact_tracking: bool,
 }
 
 impl InteractiveMode {
@@ -170,6 +172,7 @@ impl InteractiveMode {
             cancel_flag: Arc::new(AtomicBool::new(false)),
             midturn_inject: Arc::new(std::sync::Mutex::new(None)),
             compact_threshold_arc: Arc::new(AtomicU32::new(50)),
+            post_compact_tracking: false,
             config,
         }
     }
@@ -506,6 +509,10 @@ impl InteractiveMode {
                 } else if summary.is_some() {
                     self.status_message = Some("Context compacted.".into());
                 }
+                layout.footer.set_compaction_info(summary.clone());
+                if summary.is_some() {
+                    self.post_compact_tracking = true;
+                }
 
                 // Rebuild the UI whenever compaction succeeded (messages non-empty)
                 if !messages.is_empty() {
@@ -687,6 +694,13 @@ impl InteractiveMode {
                 layout.statusbar.set_input_tokens(usage.input);
                 layout.footer.set_context_used(usage.input);
                 layout.footer.record_api_call(usage.input);
+                if self.post_compact_tracking {
+                    self.post_compact_tracking = false;
+                    crate::log::info(&format!(
+                        "post-compaction cache: Rc={} Wc={} input={}",
+                        usage.cache_read, usage.cache_write, usage.input
+                    ));
+                }
             }
             AgentEvent::MessageUpdate { delta } => {
                 match delta {

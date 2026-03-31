@@ -164,10 +164,25 @@ pub struct CompactionEntry {
     /// value is the only way to restore the full session cost on resume.
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub cost_usd_before: f64,
+    /// "full" (LLM summarisation) or "lite" (stale output zeroing only).
+    /// Defaults to "full" for entries written before this field existed.
+    #[serde(default = "default_compaction_type", skip_serializing_if = "is_full")]
+    pub compaction_type: String,
+    /// Number of tool results zeroed by lite-compact (0 for full compaction).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub lite_compact_zeroed: u32,
     /// The messages that were summarised away, preserved for export/debugging.
     /// Not sent to any LLM — display only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archived_messages: Vec<crate::agent::types::AgentMessage>,
+}
+
+fn default_compaction_type() -> String {
+    "full".to_string()
+}
+
+fn is_full(s: &String) -> bool {
+    s == "full"
 }
 
 fn is_zero_u32(v: &u32) -> bool {

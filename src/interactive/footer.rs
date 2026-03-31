@@ -192,6 +192,9 @@ pub struct FooterComponent {
     /// nervHud: recent %CPU (f32 bits stored in u32), written by background
     /// thread.
     cpu_pct: Arc<AtomicU32>,
+    /// One-line compaction summary shown after a compact event, cleared on
+    /// next user prompt.
+    compaction_info: Option<String>,
     /// Cached line count from the last render() call — used by AppLayout to
     /// compute the fixed bottom line count without re-rendering.
     cached_line_count: std::cell::Cell<usize>,
@@ -239,6 +242,7 @@ impl FooterComponent {
             total_cache_read: 0,
             total_cache_write: 0,
             api_calls: 0,
+            compaction_info: None,
             hud_enabled: false,
             stop_hud: Arc::new(AtomicBool::new(false)),
             rss_kb: Arc::new(AtomicU64::new(0)),
@@ -355,6 +359,10 @@ impl FooterComponent {
         if self.compacting {
             self.compact_tick = self.compact_tick.wrapping_add(1);
         }
+    }
+
+    pub fn set_compaction_info(&mut self, info: Option<String>) {
+        self.compaction_info = info;
     }
 
     pub fn set_plan_mode(&mut self, enabled: bool) {
@@ -643,6 +651,12 @@ impl Component for FooterComponent {
         lines.extend(line1_lines);
         lines.extend(line2_lines);
         lines.push(hex_bar);
+        if let Some(ref info) = self.compaction_info {
+            let info_line = format!("{}{}{}", dim, info, r);
+            let iw = visible_width(&info_line) as usize;
+            let pad = w.saturating_sub(iw) / 2;
+            lines.push(format!("{}{}", " ".repeat(pad), info_line));
+        }
         lines.extend(line4_lines);
         lines.extend(line5_lines);
 

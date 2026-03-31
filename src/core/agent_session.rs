@@ -1167,6 +1167,13 @@ impl AgentSession {
             .config
             .lite_compact_age
             .unwrap_or(crate::agent::transform::LITE_COMPACT_AGE_THRESHOLD);
+        let tokens_before_lite: usize = self
+            .agent
+            .state
+            .messages
+            .iter()
+            .map(compaction::estimate_tokens)
+            .sum();
         let compactable = self.tool_registry.lite_compactable_names();
         let zeroed = crate::agent::transform::lite_compact(
             &mut self.agent.state.messages,
@@ -1190,6 +1197,11 @@ impl AgentSession {
                 .map(compaction::estimate_tokens)
                 .sum();
             if !compaction::should_compact(estimated, context_window, &self.compaction.settings) {
+                let _ = self.session_manager.append_lite_compaction(
+                    zeroed as u32,
+                    tokens_before_lite as u32,
+                    estimated as u32,
+                );
                 return Ok(compaction::CompactionOutcome::LiteCompact { zeroed });
             }
         }

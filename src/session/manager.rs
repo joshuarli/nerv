@@ -358,6 +358,8 @@ impl SessionManager {
             tokens_after,
             model_id,
             cost_usd_before,
+            compaction_type: "full".to_string(),
+            lite_compact_zeroed: 0,
             archived_messages,
         });
         self.append_entry(entry)?;
@@ -366,6 +368,31 @@ impl SessionManager {
         self.reload_entries()?;
 
         Ok(())
+    }
+
+    /// Record a lite-compaction event. Unlike `append_compaction`, this does
+    /// NOT delete any entries — lite-compact only zeroes in-memory messages.
+    pub fn append_lite_compaction(
+        &mut self,
+        zeroed: u32,
+        tokens_before: u32,
+        tokens_after: u32,
+    ) -> anyhow::Result<()> {
+        let entry = SessionEntry::Compaction(CompactionEntry {
+            id: self.next_id(),
+            parent_id: self.leaf_id.clone(),
+            timestamp: now_iso(),
+            summary: String::new(),
+            first_kept_entry_id: String::new(),
+            tokens_before,
+            tokens_after,
+            model_id: String::new(),
+            cost_usd_before: 0.0,
+            compaction_type: "lite".to_string(),
+            lite_compact_zeroed: zeroed,
+            archived_messages: vec![],
+        });
+        self.append_entry(entry)
     }
 
     pub fn append_model_change(&mut self, provider: &str, model_id: &str) -> anyhow::Result<()> {

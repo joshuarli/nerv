@@ -771,6 +771,7 @@ fn main() {
                             if keys::matches_key(seq, "enter") {
                                 let text = layout.editor.take_text();
                                 if !text.is_empty() {
+                                    layout.footer.set_compaction_info(None);
                                     let req = interactive.handle_submit(text);
                                     if let Some(req) = req {
                                         // ToggleHud is lightweight — handle inline without pausing stdin.

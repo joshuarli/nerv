@@ -948,6 +948,8 @@ mod tests {
             tokens_after: 3_000,
             model_id: "claude-haiku".to_string(),
             cost_usd_before: 0.50,
+            compaction_type: "full".to_string(),
+            lite_compact_zeroed: 0,
             archived_messages: archived,
         })
     }
