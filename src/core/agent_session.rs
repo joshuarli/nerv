@@ -1197,11 +1197,12 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
                 &|url| {
                     let _ = tx.send(AgentSessionEvent::Status {
                         message: format!(
-                            "Open this URL in your browser to authenticate:\n\n{}",
+                            "Opening browser for Codex login...\n\nIf the browser doesn't open, visit:\n{}",
                             url
                         ),
                         is_error: false,
                     });
+                    let _ = std::process::Command::new("open").arg(url).spawn();
                 },
                 &|msg| {
                     let _ = tx.send(AgentSessionEvent::Status {
