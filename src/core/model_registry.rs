@@ -230,39 +230,30 @@ fn builtin_anthropic_models() -> Vec<Model> {
 }
 
 fn builtin_codex_models() -> Vec<Model> {
+    fn m(id: &str, name: &str, ctx: u32, max_out: u32, reasoning: bool, inp: f64, out: f64, cr: f64) -> Model {
+        Model {
+            id: id.into(),
+            name: name.into(),
+            provider_name: "codex".into(),
+            context_window: ctx,
+            max_output_tokens: max_out,
+            reasoning,
+            supports_adaptive_thinking: reasoning,
+            supports_xhigh: reasoning,
+            pricing: ModelPricing { input: inp, output: out, cache_read: cr, cache_write: 0.0 },
+        }
+    }
     vec![
-        Model {
-            id: "gpt-5".into(),
-            name: "GPT-5".into(),
-            provider_name: "codex".into(),
-            context_window: 1_000_000,
-            max_output_tokens: 32_000,
-            reasoning: true,
-            supports_adaptive_thinking: true,
-            supports_xhigh: true,
-            pricing: ModelPricing {
-                input: 3.0,
-                output: 12.0,
-                cache_read: 0.75,
-                cache_write: 3.75,
-            },
-        },
-        Model {
-            id: "gpt-5-mini".into(),
-            name: "GPT-5 Mini".into(),
-            provider_name: "codex".into(),
-            context_window: 1_000_000,
-            max_output_tokens: 32_000,
-            reasoning: false,
-            supports_adaptive_thinking: false,
-            supports_xhigh: false,
-            pricing: ModelPricing {
-                input: 0.4,
-                output: 1.6,
-                cache_read: 0.1,
-                cache_write: 0.5,
-            },
-        },
+        m("gpt-5",               "GPT-5",               272_000, 128_000, true,  3.0,  12.0, 0.3),
+        m("gpt-5.1",             "GPT-5.1",             272_000, 128_000, true,  1.25, 10.0, 0.125),
+        m("gpt-5.1-codex-max",   "GPT-5.1 Codex Max",   272_000, 128_000, true,  1.25, 10.0, 0.125),
+        m("gpt-5.1-codex-mini",  "GPT-5.1 Codex Mini",  272_000, 128_000, true,  0.25,  2.0, 0.025),
+        m("gpt-5.2",             "GPT-5.2",             272_000, 128_000, true,  1.75, 14.0, 0.175),
+        m("gpt-5.2-codex",       "GPT-5.2 Codex",       272_000, 128_000, true,  1.75, 14.0, 0.175),
+        m("gpt-5.3-codex",       "GPT-5.3 Codex",       272_000, 128_000, true,  1.75, 14.0, 0.175),
+        m("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark", 128_000, 128_000, true,  0.0,   0.0, 0.0),
+        m("gpt-5.4",             "GPT-5.4",             272_000, 128_000, true,  2.5,  15.0, 0.25),
+        m("gpt-5.4-mini",        "GPT-5.4 Mini",        272_000, 128_000, true,  0.75,  4.5, 0.075),
     ]
 }
 
