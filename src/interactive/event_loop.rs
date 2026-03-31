@@ -960,13 +960,23 @@ impl InteractiveMode {
                 }
             }
             "/login" => {
-                let provider = if args.is_empty() { "anthropic" } else { args };
-                self.status_message = Some(format!("Starting {} login...", provider));
-                let _ = self.cmd_tx.send(SessionCommand::Login { provider: provider.to_string() });
+                if args.is_empty() {
+                    self.status_message =
+                        Some("Usage: /login <provider>  (available: anthropic, codex)".into());
+                } else {
+                    self.status_message = Some(format!("Starting {} login...", args));
+                    let _ =
+                        self.cmd_tx.send(SessionCommand::Login { provider: args.to_string() });
+                }
             }
             "/logout" => {
-                let provider = if args.is_empty() { "anthropic" } else { args };
-                let _ = self.cmd_tx.send(SessionCommand::Logout { provider: provider.to_string() });
+                if args.is_empty() {
+                    self.status_message =
+                        Some("Usage: /logout <provider>  (available: anthropic, codex)".into());
+                } else {
+                    let _ =
+                        self.cmd_tx.send(SessionCommand::Logout { provider: args.to_string() });
+                }
             }
             "/fork" => {
                 let _ = self.cmd_tx.send(SessionCommand::ForkSession);
@@ -999,8 +1009,8 @@ impl InteractiveMode {
                      /model          — list/switch models\n\
                      /think [on|off] — toggle extended thinking (Shift+Tab to cycle)\n\
                      /effort [low|medium|high|max] — set adaptive effort level (^E to cycle)\n\
-                     /login [provider] — OAuth login (default: anthropic)\n\
-                     /logout [provider] — remove stored credentials\n\
+                     /login <provider>  — OAuth login (anthropic, codex)\n\
+                     /logout <provider> — remove stored credentials\n\
                      /compact        — compact context now\n\
                      /compact on|off — toggle auto-compact for this session\n\
                      /compact at N   — set auto-compact threshold to N% for this session\n\

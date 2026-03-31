@@ -79,7 +79,9 @@ impl OpenAICompatProvider {
     pub fn build_request_body(&self, request: &CompletionRequest) -> serde_json::Value {
         let mut body = serde_json::json!({
             "model": request.model_id,
-            "max_tokens": request.max_tokens,
+            // max_completion_tokens is the current field; max_tokens is the
+            // deprecated alias. Some newer OpenAI models reject max_tokens.
+            "max_completion_tokens": request.max_tokens,
             "stream": true,
             "stream_options": { "include_usage": true },
         });
@@ -163,7 +165,8 @@ impl OpenAICompatProvider {
             match thinking {
                 ThinkingRequest::Budget { tokens } => {
                     body["reasoning_effort"] = serde_json::json!("medium");
-                    body["max_completion_tokens"] = serde_json::json!(request.max_tokens + tokens);
+                    body["max_completion_tokens"] =
+                        serde_json::json!(request.max_tokens + tokens);
                 }
             }
         }

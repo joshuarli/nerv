@@ -267,22 +267,6 @@ fn builtin_codex_models() -> Vec<Model> {
                 cache_write: 0.5,
             },
         },
-        Model {
-            id: "gpt-4.5".into(),
-            name: "GPT-4.5".into(),
-            provider_name: "codex".into(),
-            context_window: 128_000,
-            max_output_tokens: 16_000,
-            reasoning: true,
-            supports_adaptive_thinking: true,
-            supports_xhigh: false,
-            pricing: ModelPricing {
-                input: 3.0,
-                output: 12.0,
-                cache_read: 0.75,
-                cache_write: 3.75,
-            },
-        },
     ]
 }
 
