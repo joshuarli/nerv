@@ -1143,21 +1143,54 @@ impl SessionManager {
         lines.push(serde_json::to_string(&header).ok()?);
 
         // Serialize each entry in branch order (root → leaf).
-        // Compaction entries: emit archived messages inline first so the
-        // reader sees a flat timeline, then emit the compaction marker
-        // without the (now-redundant) archived_messages blob.
+        //
+        // Compaction entries sit at the *end* of the branch (after the
+        // surviving/verbatim-window entries they kept).  Their
+        // archived_messages are chronologically *before* those surviving
+        // entries, so we need to inject them at the right point.
+        //
+        // Strategy: build a map of first_kept_entry_id → archived messages
+        // for every compaction in this branch, then when we visit each
+        // regular entry, emit any pending archived messages whose injection
+        // point matches that entry's id first.
+        let mut pending: std::collections::HashMap<String, &CompactionEntry> =
+            std::collections::HashMap::new();
         for entry in &branch {
             if let SessionEntry::Compaction(ce) = entry {
-                for msg in &ce.archived_messages {
-                    let line = serde_json::json!({
-                        "type": "message",
-                        "archived": true,
-                        "message": msg,
-                    });
-                    if let Ok(data) = serde_json::to_string(&line) {
-                        lines.push(data);
-                    }
+                if !ce.archived_messages.is_empty() {
+                    pending.insert(ce.first_kept_entry_id.clone(), ce);
                 }
+            }
+        }
+
+        let mut emit_archived = |ce: &CompactionEntry, lines: &mut Vec<String>| {
+            for msg in &ce.archived_messages {
+                let line = serde_json::json!({
+                    "type": "message",
+                    "archived": true,
+                    "message": msg,
+                });
+                if let Ok(data) = serde_json::to_string(&line) {
+                    lines.push(data);
+                }
+            }
+        };
+
+        for entry in &branch {
+            // Before emitting this entry, check if any compaction's
+            // archived messages should be injected here.
+            let entry_id = match entry {
+                SessionEntry::Message(me) => Some(me.id.as_str()),
+                SessionEntry::Compaction(ce) => Some(ce.id.as_str()),
+                _ => None,
+            };
+            if let Some(id) = entry_id {
+                if let Some(ce) = pending.remove(id) {
+                    emit_archived(ce, &mut lines);
+                }
+            }
+
+            if let SessionEntry::Compaction(ce) = entry {
                 // Emit a lean compaction marker: no archived_messages blob.
                 let marker = serde_json::json!({
                     "type": "compaction",
@@ -1179,6 +1212,15 @@ impl SessionManager {
             if let Ok(data) = serde_json::to_string(entry) {
                 lines.push(data);
             }
+        }
+
+        // Edge case: compaction whose first_kept_entry_id wasn't found in the
+        // branch (e.g. the kept entry was itself later deleted).  Emit any
+        // remaining archived messages at the end so nothing is lost.
+        let mut leftover: Vec<&CompactionEntry> = pending.into_values().collect();
+        leftover.sort_by_key(|ce| ce.timestamp.as_str());
+        for ce in leftover {
+            emit_archived(ce, &mut lines);
         }
 
         Some(lines.join("\n"))

@@ -2,7 +2,7 @@
 
 use crate::agent::types::{AgentMessage, ContentBlock, ContentItem};
 use crate::str::StrExt as _;
-use crate::session::types::SessionEntry;
+use crate::session::types::{CompactionEntry, SessionEntry};
 
 /// Aggregate token stats across all API calls in a session.
 struct SessionStats {
@@ -467,11 +467,25 @@ function toggleTool(header) {
         .map(|(id, _)| id.clone())
         .collect();
 
-    let mut tool_idx = 0;
+    // Build a map of first_kept_entry_id → CompactionEntry so we can inject
+    // archived messages immediately before the surviving entry they precede,
+    // rather than at the compaction entry's position (which is after the
+    // verbatim window in the branch order).
+    let mut pending_archived: std::collections::HashMap<&str, &CompactionEntry> =
+        std::collections::HashMap::new();
     for entry in entries {
         if let SessionEntry::Compaction(ce) = entry {
-            // Render archived messages as regular inline turns so the reader
-            // sees a flat, continuous timeline rather than a buried transcript.
+            if !ce.archived_messages.is_empty() {
+                pending_archived.insert(ce.first_kept_entry_id.as_str(), ce);
+            }
+        }
+    }
+
+    let render_archived_msgs =
+        |ce: &CompactionEntry,
+         html: &mut String,
+         call_result: &std::collections::HashMap<String, (Option<String>, String, bool)>,
+         tool_idx: &mut usize| {
             for msg in &ce.archived_messages {
                 match msg {
                     AgentMessage::User { content, .. } => {
@@ -497,7 +511,7 @@ function toggleTool(header) {
                                         args_preview_for(name, arguments, &args_str);
                                     let output_html =
                                         if let Some((disp, content_text, is_err)) =
-                                            call_result.get(id)
+                                            call_result.get(id.as_str())
                                         {
                                             let txt = disp.as_deref().unwrap_or(content_text);
                                             let style = if *is_err {
@@ -522,7 +536,7 @@ function toggleTool(header) {
                                         html_escape_no_br(&preview),
                                         output_html,
                                     ));
-                                    tool_idx += 1;
+                                    *tool_idx += 1;
                                 }
                                 _ => {}
                             }
@@ -532,8 +546,25 @@ function toggleTool(header) {
                     _ => {}
                 }
             }
+        };
 
-            // Compaction banner after the archived turns.
+    let mut tool_idx = 0;
+    for entry in entries {
+        // Before rendering this entry, inject any archived messages whose
+        // chronological position is immediately before it.
+        let entry_id = match entry {
+            SessionEntry::Message(me) => Some(me.id.as_str()),
+            SessionEntry::Compaction(ce) => Some(ce.id.as_str()),
+            _ => None,
+        };
+        if let Some(id) = entry_id {
+            if let Some(ce) = pending_archived.remove(id) {
+                render_archived_msgs(ce, &mut html, &call_result, &mut tool_idx);
+            }
+        }
+
+        if let SessionEntry::Compaction(ce) = entry {
+            // Compaction banner (archived turns already emitted above).
             let before = fmt_tokens(ce.tokens_before as u64);
             let after = fmt_tokens(ce.tokens_after as u64);
             let model_label = if ce.model_id.is_empty() {
@@ -776,6 +807,8 @@ mod tests {
     use crate::agent::types::{AgentMessage, AssistantMessage, ContentBlock, ContentItem, StopReason};
     use crate::session::types::{CompactionEntry, MessageEntry, SessionEntry};
 
+    pub(crate) const USER_ENTRY_ID: &str = "u1";
+
     fn user_entry(text: &str) -> SessionEntry {
         SessionEntry::Message(MessageEntry {
             id: "u1".to_string(),
@@ -834,7 +867,7 @@ mod tests {
             parent_id: None,
             timestamp: "2026-01-01T00:01:00Z".to_string(),
             summary: "Summary of archived work.".to_string(),
-            first_kept_entry_id: "u2".to_string(),
+            first_kept_entry_id: USER_ENTRY_ID.to_string(),
             tokens_before: 80_000,
             tokens_after: 3_000,
             model_id: "claude-haiku".to_string(),
@@ -857,12 +890,12 @@ mod tests {
     #[test]
     fn html_archived_messages_rendered_inline() {
         let entries = vec![
+            user_entry("post-compaction question"),
+            assistant_entry("post-compaction answer"),
             compaction_entry_with_archived(vec![
                 archived_user("archived question"),
                 archived_assistant("archived answer"),
             ]),
-            user_entry("post-compaction question"),
-            assistant_entry("post-compaction answer"),
         ];
 
         let html = render_to_string(&entries);
@@ -881,6 +914,7 @@ mod tests {
     #[test]
     fn html_no_details_tag_for_archived_messages() {
         let entries = vec![
+            user_entry("surviving turn"),
             compaction_entry_with_archived(vec![
                 archived_user("old turn"),
                 archived_assistant("old reply"),
@@ -905,18 +939,17 @@ mod tests {
     #[test]
     fn html_archived_messages_appear_before_compaction_banner() {
         let entries = vec![
+            user_entry("after compaction"),
             compaction_entry_with_archived(vec![
                 archived_user("before compaction"),
             ]),
-            user_entry("after compaction"),
         ];
 
         let html = render_to_string(&entries);
 
         let archived_pos = html.find("before compaction").expect("archived text missing");
-        // The compaction banner contains the token ratio text
-        let banner_pos = html.find("compacted").or_else(|| html.find("Summary of archived"))
-            .expect("compaction banner missing");
+        // The compaction banner contains the '⟳ compaction' marker.
+        let banner_pos = html.find("compaction").expect("compaction banner missing");
 
         assert!(
             archived_pos < banner_pos,
@@ -927,19 +960,20 @@ mod tests {
     #[test]
     fn html_surviving_messages_appear_after_compaction_banner() {
         let entries = vec![
-            compaction_entry_with_archived(vec![archived_user("old")]),
             user_entry("new question after compaction"),
             assistant_entry("new answer after compaction"),
+            compaction_entry_with_archived(vec![archived_user("old")]),
         ];
 
         let html = render_to_string(&entries);
 
-        let banner_pos = html.find("Summary of archived").expect("compaction banner missing");
+        // Banner contains '⟳ compaction' marker text.
+        let banner_pos = html.find("⟳ compaction").expect("compaction banner missing");
         let surviving_pos = html.find("new question after compaction").expect("surviving text missing");
 
         assert!(
-            surviving_pos > banner_pos,
-            "surviving message must appear after the compaction banner"
+            surviving_pos < banner_pos,
+            "surviving message must appear before the compaction banner (it precedes it in history)"
         );
     }
 
