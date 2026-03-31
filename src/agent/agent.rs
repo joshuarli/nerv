@@ -1,13 +1,11 @@
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use super::convert::convert_to_llm;
 use super::provider::*;
 use super::transform::{prepare_context, transform_context};
 use super::types::*;
-
-pub type UpdateCallback = Arc<dyn Fn(String) + Send + Sync>;
 
 pub trait AgentTool: Send + Sync {
     fn name(&self) -> &str;
@@ -18,6 +16,12 @@ pub trait AgentTool: Send + Sync {
     }
     fn prompt_guidelines(&self) -> Vec<String> {
         vec![]
+    }
+
+    /// Returns true if this tool never mutates files or external state.
+    /// Used by the agent loop to decide whether parallel execution is safe.
+    fn is_readonly(&self) -> bool {
+        false
     }
 
     /// Coerce model output before validate/execute. Default: identity.
@@ -33,7 +37,6 @@ pub trait AgentTool: Send + Sync {
     fn execute(
         &self,
         input: serde_json::Value,
-        update: UpdateCallback,
         cancel: &CancelFlag,
     ) -> ToolResult;
 }
@@ -41,7 +44,7 @@ pub trait AgentTool: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct ToolResult {
     pub content: String,
-    pub details: Option<serde_json::Value>,
+    pub details: Option<ToolDetails>,
     pub is_error: bool,
 }
 
@@ -54,7 +57,7 @@ impl ToolResult {
         Self { content: content.into(), details: None, is_error: true }
     }
 
-    pub fn ok_with_details(content: impl Into<String>, details: serde_json::Value) -> Self {
+    pub fn ok_with_details(content: impl Into<String>, details: ToolDetails) -> Self {
         Self { content: content.into(), details: Some(details), is_error: false }
     }
 }
@@ -131,6 +134,10 @@ pub struct Agent {
     /// Estimated token count from the previous API call (for circuit breaker
     /// delta).
     prev_estimated_tokens: usize,
+    /// Mid-turn message injection slot. When the event loop writes a message
+    /// here at TurnEnd, the agent loop picks it up as a User message before
+    /// the next API call instead of waiting for AgentEnd.
+    pub midturn_inject: Arc<Mutex<Option<String>>>,
 }
 
 impl Agent {
@@ -152,6 +159,7 @@ impl Agent {
             cancel: new_cancel_flag(),
             provider_registry,
             prev_estimated_tokens: 0,
+            midturn_inject: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -161,6 +169,65 @@ impl Agent {
 
     pub fn reset_cancel(&self) {
         self.cancel.store(false, Ordering::Relaxed);
+    }
+
+    pub fn set_model(&mut self, model: Option<Model>) {
+        if self.state.model.as_ref().map(|m| &m.id) != model.as_ref().map(|m| &m.id) {
+            self.prev_estimated_tokens = 0;
+        }
+        self.state.model = model;
+    }
+
+    pub fn model(&self) -> Option<&Model> {
+        self.state.model.as_ref()
+    }
+
+    pub fn set_system_prompt(&mut self, prompt: String) {
+        self.state.system_prompt = prompt;
+    }
+
+    pub fn set_tools(&mut self, tools: Vec<Arc<dyn AgentTool>>) {
+        self.state.tools = tools;
+    }
+
+    pub fn set_thinking_level(&mut self, level: ThinkingLevel) {
+        self.state.thinking_level = level;
+    }
+
+    pub fn set_effort_level(&mut self, level: Option<EffortLevel>) {
+        self.state.effort_level = level;
+    }
+
+    pub fn messages(&self) -> &[AgentMessage] {
+        &self.state.messages
+    }
+
+    pub fn set_messages(&mut self, messages: Vec<AgentMessage>) {
+        self.state.messages = messages;
+    }
+
+    pub fn clear_messages(&mut self) {
+        self.state.messages.clear();
+    }
+
+    pub fn set_permission_fn(&mut self, f: Option<PermissionFn>) {
+        self.state.permission_fn = f;
+    }
+
+    pub fn set_context_gate_fn(&mut self, f: Option<ContextGateFn>) {
+        self.state.context_gate_fn = f;
+    }
+
+    pub fn set_post_tool_fn(&mut self, f: Option<PostToolFn>) {
+        self.state.post_tool_fn = f;
+    }
+
+    pub fn set_output_gate_fn(&mut self, f: Option<OutputGateFn>) {
+        self.state.output_gate_fn = f;
+    }
+
+    pub fn is_streaming(&self) -> bool {
+        self.state.is_streaming
     }
 
     /// Run the agentic loop synchronously. Calls `on_event` for each event.
@@ -202,6 +269,7 @@ impl Agent {
         while has_tool_calls {
             let assistant = self.stream_response(on_event, &ctx);
             let assistant_msg = AgentMessage::Assistant(assistant.clone());
+            self.state.messages.push(assistant_msg.clone());
             new_messages.push(assistant_msg.clone());
             if let Some(ref mut f) = persist_fn {
                 f(&assistant_msg);
@@ -246,7 +314,22 @@ impl Agent {
 
             on_event(AgentEvent::TurnEnd);
 
+            // Pick up any message the UI injected while tools were running.
+            // The on_event(TurnEnd) call above is the signal to the event loop
+            // to write into this slot; check it immediately after.
             if has_tool_calls && !self.cancel.load(Ordering::Relaxed) {
+                if let Some(text) = self.midturn_inject.lock().unwrap().take() {
+                    let msg = AgentMessage::User {
+                        content: vec![ContentItem::Text { text }],
+                        timestamp: crate::now_millis(),
+                    };
+                    self.state.messages.push(msg.clone());
+                    new_messages.push(msg.clone());
+                    if let Some(ref mut f) = persist_fn {
+                        f(&msg);
+                    }
+                    on_event(AgentEvent::MessageStart { message: msg });
+                }
                 on_event(AgentEvent::TurnStart);
             }
         }
@@ -427,7 +510,7 @@ impl Agent {
                         // Only create a tool call block if we actually have a tool in progress
                         if !current_tool_id.is_empty() {
                             let arguments = serde_json::from_str(&current_tool_args)
-                                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                                .unwrap_or_else(|_| serde_json::json!({}));
                             content_blocks.push(ContentBlock::ToolCall {
                                 id: std::mem::take(&mut current_tool_id),
                                 name: std::mem::take(&mut current_tool_name),
@@ -437,8 +520,8 @@ impl Agent {
                         }
                     }
                     ProviderEvent::UsageUpdate(u) => {
-                        usage = u.clone();
                         on_event(AgentEvent::UsageUpdate { usage: u });
+                        usage = u;
                     }
                     ProviderEvent::MessageStop { stop_reason: sr, usage: u } => {
                         stop_reason = sr;
@@ -482,7 +565,7 @@ impl Agent {
             }
             if !current_tool_id.is_empty() {
                 let arguments = serde_json::from_str(&current_tool_args)
-                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                    .unwrap_or_else(|_| serde_json::json!({}));
                 content_blocks.push(ContentBlock::ToolCall {
                     id: current_tool_id,
                     name: current_tool_name,
@@ -500,7 +583,6 @@ impl Agent {
             timestamp: now_millis(),
         };
 
-        self.state.messages.push(AgentMessage::Assistant(msg.clone()));
         on_event(AgentEvent::MessageEnd { message: msg.clone() });
 
         msg
@@ -511,9 +593,10 @@ impl Agent {
         tool_calls: &[(String, String, serde_json::Value)],
         on_event: &(dyn Fn(AgentEvent) + Sync),
     ) -> Vec<AgentMessage> {
-        const READONLY_TOOLS: &[&str] = &["read", "grep", "find", "ls", "symbols", "codemap"];
         let all_readonly = tool_calls.len() > 1
-            && tool_calls.iter().all(|(_, name, _)| READONLY_TOOLS.contains(&name.as_str()));
+            && tool_calls.iter().all(|(_, name, _)| {
+                self.state.tools.iter().any(|t| t.name() == name && t.is_readonly())
+            });
 
         if all_readonly {
             // Parallel execution for readonly tools
@@ -555,8 +638,7 @@ impl Agent {
             let args = tool.normalize(args.clone());
             match tool.validate(&args) {
                 Ok(()) => {
-                    let update_cb: UpdateCallback = Arc::new(|_output: String| {});
-                    tool.execute(args, update_cb, &self.cancel)
+                    tool.execute(args, &self.cancel)
                 }
                 Err(e) => ToolResult {
                     content: format!("Validation error: {}", e),
@@ -605,10 +687,7 @@ impl Agent {
             hook(name, args);
         }
 
-        let display = result
-            .details
-            .as_ref()
-            .and_then(|d| d.get("display").and_then(|v| v.as_str()).map(|s| s.to_string()));
+        let display = result.details.as_ref().and_then(|d| d.display.clone());
 
         on_event(AgentEvent::ToolExecutionEnd {
             id: id.clone(),

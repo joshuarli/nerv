@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
 use crate::errors::ToolError;
 
@@ -87,7 +87,6 @@ impl AgentTool for MemoryTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         let action = input["action"].as_str().unwrap_or("list");

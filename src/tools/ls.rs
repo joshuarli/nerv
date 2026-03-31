@@ -2,8 +2,9 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
+use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
 
 pub struct LsTool {
@@ -97,6 +98,7 @@ impl AgentTool for LsTool {
     fn name(&self) -> &str {
         "ls"
     }
+    fn is_readonly(&self) -> bool { true }
     fn description(&self) -> &str {
         "List directory contents as a tree."
     }
@@ -117,7 +119,6 @@ impl AgentTool for LsTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or(".");
@@ -139,7 +140,7 @@ impl AgentTool for LsTool {
         render_tree(&resolved, depth, &mut content, &mut entry_count);
 
         let display = format!("{} ({} entries)", path_str, entry_count);
-        ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
+        ToolResult::ok_with_details(content, ToolDetails { display: Some(display), ..Default::default() })
     }
 }
 
@@ -252,9 +253,8 @@ mod tests {
     fn test_tool_not_found() {
         let tool = LsTool::new(std::env::current_dir().unwrap());
         let cancel = crate::agent::provider::new_cancel_flag();
-        let cb: crate::agent::agent::UpdateCallback = std::sync::Arc::new(|_| {});
         let result =
-            tool.execute(serde_json::json!({"path": "/nonexistent_path_xyz"}), cb, &cancel);
+            tool.execute(serde_json::json!({"path": "/nonexistent_path_xyz"}), &cancel);
         assert!(result.content.contains("not found") || result.content.contains("error"));
     }
 }

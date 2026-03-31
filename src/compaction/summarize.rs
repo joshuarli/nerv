@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use crate::agent::provider::*;
-use crate::agent::types::*;
+use crate::agent::convert::{LlmContent, LlmMessage};
+use crate::agent::provider::{CacheConfig, CompletionRequest, Provider, ProviderEvent, new_cancel_flag};
+use crate::agent::types::{AgentMessage, ContentItem};
 
 pub fn serialize_conversation(messages: &[AgentMessage]) -> String {
     let mut out = String::new();
@@ -65,8 +66,8 @@ pub fn generate_summary(
     let request = CompletionRequest {
         model_id: model_id.to_string(),
         system_prompt: "You are a conversation summarizer.".to_string(),
-        messages: vec![crate::agent::convert::LlmMessage::User {
-            content: vec![crate::agent::convert::LlmContent::Text(prompt)],
+        messages: vec![LlmMessage::User {
+            content: vec![LlmContent::Text(prompt)],
         }],
         tools: vec![],
         max_tokens: 4096,

@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
+use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
 use crate::index::SymbolIndex;
 use crate::index::codemap::{self, CodemapParams};
@@ -22,6 +23,7 @@ impl AgentTool for CodemapTool {
     fn name(&self) -> &str {
         "codemap"
     }
+    fn is_readonly(&self) -> bool { true }
 
     fn description(&self) -> &str {
         "Show symbol implementations from the codebase. Returns source bodies for matching functions, structs, traits, etc. grouped by file. Replaces multiple read calls when you need to understand how something works."
@@ -73,7 +75,6 @@ impl AgentTool for CodemapTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         let query = input["query"].as_str().unwrap_or("");
@@ -125,6 +126,6 @@ impl AgentTool for CodemapTool {
                 content.lines().filter(|l| l.ends_with(':')).count()
             };
         let display = format!("{} files", sym_count);
-        ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
+        ToolResult::ok_with_details(content, ToolDetails { display: Some(display), ..Default::default() })
     }
 }

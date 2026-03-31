@@ -17,7 +17,7 @@ no async, no thread pool for tool execution.
                         │  │                                        │ │
   messages ─────────────┼──┼──→ transform_context ──→ convert_to_llm│ │
   (full history)        │  │        │                       │       │ │
-                        │  │        │ 7 zero-cost           │       │ │
+                        │  │        │ zero-cost            │       │ │
                         │  │        │ optimizations         ▼       │ │
                         │  │        │                CompletionRequest│ │
                         │  │        │                       │       │ │
@@ -56,20 +56,18 @@ boundary is frozen at the start of each prompt loop so the message prefix
 is byte-stable across consecutive API calls within the same tool loop,
 maximizing cache-read (Rc) hits.
 
-The 7 optimizations, in application order:
+The optimizations, in application order:
 
 | # | Optimization | What it does | Typical savings |
 |---|---|---|---|
-| 1 | Strip thinking | Remove `ContentBlock::Thinking` — never referenced by the model | 1k–10k+ per response |
-| 2 | Strip denied args | Replace denied tool_use arguments with `{}` | up to 1.5k per denial |
-| 3 | Remove orphans | Drop tool_use blocks with no matching tool_result (aborted streams) | prevents API 400 errors |
+| 1 | Strip orphans | Drop tool_use blocks with no matching tool_result (aborted streams) | prevents API 400 errors |
+| 2 | Strip thinking | Remove `ContentBlock::Thinking` — never referenced by the model | 1k–10k+ per response |
+| 3 | Strip denied args | Replace denied tool_use arguments with `{}` | up to 1.5k per denial |
 | 4 | Truncate stale results | Tool results before `RECENT_TURNS` (10) → 200-char preview | large reads → ~200 chars |
 | 5 | Superseded reads | Earlier reads of the same file → `[superseded by later read]` | 200–2k+ per redundant read |
-| 6 | Bash success compression | `cargo test ok` / `cargo check` success → single summary line | 100–2k per build |
-| 7 | Strip stale edit args | Stale edit/write tool_use → keep only `path`, drop content | 100–5k per stale edit |
 
 These compose: a stale, denied edit of a file that was later re-read gets
-optimizations 2, 5, and 7 simultaneously. In a typical 20-tool session,
+optimizations 3, 4, and 5 simultaneously. In a typical 20-tool session,
 total savings are 30–60% of raw context size, with zero LLM calls and
 zero information loss for the model's current task.
 
@@ -131,7 +129,7 @@ session_task()                          ← OS thread; receives SessionCommand
       Agent::prompt(persist_fn)         ← the tool loop (agent.rs)
         loop {
           stream_response()
-            transform_context()         ← 7 zero-cost optimizations
+            transform_context()         ← zero-cost optimizations
             context gate check          ← circuit breaker
             provider.stream_completion()← SSE stream → content blocks
           persist_fn(assistant)         ← write to SQLite immediately
@@ -151,12 +149,14 @@ session_task()                          ← OS thread; receives SessionCommand
 | Tool loop | `src/agent/agent.rs` | `Agent::prompt` |
 | API call + streaming | `src/agent/agent.rs` | `stream_response` |
 | Tool dispatch | `src/agent/agent.rs` | `execute_tools` |
-| Context optimization | `src/agent/convert.rs` | `transform_context` |
+| Context optimization | `src/agent/transform.rs` | `transform_context` |
+| Session thread entry | `src/core/session_runner.rs` | `session_task` |
 | Session orchestration | `src/core/agent_session.rs` | `AgentSession::prompt` |
 | Callback wiring | `src/core/agent_session.rs` | `prepare_callbacks` |
 | Per-iteration persistence | `src/core/agent_session.rs` | `run_agent_prompt` |
 | Post-turn housekeeping | `src/core/agent_session.rs` | `post_turn` |
-| Compaction | `src/compaction/mod.rs` | `find_cut_point`, `should_compact` |
+| Compaction trigger | `src/core/compaction_controller.rs` | `CompactionController` |
+| Compaction logic | `src/compaction/mod.rs` | `find_cut_point`, `should_compact` |
 
 ## Retry logic
 

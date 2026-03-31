@@ -1,15 +1,21 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 use crossbeam_channel as channel;
 
 use super::layout::AppLayout;
 use super::theme;
 use crate::agent::provider::{CancelFlag, ProviderRegistry};
-use crate::agent::types::*;
+use crate::agent::types::{
+    AgentEvent, AgentMessage, ContentBlock, ContentItem, EffortLevel, Model, StreamDelta,
+    ThinkingLevel,
+};
+use crate::core::agent_session::{
+    AgentSessionEvent, AllowedDirs, PlanPhase, PlanQuestion, SessionCommand,
+};
+use crate::core::config::NervConfig;
 use crate::core::model_registry::ModelRegistry;
-use crate::core::*;
 use crate::session::types::SessionTreeNode;
 use crate::tui;
 
@@ -35,6 +41,11 @@ pub enum PickerRequest {
     },
     /// Toggle the nervHud line on/off.
     ToggleHud,
+    /// Launch the plan interview TUI.
+    PlanInterview {
+        questions: Vec<PlanQuestion>,
+        plan_path: PathBuf,
+    },
 }
 
 pub struct InteractiveMode {
@@ -79,17 +90,32 @@ pub struct InteractiveMode {
     pub pending_permission_details: Option<(String, serde_json::Value)>,
     /// Plan mode: read-only research mode, no file mutations.
     pub plan_mode: bool,
+    /// Current phase of the plan-mode state machine (mirrored from session).
+    pub plan_phase: PlanPhase,
+    /// Path of the active plan file (mirrored from session).
+    pub plan_path: Option<PathBuf>,
+    /// When plan phase is Ready, block normal key handling until user picks y/f/n.
+    pub pending_plan_ready: bool,
+    /// Mid-session plan-mode confirm: stashed text waiting for y/n.
+    pub pending_plan_confirm_text: Option<String>,
+    /// Stashed interview request so `/interview` can re-open after a Ctrl+C.
+    pub pending_interview: Option<PickerRequest>,
     /// Current auto-compact threshold (0–100). Mirrors what was last sent to
     /// the session.
     pub compact_threshold: u8,
     /// Directories the user has granted full access to (shared with the session
     /// thread).
-    pub allowed_dirs: Arc<Mutex<Vec<PathBuf>>>,
+    pub allowed_dirs: AllowedDirs,
     /// Shared cancel flag — set this to interrupt a running stream immediately.
     pub cancel_flag: CancelFlag,
+    /// Shared mid-turn injection slot. On TurnEnd, pop the first pending
+    /// message here so the agent loop injects it before the next API call.
+    pub midturn_inject: Arc<std::sync::Mutex<Option<String>>>,
     /// Shared compact threshold (percent 0–100) — written directly so `/compact
     /// at N` takes effect before the next turn without going through
     /// cmd_tx.
+    /// Config loaded once at startup — used for notifications, etc.
+    config: NervConfig,
     pub compact_threshold_arc: Arc<AtomicU32>,
 }
 
@@ -102,6 +128,7 @@ impl InteractiveMode {
         initial_model: Option<Model>,
         initial_thinking: ThinkingLevel,
         initial_effort: Option<EffortLevel>,
+        config: NervConfig,
     ) -> Self {
         Self {
             cmd_tx,
@@ -131,10 +158,17 @@ impl InteractiveMode {
             pending_permission: None,
             pending_permission_details: None,
             plan_mode: false,
+            plan_phase: PlanPhase::Research,
+            plan_path: None,
+            pending_plan_ready: false,
+            pending_plan_confirm_text: None,
+            pending_interview: None,
             compact_threshold: 50,
-            allowed_dirs: Arc::new(Mutex::new(Vec::new())),
+            allowed_dirs: AllowedDirs::default(),
             cancel_flag: Arc::new(AtomicBool::new(false)),
+            midturn_inject: Arc::new(std::sync::Mutex::new(None)),
             compact_threshold_arc: Arc::new(AtomicU32::new(50)),
+            config,
         }
     }
 
@@ -163,9 +197,30 @@ impl InteractiveMode {
             }
             AgentSessionEvent::PlanModeChanged { enabled } => {
                 self.plan_mode = enabled;
+                self.plan_phase = PlanPhase::Research;
+                self.pending_plan_ready = false;
                 layout.footer.set_plan_mode(enabled);
-                let label = if enabled { "Plan mode on" } else { "Plan mode off" };
+                let label = if enabled { "Plan mode on — researching…" } else { "Plan mode off" };
                 self.status_message = Some(label.into());
+            }
+            AgentSessionEvent::PlanPhaseChanged { phase } => {
+                self.plan_phase = phase.clone();
+                let label = match phase {
+                    PlanPhase::Research => "Plan mode: researching…",
+                    PlanPhase::Interview => "Plan mode: interview ready",
+                    PlanPhase::Refine => "Plan mode: refining plan…",
+                    PlanPhase::Ready => {
+                        self.pending_plan_ready = true;
+                        "Plan ready.  e = execute  f = follow up  n = cancel"
+                    }
+                };
+                self.status_message = Some(label.into());
+                self.status_is_error = phase == PlanPhase::Ready;
+            }
+            AgentSessionEvent::PlanQuestionsReady { questions, plan_path } => {
+                self.plan_path = Some(plan_path.clone());
+                self.status_message = None;
+                return Some(PickerRequest::PlanInterview { questions, plan_path });
             }
             AgentSessionEvent::SessionNamed { name } => {
                 layout.footer.set_session_name(Some(name));
@@ -594,7 +649,13 @@ impl InteractiveMode {
                 self.is_streaming = false;
                 layout.chat.cancel_stream();
                 layout.statusbar.finish();
-                if !self.pending_messages.is_empty() {
+                // The TurnEnd handler may have moved a pending message into the
+                // midturn_inject slot. If the agent loop exited without consuming
+                // it (pure-text turn, no tool calls), reclaim it here so it fires
+                // as the next prompt instead of being lost.
+                if let Some(msg) = self.midturn_inject.lock().unwrap().take() {
+                    let _ = self.cmd_tx.send(SessionCommand::Prompt { text: msg });
+                } else if !self.pending_messages.is_empty() {
                     let msg = self.pending_messages.remove(0);
                     self.editing_queue_idx = None;
                     let _ = self.cmd_tx.send(SessionCommand::Prompt { text: msg });
@@ -689,7 +750,20 @@ impl InteractiveMode {
                 layout.chat.push_tool_result(text, result.is_error);
                 tui.request_render(false);
             }
-            AgentEvent::TurnStart | AgentEvent::TurnEnd => {}
+            AgentEvent::TurnStart => {}
+            AgentEvent::TurnEnd => {
+                // If the user queued a message while tools were running, write it
+                // into the shared slot now. The agent loop checks this slot right
+                // after emitting TurnEnd and injects it as a User message before
+                // the next API call, so the model sees the follow-up immediately
+                // instead of waiting until AgentEnd.
+                if !self.pending_messages.is_empty() {
+                    let msg = self.pending_messages.remove(0);
+                    self.editing_queue_idx = self.editing_queue_idx.and_then(|i| i.checked_sub(1));
+                    *self.midturn_inject.lock().unwrap() = Some(msg);
+                    layout.statusbar.set_queue(&self.pending_messages, self.editing_queue_idx);
+                }
+            }
             AgentEvent::Retrying { attempt, wait_secs, reason: _ } => {
                 self.status_message = Some(format!(
                     "Overloaded — retrying in {}s (attempt {}/3)…",
@@ -732,13 +806,34 @@ impl InteractiveMode {
             return None;
         }
 
+        // Planning intent heuristic: auto-detect on first message, or prompt to
+        // confirm mid-session. Only triggers when not already in plan mode.
+        if !self.plan_mode && has_planning_intent(&text) {
+            let is_first_message = self.message_history.len() <= 1;
+            if is_first_message {
+                // Auto-enter on first message — intent is unambiguous.
+                self.plan_mode = true;
+                let _ = self.cmd_tx.try_send(SessionCommand::SetPlanMode { enabled: true });
+                // Fall through and send the prompt as the first planning turn.
+            } else {
+                // Mid-session: stash the text and show a y/n confirmation banner.
+                // The main key handler watches pending_plan_confirm_text and handles
+                // y (enter plan mode + resend) and n (resend as normal).
+                self.pending_plan_confirm_text = Some(text);
+                self.status_message = Some(
+                    "Switch to plan mode for this request?  y = yes  n = no".into(),
+                );
+                self.status_is_error = true;
+                return None;
+            }
+        }
+
         // Fire onUserInput hooks (e.g. reset tmux window colour set by
         // onResponseComplete).
         {
-            let cfg = crate::core::config::NervConfig::load(crate::nerv_dir());
             crate::core::notifications::fire(
                 crate::core::notifications::NotificationMatcher::OnUserInput,
-                &cfg.notifications,
+                &self.config.notifications,
             );
         }
 
@@ -761,10 +856,16 @@ impl InteractiveMode {
         // without waiting for the session thread to dequeue the Abort command.
         self.cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = self.cmd_tx.send(SessionCommand::Abort);
+        // If TurnEnd already moved a message into the inject slot, reclaim it so
+        // it fires as the first prompt after the abort. Otherwise fall back to
+        // the head of pending_messages.
         // Immediately queue the top pending message behind the Abort so the
         // session thread starts on it as soon as the current turn is cancelled,
         // without waiting for AgentEnd to round-trip through the main loop.
-        if !self.pending_messages.is_empty() {
+        let inject = self.midturn_inject.lock().unwrap().take();
+        if let Some(msg) = inject {
+            let _ = self.cmd_tx.send(SessionCommand::Prompt { text: msg });
+        } else if !self.pending_messages.is_empty() {
             let msg = self.pending_messages.remove(0);
             self.editing_queue_idx = self.editing_queue_idx.and_then(|i| i.checked_sub(1));
             let _ = self.cmd_tx.send(SessionCommand::Prompt { text: msg });
@@ -913,6 +1014,13 @@ impl InteractiveMode {
                 let enabled = !self.plan_mode;
                 self.plan_mode = enabled;
                 let _ = self.cmd_tx.try_send(SessionCommand::SetPlanMode { enabled });
+            }
+            "/interview" => {
+                if let Some(req) = self.pending_interview.take() {
+                    return Some(req);
+                } else {
+                    self.status_message = Some("No pending interview.".into());
+                }
             }
             "/hud" => {
                 return Some(PickerRequest::ToggleHud);
@@ -1129,6 +1237,7 @@ impl InteractiveMode {
             "/resume".into(),
             "/tree".into(),
             "/plan".into(),
+            "/interview".into(),
             "/hud".into(),
             "/btw".into(),
             "/fork".into(),
@@ -1245,6 +1354,21 @@ impl InteractiveMode {
         footer.set_plan_mode(self.plan_mode);
         footer.set_compact_threshold(self.compact_threshold);
     }
+}
+
+/// Returns true if the message text suggests the user wants to plan/design
+/// something rather than immediately execute. Used to auto-activate plan mode.
+pub fn has_planning_intent(text: &str) -> bool {
+    let t = text.to_lowercase();
+    // Explicit plan/design/architect triggers
+    let triggers = [
+        "plan ", "plan\n", "design ", "architect ", "draft a plan", "write a plan",
+        "create a plan", "make a plan", "help me plan", "let's plan", "let's design",
+        "think through", "before we start", "before you start", "outline ",
+        "figure out how", "how should we", "how should i", "what's the best way",
+        "what is the best way", "propose a", "suggest a", "explore options",
+    ];
+    triggers.iter().any(|&t2| t.contains(t2))
 }
 
 /// Replace `/skillname` tokens inside `text` with the matching skill's content.

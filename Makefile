@@ -60,7 +60,10 @@ pc:
 	prek --quiet run --all-files
 
 test-ci:
-	@OUT=$$(cargo test --quiet --release -- --test-threads=32 2>&1) || { echo "$$OUT"; exit 1; }
+	@OUT=$$(cargo test --quiet -- --test-threads=4 2>&1) || { echo "$$OUT"; exit 1; }
+
+test-ci-release:
+	@OUT=$$(cargo test --quiet --release -- --test-threads=4 2>&1) || { echo "$$OUT"; exit 1; }
 
 install-skills:
 	@mkdir -p ~/.nerv/skills

@@ -226,17 +226,116 @@ pub fn truncate_to_width(s: &str, max_width: u16) -> String {
 }
 
 /// Wrap text to lines of at most `width` columns, preserving ANSI state across
-/// line breaks. Each output line carries forward the active SGR state.
+/// line breaks. Breaks at word boundaries (spaces); falls back to character-wrap
+/// only for words wider than the column limit.
 pub fn wrap_text_with_ansi(s: &str, width: u16) -> Vec<String> {
     if width == 0 {
         return vec![String::new()];
     }
 
-    let mut lines = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
     let mut current_line = String::new();
     let mut current_width: u16 = 0;
-    // Track active ANSI SGR state to carry across line breaks
+    // Track active ANSI SGR state to carry across line breaks.
     let mut active_sgr = String::new();
+
+    // Flush a plain-text segment with word-wrap. Words are split on spaces;
+    // the space itself is emitted only when it fits on the current line.
+    let flush_segment = |segment: &str,
+                         lines: &mut Vec<String>,
+                         current_line: &mut String,
+                         current_width: &mut u16,
+                         active_sgr: &str| {
+        for part in segment.split('\n') {
+            // Each `part` is a line of input separated by \n.
+            // Split into space-delimited tokens; we'll re-join with spaces.
+            let mut first_word = true;
+            for word in part.split(' ') {
+                let word_w = UnicodeWidthStr::width(word) as u16;
+
+                if first_word {
+                    first_word = false;
+                    // Word fits on current line (possibly starting at col 0).
+                    if *current_width + word_w <= width {
+                        current_line.push_str(word);
+                        *current_width += word_w;
+                    } else if word_w > width {
+                        // Word is wider than the line — character-wrap it.
+                        for g in word.graphemes(true) {
+                            let gw = UnicodeWidthStr::width(g) as u16;
+                            if *current_width + gw > width {
+                                current_line.push_str("\x1b[0m");
+                                lines.push(std::mem::take(current_line));
+                                current_line.push_str(active_sgr);
+                                *current_width = 0;
+                            }
+                            current_line.push_str(g);
+                            *current_width += gw;
+                        }
+                    } else {
+                        // Wrap before the word.
+                        current_line.push_str("\x1b[0m");
+                        lines.push(std::mem::take(current_line));
+                        current_line.push_str(active_sgr);
+                        *current_width = 0;
+                        current_line.push_str(word);
+                        *current_width += word_w;
+                    }
+                } else {
+                    // Subsequent words: prefix with a space.
+                    // Space + word fits?
+                    if *current_width + 1 + word_w <= width {
+                        current_line.push(' ');
+                        current_line.push_str(word);
+                        *current_width += 1 + word_w;
+                    } else {
+                        // Wrap, then emit word without leading space.
+                        current_line.push_str("\x1b[0m");
+                        lines.push(std::mem::take(current_line));
+                        current_line.push_str(active_sgr);
+                        *current_width = 0;
+                        if word_w > width {
+                            // Character-wrap oversized word.
+                            for g in word.graphemes(true) {
+                                let gw = UnicodeWidthStr::width(g) as u16;
+                                if *current_width + gw > width {
+                                    current_line.push_str("\x1b[0m");
+                                    lines.push(std::mem::take(current_line));
+                                    current_line.push_str(active_sgr);
+                                    *current_width = 0;
+                                }
+                                current_line.push_str(g);
+                                *current_width += gw;
+                            }
+                        } else {
+                            current_line.push_str(word);
+                            *current_width += word_w;
+                        }
+                    }
+                }
+            }
+            // Explicit newline from the input `\n` split — break here.
+            current_line.push_str("\x1b[0m");
+            lines.push(std::mem::take(current_line));
+            current_line.push_str(active_sgr);
+            *current_width = 0;
+        }
+        // Undo the final spurious newline added by the split loop above.
+        // The last element of split('\n') corresponds to text *after* the last \n
+        // (or the whole string when there is no \n). We always push a line for it
+        // inside the loop, which means the last push was one too many.
+        // Recover it as the in-progress line.
+        *current_line = lines.pop().unwrap_or_default();
+        // Re-apply active SGR prefix if we just replaced current_line.
+        // (lines.pop() gave us the raw content without the SGR prefix the loop
+        //  put there, because we push_str(active_sgr) *after* taking the line.
+        //  Actually, the take() + active_sgr push means current_line already starts
+        //  with active_sgr when we pop the last entry. The popped line is the last
+        //  push from inside the loop, which was taken from current_line and is
+        //  therefore correctly SGR-prefixed. We restore it verbatim.)
+        // Recompute current_width from the restored line (strip ANSI for counting).
+        *current_width = visible_width(current_line);
+    };
 
     let bytes = s.as_bytes();
     let mut state = AnsiState::Normal;
@@ -247,28 +346,9 @@ pub fn wrap_text_with_ansi(s: &str, width: u16) -> Vec<String> {
         match state {
             AnsiState::Normal => {
                 if bytes[i] == 0x1B {
-                    // Flush normal text
                     if normal_start < i {
                         let segment = &s[normal_start..i];
-                        for g in segment.graphemes(true) {
-                            if g == "\n" {
-                                // Reset at end of line, start next with active SGR
-                                current_line.push_str("\x1b[0m");
-                                lines.push(std::mem::take(&mut current_line));
-                                current_line.push_str(&active_sgr);
-                                current_width = 0;
-                                continue;
-                            }
-                            let gw = UnicodeWidthStr::width(g) as u16;
-                            if current_width + gw > width {
-                                current_line.push_str("\x1b[0m");
-                                lines.push(std::mem::take(&mut current_line));
-                                current_line.push_str(&active_sgr);
-                                current_width = 0;
-                            }
-                            current_line.push_str(g);
-                            current_width += gw;
-                        }
+                        flush_segment(segment, &mut lines, &mut current_line, &mut current_width, &active_sgr);
                     }
                     state = AnsiState::Escape;
                     normal_start = i;
@@ -278,18 +358,9 @@ pub fn wrap_text_with_ansi(s: &str, width: u16) -> Vec<String> {
                 }
             }
             AnsiState::Escape => match bytes[i] {
-                b'[' => {
-                    state = AnsiState::Csi;
-                    i += 1;
-                }
-                b']' => {
-                    state = AnsiState::Osc;
-                    i += 1;
-                }
-                b'_' => {
-                    state = AnsiState::Apc;
-                    i += 1;
-                }
+                b'[' => { state = AnsiState::Csi; i += 1; }
+                b']' => { state = AnsiState::Osc; i += 1; }
+                b'_' => { state = AnsiState::Apc; i += 1; }
                 _ => {
                     current_line.push_str(&s[normal_start..=i]);
                     state = AnsiState::Normal;
@@ -301,7 +372,6 @@ pub fn wrap_text_with_ansi(s: &str, width: u16) -> Vec<String> {
                 if is_csi_final(bytes[i]) {
                     let seq = &s[normal_start..=i];
                     current_line.push_str(seq);
-                    // Track SGR sequences (final byte 'm')
                     if bytes[i] == b'm' {
                         update_sgr_state(&mut active_sgr, seq);
                     }
@@ -335,27 +405,10 @@ pub fn wrap_text_with_ansi(s: &str, width: u16) -> Vec<String> {
         }
     }
 
-    // Remaining normal text
+    // Flush any remaining normal text.
     if normal_start < bytes.len() && state == AnsiState::Normal {
         let segment = &s[normal_start..];
-        for g in segment.graphemes(true) {
-            if g == "\n" {
-                current_line.push_str("\x1b[0m");
-                lines.push(std::mem::take(&mut current_line));
-                current_line.push_str(&active_sgr);
-                current_width = 0;
-                continue;
-            }
-            let gw = UnicodeWidthStr::width(g) as u16;
-            if current_width + gw > width {
-                current_line.push_str("\x1b[0m");
-                lines.push(std::mem::take(&mut current_line));
-                current_line.push_str(&active_sgr);
-                current_width = 0;
-            }
-            current_line.push_str(g);
-            current_width += gw;
-        }
+        flush_segment(segment, &mut lines, &mut current_line, &mut current_width, &active_sgr);
     }
 
     lines.push(current_line);

@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use super::types::*;
 use crate::tools::output_filter;
 
@@ -78,7 +80,7 @@ pub fn compute_adaptive_recent(messages: &[AgentMessage]) -> usize {
 
     // Look at recent tool calls within the analysis window
     let window_start = messages.len().saturating_sub(RECENT_TURNS_MAX * 2);
-    let mut distinct_paths = std::collections::HashSet::new();
+    let mut distinct_paths = HashSet::new();
 
     for msg in &messages[window_start..] {
         if let AgentMessage::Assistant(a) = msg {
@@ -133,29 +135,29 @@ pub fn transform_context(
 /// each per-message transform so we iterate the input only once for analysis.
 struct MessageMeta {
     /// tool_call_id → tool name (for tool-specific transforms)
-    tool_names: std::collections::HashMap<String, String>,
+    tool_names: HashMap<String, String>,
     /// tool_call_id → original bash command string (for language-specific
     /// filters)
-    bash_commands: std::collections::HashMap<String, String>,
+    bash_commands: HashMap<String, String>,
     /// IDs of bash ToolResults where output_filter already ran (filtered:true
     /// in details). transform_context skips the bash filter for these.
-    already_filtered_ids: std::collections::HashSet<String>,
+    already_filtered_ids: HashSet<String>,
     /// tool_call_ids that have a corresponding ToolResult
-    answered_ids: std::collections::HashSet<String>,
+    answered_ids: HashSet<String>,
     /// tool_call_ids whose ToolResult was a denied error
-    denied_ids: std::collections::HashSet<String>,
+    denied_ids: HashSet<String>,
     /// tool_call_ids superseded by a later call on the same resource
-    superseded_ids: std::collections::HashSet<String>,
+    superseded_ids: HashSet<String>,
     /// For read tool calls: line numbers referenced by later edits
-    read_referenced_lines: std::collections::HashMap<String, std::collections::HashSet<usize>>,
+    read_referenced_lines: HashMap<String, HashSet<usize>>,
 }
 
 impl MessageMeta {
     fn new(messages: &[AgentMessage]) -> Self {
-        let mut tool_names: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        let mut bash_commands: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
+        let mut tool_names: HashMap<String, String> =
+            HashMap::new();
+        let mut bash_commands: HashMap<String, String> =
+            HashMap::new();
         for msg in messages {
             if let AgentMessage::Assistant(a) = msg {
                 for block in &a.content {
@@ -179,12 +181,10 @@ impl MessageMeta {
             })
             .collect();
 
-        let already_filtered_ids: std::collections::HashSet<String> = messages
+        let already_filtered_ids: HashSet<String> = messages
             .iter()
             .filter_map(|m| match m {
-                AgentMessage::ToolResult { tool_call_id, details: Some(d), .. }
-                    if d.get("filtered").and_then(|v| v.as_bool()).unwrap_or(false) =>
-                {
+                AgentMessage::ToolResult { tool_call_id, details: Some(d), .. } if d.filtered => {
                     Some(tool_call_id.clone())
                 }
                 _ => None,
@@ -339,13 +339,13 @@ fn transform_tool_result(
         if filtered != raw {
             // Rebuild, preserving display (used by TUI renderer) and marking
             // filtered:true so subsequent transform_context calls are idempotent.
-            let new_details = match details {
+            let new_details = Some(match details {
                 Some(mut d) => {
-                    d["filtered"] = serde_json::json!(true);
-                    Some(d)
+                    d.filtered = true;
+                    d
                 }
-                None => Some(serde_json::json!({"filtered": true})),
-            };
+                None => ToolDetails { filtered: true, ..Default::default() },
+            });
             return Some(AgentMessage::ToolResult {
                 tool_call_id,
                 content: vec![ContentItem::Text { text: filtered.into_owned() }],
@@ -444,7 +444,7 @@ fn content_text(content: &[ContentItem]) -> String {
 /// (1-based).
 fn find_read_referenced_lines(
     messages: &[AgentMessage],
-) -> std::collections::HashMap<String, std::collections::HashSet<usize>> {
+) -> HashMap<String, HashSet<usize>> {
     // Collect read tool calls: (index, tool_call_id, path)
     let mut reads: Vec<(usize, String, String)> = Vec::new();
     for (i, msg) in messages.iter().enumerate() {
@@ -460,8 +460,8 @@ fn find_read_referenced_lines(
         }
     }
 
-    let mut result: std::collections::HashMap<String, std::collections::HashSet<usize>> =
-        std::collections::HashMap::new();
+    let mut result: HashMap<String, HashSet<usize>> =
+        HashMap::new();
 
     for (read_idx, read_id, read_path) in &reads {
         // Find the corresponding tool result to parse its lines
@@ -541,7 +541,7 @@ const FOLD_CONTEXT: usize = 2;
 
 fn fold_read_result(
     read_text: &str,
-    referenced_lines: &std::collections::HashSet<usize>,
+    referenced_lines: &HashSet<usize>,
 ) -> String {
     // Parse into (line_num, full_original_line) pairs
     let lines: Vec<(usize, &str)> = read_text
@@ -559,7 +559,7 @@ fn fold_read_result(
     }
 
     // Build set of lines to keep: referenced + context
-    let mut keep: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut keep: HashSet<usize> = HashSet::new();
     for &line_num in referenced_lines {
         for offset in 0..=(FOLD_CONTEXT * 2) {
             let n = (line_num + offset).saturating_sub(FOLD_CONTEXT);
@@ -606,9 +606,7 @@ fn fold_read_result(
 ///   (or equal to) the earlier grep's path supersedes the earlier result
 /// - **ls/find**: later ls/find whose path is a child of the earlier one
 ///   supersedes it
-fn find_superseded_results(messages: &[AgentMessage]) -> std::collections::HashSet<String> {
-    use std::collections::{HashMap, HashSet};
-
+fn find_superseded_results(messages: &[AgentMessage]) -> HashSet<String> {
     let mut superseded = HashSet::new();
 
     // read: path → latest tool_call_id
@@ -1363,7 +1361,7 @@ mod tests {
             tool_result_with_details(
                 "r1",
                 "fn main() {}",
-                serde_json::json!({"filtered": true, "some_flag": 42}),
+                ToolDetails { filtered: true, ..Default::default() },
             ),
             assistant_tool_call("r2", "read", serde_json::json!({"path": "src/main.rs"})),
             tool_result("r2", "fn main() { updated }"),
@@ -1386,8 +1384,8 @@ mod tests {
             _ => panic!("expected ToolResult for b1"),
         };
         let filtered =
-            details.as_ref().and_then(|d| d.get("some_flag")).and_then(|v| v.as_i64()).unwrap_or(0);
-        assert_eq!(filtered, 42, "details should survive superseded rewrite");
+            details.as_ref().map_or(false, |d| d.filtered);
+        assert!(filtered, "details should survive superseded rewrite");
     }
 
     #[test]
@@ -2119,11 +2117,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         );
     }
 
-    fn tool_result_with_details(
-        id: &str,
-        content: &str,
-        details: serde_json::Value,
-    ) -> AgentMessage {
+    fn tool_result_with_details(id: &str, content: &str, details: ToolDetails) -> AgentMessage {
         AgentMessage::ToolResult {
             tool_call_id: id.into(),
             content: vec![ContentItem::Text { text: content.into() }],
@@ -2147,7 +2141,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         let content = "line\nline\nline\nline\nline\n";
         let msgs = vec![
             assistant_tool_call("c1", "bash", serde_json::json!({"command": "echo line"})),
-            tool_result_with_details("c1", content, serde_json::json!({"filtered": true})),
+            tool_result_with_details("c1", content, ToolDetails { filtered: true, ..Default::default() }),
             // A response to terminate the sequence
             AgentMessage::Assistant(AssistantMessage {
                 content: vec![ContentBlock::Text { text: "done".into() }],
@@ -2227,14 +2221,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         // display should survive the rewrite
         assert!(display.is_some(), "display field should be preserved after filtering");
         // details should now have filtered:true so the next transform call skips this
-        let filtered_flag = details
-            .as_ref()
-            .and_then(|d| d.get("filtered"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        assert!(
-            filtered_flag,
-            "details[\"filtered\"] should be true after transform_context filters"
-        );
+        let filtered_flag = details.as_ref().map_or(false, |d| d.filtered);
+        assert!(filtered_flag, "details.filtered should be true after transform_context filters");
     }
 }

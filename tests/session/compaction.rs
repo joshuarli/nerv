@@ -135,10 +135,10 @@ fn should_compact_respects_enabled_flag() {
 }
 
 #[test]
-fn should_compact_default_settings_threshold_is_50pct() {
+fn should_compact_default_settings_threshold_is_80pct() {
     let s = CompactionSettings::default();
-    assert!(!should_compact(49_999, 100_000, &s));
-    assert!(should_compact(50_001, 100_000, &s));
+    assert!(!should_compact(79_999, 100_000, &s));
+    assert!(should_compact(80_001, 100_000, &s));
 }
 
 // ── find_cut_point: basic invariants ─────────────────────────────────────────

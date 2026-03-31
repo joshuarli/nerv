@@ -3,8 +3,9 @@ use std::sync::Mutex;
 use std::time::SystemTime;
 
 use super::truncate::{DEFAULT_MAX_LINES, truncate_head};
-use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
+use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
 
 struct ReadCacheEntry {
@@ -33,6 +34,7 @@ impl AgentTool for ReadTool {
     fn name(&self) -> &str {
         "read"
     }
+    fn is_readonly(&self) -> bool { true }
     fn description(&self) -> &str {
         "Read a file with line numbers. Use offset/limit to read specific sections of large files."
     }
@@ -63,7 +65,6 @@ impl AgentTool for ReadTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");
@@ -87,7 +88,7 @@ impl AgentTool for ReadTool {
                 );
                 return ToolResult::ok_with_details(
                     msg,
-                    serde_json::json!({"display": format!("{} (unchanged)", path_str)}),
+                    ToolDetails { display: Some(format!("{} (unchanged)", path_str)), ..Default::default() },
                 );
             }
             // Range dedup: if this range is fully covered by a previous read, skip.
@@ -103,7 +104,7 @@ impl AgentTool for ReadTool {
                 );
                 return ToolResult::ok_with_details(
                     msg,
-                    serde_json::json!({"display": format!("{} (already read)", path_str)}),
+                    ToolDetails { display: Some(format!("{} (already read)", path_str)), ..Default::default() },
                 );
             }
         }
@@ -181,7 +182,7 @@ impl AgentTool for ReadTool {
                     entry.ranges_served.push(range);
                 }
 
-                ToolResult::ok_with_details(content, serde_json::json!({"display": display}))
+                ToolResult::ok_with_details(content, ToolDetails { display: Some(display), ..Default::default() })
             }
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::NotFound {
@@ -221,9 +222,8 @@ mod tests {
     }
 
     fn read(tool: &dyn AgentTool, path: &str) -> ToolResult {
-        let cb: UpdateCallback = Arc::new(|_| {});
         let cancel = new_cancel_flag();
-        tool.execute(serde_json::json!({"path": path}), cb, &cancel)
+        tool.execute(serde_json::json!({"path": path}), &cancel)
     }
 
     fn read_range(
@@ -232,7 +232,6 @@ mod tests {
         offset: Option<u64>,
         limit: Option<u64>,
     ) -> ToolResult {
-        let cb: UpdateCallback = Arc::new(|_| {});
         let cancel = new_cancel_flag();
         let mut args = serde_json::json!({"path": path});
         if let Some(o) = offset {
@@ -241,7 +240,7 @@ mod tests {
         if let Some(l) = limit {
             args["limit"] = serde_json::json!(l);
         }
-        tool.execute(args, cb, &cancel)
+        tool.execute(args, &cancel)
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub mod footer;
 pub mod fullscreen_picker;
 pub mod layout;
 pub mod model_picker;
+pub mod plan_interview;
 pub mod session_picker;
 pub mod statusbar;
 pub mod theme;

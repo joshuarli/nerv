@@ -2,22 +2,17 @@
 
 use std::sync::{Arc, RwLock};
 
-use nerv::agent::agent::{Agent, AgentTool, ToolResult, UpdateCallback};
+use nerv::agent::agent::{Agent, AgentTool, ToolResult};
 use nerv::agent::provider::*;
 use nerv::agent::types::*;
 use nerv::core::agent_session::AgentSession;
 use nerv::core::model_registry::ModelRegistry;
 use nerv::core::resource_loader::LoadedResources;
-use nerv::core::tool_registry::{ToolDefinition, ToolRegistry};
+use nerv::core::tool_registry::ToolRegistry;
 use nerv::core::*;
 use nerv::errors::ToolError;
 use nerv::session::SessionManager;
 use tempfile::TempDir;
-
-#[expect(dead_code)]
-pub fn noop_update() -> UpdateCallback {
-    Arc::new(|_| {})
-}
 
 #[expect(dead_code)]
 pub fn noop_cancel() -> CancelFlag {
@@ -82,7 +77,6 @@ impl AgentTool for EchoTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         ToolResult::ok(format!("echo: {}", input["text"].as_str().unwrap_or("(no input)")))
@@ -186,12 +180,12 @@ pub fn mock_session(
     registry.register("mock", provider);
 
     let mut agent = Agent::new(Arc::new(RwLock::new(registry)));
-    agent.state.model = Some(test_model());
+    agent.set_model(Some(test_model()));
 
     let model_registry = Arc::new(ModelRegistry::empty());
     let mut tool_registry = ToolRegistry::new();
     if with_echo_tool {
-        tool_registry.register(ToolDefinition { tool: Arc::new(EchoTool) });
+        tool_registry.register(Arc::new(EchoTool));
     }
 
     let session_manager = SessionManager::new(&nerv_dir);
@@ -204,6 +198,7 @@ pub fn mock_session(
         model_registry,
         resources,
         tmp.path().to_path_buf(),
+        nerv::core::config::NervConfig::default(),
     );
     // Prevent mock provider from being consumed by background session-naming calls.
     session.disable_session_naming();

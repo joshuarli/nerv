@@ -8,6 +8,16 @@ use super::provider::*;
 use super::types::*;
 use crate::errors::ProviderError;
 
+#[derive(Deserialize, Default)]
+struct OaiTimings {
+    // llama.cpp: tokens served from the KV cache this request.
+    #[serde(default)]
+    cache_n: u32,
+    // llama.cpp: tokens actually processed (not served from cache).
+    #[serde(default)]
+    prompt_n: u32,
+}
+
 #[derive(Deserialize)]
 struct OaiUsage {
     #[serde(default)]
@@ -57,6 +67,8 @@ struct OaiChunk {
     choices: Vec<OaiChoice>,
     #[serde(default)]
     usage: Option<OaiUsage>,
+    #[serde(default)]
+    timings: OaiTimings,
 }
 
 pub struct OpenAICompatProvider {
@@ -243,6 +255,11 @@ impl Provider for OpenAICompatProvider {
             .expect("failed to spawn SSE reader thread");
 
         let mut usage = Usage::default();
+        // Many local servers (llama.cpp, Ollama) send usage in a separate
+        // trailing chunk that arrives *after* the finish_reason chunk and
+        // *before* [DONE]. We track the stop reason here so we can keep
+        // reading until [DONE]/EOF to pick up that usage chunk.
+        let mut pending_stop: Option<StopReason> = None;
         let poll_interval = std::time::Duration::from_millis(50);
 
         loop {
@@ -262,10 +279,8 @@ impl Provider for OpenAICompatProvider {
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
                 Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
                     // Reader thread finished (EOF or error)
-                    on_event(ProviderEvent::MessageStop {
-                        stop_reason: StopReason::EndTurn,
-                        usage,
-                    });
+                    let stop_reason = pending_stop.unwrap_or(StopReason::EndTurn);
+                    on_event(ProviderEvent::MessageStop { stop_reason, usage });
                     return Ok(());
                 }
             };
@@ -275,7 +290,8 @@ impl Provider for OpenAICompatProvider {
                 continue;
             }
             if line == "data: [DONE]" {
-                on_event(ProviderEvent::MessageStop { stop_reason: StopReason::EndTurn, usage });
+                let stop_reason = pending_stop.unwrap_or(StopReason::EndTurn);
+                on_event(ProviderEvent::MessageStop { stop_reason, usage });
                 return Ok(());
             }
             let Some(data) = line.strip_prefix("data: ") else {
@@ -286,11 +302,23 @@ impl Provider for OpenAICompatProvider {
             };
 
             if let Some(u) = chunk.usage.filter(|u| u.prompt_tokens > 0) {
-                usage.input = u.prompt_tokens;
+                // Prefer timings.prompt_n (tokens actually processed, excluding cache hits)
+                // over prompt_tokens (total context size). Falls back to prompt_tokens for
+                // servers that don't emit timings.
+                usage.input = if chunk.timings.prompt_n > 0 {
+                    chunk.timings.prompt_n
+                } else {
+                    u.prompt_tokens
+                };
                 usage.output = u.completion_tokens;
+                usage.cache_read = chunk.timings.cache_n;
                 on_event(ProviderEvent::UsageUpdate(usage.clone()));
             }
             let Some(choice) = chunk.choices.into_iter().next() else {
+                // Usage-only chunk (no choices) — keep going to get [DONE].
+                if pending_stop.is_some() {
+                    continue;
+                }
                 continue;
             };
             let delta = choice.delta;
@@ -322,8 +350,9 @@ impl Provider for OpenAICompatProvider {
                     "length" => StopReason::MaxTokens,
                     _ => StopReason::EndTurn,
                 };
-                on_event(ProviderEvent::MessageStop { stop_reason: sr, usage });
-                return Ok(());
+                // Don't return yet — keep reading so we can capture any
+                // trailing usage chunk before [DONE].
+                pending_stop = Some(sr);
             }
         }
     }

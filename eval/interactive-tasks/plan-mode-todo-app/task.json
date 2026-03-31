@@ -1,0 +1,4 @@
+{
+  "prompt": "Let's plan out a tagging feature for this todo app. Items should support multiple tags, with the ability to filter the list by tag.",
+  "description": "Exercises plan mode: small Python repo with a working but feature-incomplete todo CLI. The prompt is deliberately open-ended so the model needs to ask clarifying questions before coding."
+}

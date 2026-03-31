@@ -35,11 +35,15 @@ impl Cost {
         // usage.input includes cache_read + cache_write — subtract them to avoid
         // double-counting.
         let uncached = usage.input.saturating_sub(usage.cache_read + usage.cache_write);
-        self.input += (pricing.input / 1_000_000.0) * uncached as f64;
-        self.output += (pricing.output / 1_000_000.0) * usage.output as f64;
-        self.cache_read += (pricing.cache_read / 1_000_000.0) * usage.cache_read as f64;
-        self.cache_write += (pricing.cache_write / 1_000_000.0) * usage.cache_write as f64;
-        self.total = self.input + self.output + self.cache_read + self.cache_write;
+        let di = (pricing.input / 1_000_000.0) * uncached as f64;
+        let do_ = (pricing.output / 1_000_000.0) * usage.output as f64;
+        let dr = (pricing.cache_read / 1_000_000.0) * usage.cache_read as f64;
+        let dw = (pricing.cache_write / 1_000_000.0) * usage.cache_write as f64;
+        self.input += di;
+        self.output += do_;
+        self.cache_read += dr;
+        self.cache_write += dw;
+        self.total += di + do_ + dr + dw;
     }
 }
 
@@ -79,11 +83,10 @@ pub enum AgentMessage {
         /// the LLM.
         #[serde(skip_serializing_if = "Option::is_none")]
         display: Option<String>,
-        /// Tool-level metadata for transform_context (e.g. `{"filtered":true}`
-        /// from bash). Not sent to the LLM. Optional so old serialized
-        /// sessions deserialize fine.
+        /// Typed tool-level metadata. Not sent to the LLM. Optional so old
+        /// serialized sessions without this field deserialize fine.
         #[serde(skip_serializing_if = "Option::is_none")]
-        details: Option<serde_json::Value>,
+        details: Option<ToolDetails>,
         timestamp: u64,
     },
     #[serde(rename = "custom")]
@@ -111,6 +114,10 @@ impl AgentMessage {
 
     pub fn is_assistant(&self) -> bool {
         matches!(self, Self::Assistant(_))
+    }
+
+    pub fn as_assistant(&self) -> Option<&AssistantMessage> {
+        if let Self::Assistant(a) = self { Some(a) } else { None }
     }
 }
 
@@ -209,7 +216,7 @@ impl StopReason {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Usage {
     pub input: u32,
     pub output: u32,
@@ -275,6 +282,25 @@ pub struct ToolResultData {
     /// instead of the full content. Content still goes to the LLM.
     pub display: Option<String>,
     pub is_error: bool,
+}
+
+/// Typed metadata attached to a `ToolResult` / `AgentMessage::ToolResult`.
+/// Not sent to the LLM — used by the TUI, transform_context, and export.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolDetails {
+    /// Short display summary shown in the TUI instead of the raw content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+    /// Unified diff string (edit/write tools). Used for HTML export.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    /// True when the bash output filter has already been applied at execution
+    /// time, so transform_context can skip it on subsequent passes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub filtered: bool,
+    /// Exit code from bash. Informational only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 pub use crate::now_millis;

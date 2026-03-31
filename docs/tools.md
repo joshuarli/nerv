@@ -1,6 +1,6 @@
 # Built-in Tools
 
-Nerv provides 10 tools to the LLM. Readonly tools (`read`, `grep`, `find`,
+Nerv provides a set of built-in tools to the LLM. Readonly tools (`read`, `grep`, `find`,
 `ls`, `symbols`, `codemap`) execute in parallel when all calls in a turn are
 readonly; otherwise tools run sequentially. File-mutating tools (`edit`,
 `write`) serialize through a per-file mutex to prevent concurrent writes
@@ -16,8 +16,9 @@ Every tool result has three channels:
 - **`details.display`** (string, optional) — compact summary shown in the
   TUI instead of the full content. If absent, the TUI falls back to
   truncated content.
-- **`details`** (JSON, optional) — rich metadata for the TUI. Diffs,
-  exit codes, truncation info. Never sent to the LLM.
+- **`details`** (`ToolDetails`, optional) — typed metadata for the TUI. Contains
+  optional `display` (compact summary), `diff` (edit diffs), `exit_code`,
+  and `filtered` flag. Never sent to the LLM.
 
 What the user sees vs what the LLM sees:
 

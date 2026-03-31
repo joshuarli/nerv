@@ -9,9 +9,13 @@ use crate::core::agent_session::AgentSession;
 use crate::core::config::NervConfig;
 use crate::core::model_registry::ModelRegistry;
 use crate::core::resource_loader::LoadedResources;
-use crate::core::tool_registry::{ToolDefinition, ToolRegistry};
+use crate::core::tool_registry::ToolRegistry;
+use crate::index::SOURCE_EXTENSIONS;
 use crate::session::SessionManager;
-use crate::tools::*;
+use crate::tools::{
+    BashTool, CodemapTool, EditTool, FileMutationQueue, FindTool, GrepTool, LsTool, MemoryTool,
+    ReadTool, SymbolsTool, WriteTool,
+};
 
 /// Everything needed to run the agent, constructed from disk config.
 pub struct Bootstrap {
@@ -20,6 +24,8 @@ pub struct Bootstrap {
     pub model_registry: Arc<ModelRegistry>,
     pub resources: LoadedResources,
     pub cancel_flag: crate::agent::provider::CancelFlag,
+    /// Shared mid-turn injection slot — same Arc as agent.midturn_inject.
+    pub midturn_inject: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// Warnings from config validation (unknown model ids, etc.).
     pub config_warnings: Vec<String>,
 }
@@ -108,13 +114,13 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
         };
 
         for tool in tools {
-            tool_registry.register(ToolDefinition { tool });
+            tool_registry.register(tool);
         }
 
         // After file-writing tools, update the symbol index for the affected file.
         // For bash, mark the index dirty so the next symbols call does a full rescan.
         let project_root = cwd.to_path_buf();
-        agent.state.post_tool_fn = Some(Arc::new(move |tool_name, args| match tool_name {
+        agent.set_post_tool_fn(Some(Arc::new(move |tool_name, args| match tool_name {
             "edit" | "write" => {
                 if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
                     let path = if path_str.starts_with('/') {
@@ -122,7 +128,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
                     } else {
                         project_root.join(path_str)
                     };
-                    if path.extension().is_some_and(|e| e == "rs")
+                    if path.extension().is_some_and(|e| SOURCE_EXTENSIONS.contains(&e.to_str().unwrap_or("")))
                         && let Ok(mut index) = symbol_index.write()
                     {
                         index.index_file(&path);
@@ -135,10 +141,11 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
                 }
             }
             _ => {}
-        }));
+        })));
     }
 
     let cancel_flag = agent.cancel.clone();
+    let midturn_inject = agent.midturn_inject.clone();
 
     let session_manager = SessionManager::new(&crate::repo_data_dir(cwd));
 
@@ -149,6 +156,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
         model_registry.clone(),
         resources.clone(),
         cwd.to_path_buf(),
+        config.clone(),
     );
     session.permissions_enabled = opts.permissions;
     session.talk_mode = opts.talk_mode;
@@ -156,25 +164,25 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     // Apply default thinking level from config (true = on, false = off).
     if let Some(enabled) = config.default_thinking {
         use crate::agent::types::ThinkingLevel;
-        session.agent.state.thinking_level =
-            if enabled { ThinkingLevel::On } else { ThinkingLevel::Off };
+        session.agent.set_thinking_level(
+            if enabled { ThinkingLevel::On } else { ThinkingLevel::Off });
     }
 
     // Apply default effort level from config ("low", "medium", "high", "max").
     if let Some(effort) = config.default_effort_level {
-        session.agent.state.effort_level = Some(effort);
+        session.agent.set_effort_level(Some(effort));
     }
 
     // Apply auto_compact setting from config (default: true).
     if let Some(enabled) = config.auto_compact {
-        session.auto_compact = enabled;
+        session.compaction.auto_compact = enabled;
     }
 
     // Validate configured model ids against the known model list.
     let known_ids: Vec<&str> = model_registry.all_models().iter().map(|m| m.id.as_str()).collect();
     let config_warnings = config.validate_model_ids(&known_ids);
 
-    Bootstrap { session, config, model_registry, resources, cancel_flag, config_warnings }
+    Bootstrap { session, config, model_registry, resources, cancel_flag, midturn_inject, config_warnings }
 }
 
 /// Resolve a model by name (fuzzy match or provider/id).

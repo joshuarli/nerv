@@ -1,7 +1,53 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
+
+/// Phase of the plan-mode state machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanPhase {
+    /// Model is researching + writing the initial plan draft.
+    Research,
+    /// Waiting for the user to answer the model's interview questions.
+    Interview,
+    /// Model is refining the plan based on user answers.
+    Refine,
+    /// Plan is complete — waiting for user to choose execute / follow-up / cancel.
+    Ready,
+}
+
+/// A single interview question emitted by the model.
+#[derive(Debug, Clone)]
+pub struct PlanOption {
+    pub label: String,
+    /// One-line tradeoff note shown as subtext under the choice.
+    pub subtext: String,
+    /// Whether the model recommends this option.
+    pub recommended: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlanQuestion {
+    pub q: String,
+    pub options: Vec<PlanOption>,
+}
+
+/// Typed wrapper around the shared allowed-directories list.
+///
+/// Directories added here are granted full tool access without per-call prompts.
+/// The Arc makes it cheap to clone into closures.
+#[derive(Clone, Default)]
+pub struct AllowedDirs(Arc<std::sync::Mutex<Vec<PathBuf>>>);
+
+impl AllowedDirs {
+    pub fn push(&self, dir: PathBuf) {
+        self.0.lock().unwrap().push(dir);
+    }
+    pub fn snapshot(&self) -> Vec<PathBuf> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
 
 use crossbeam_channel::Sender;
 
@@ -11,9 +57,14 @@ use super::system_prompt::build_system_prompt_for_model;
 use super::tool_registry::ToolRegistry;
 use crate::agent::agent::Agent;
 use crate::agent::provider::Provider;
-use crate::agent::types::*;
+use crate::agent::types::{
+    AgentEvent, AgentMessage, AssistantMessage, ContentItem, Cost, EffortLevel, Model,
+    ModelPricing, StopReason, ThinkingLevel,
+};
+use crate::now_millis;
 use crate::compaction::summarize::{generate_session_name, generate_summary};
-use crate::compaction::{self, CompactionResult, CompactionSettings};
+use crate::compaction::{self, CompactionResult};
+use super::compaction_controller::CompactionController;
 use crate::core::config::NervConfig;
 use crate::session::SessionManager;
 
@@ -103,9 +154,17 @@ pub enum AgentSessionEvent {
         provider: String,
         online: bool,
     },
-    /// Permission request — agent blocks until response is sent back.
     PlanModeChanged {
         enabled: bool,
+    },
+    /// Model produced interview questions — UI should launch the interview TUI.
+    PlanQuestionsReady {
+        questions: Vec<PlanQuestion>,
+        plan_path: PathBuf,
+    },
+    /// Plan phase advanced (Research → Interview → Refine → Ready).
+    PlanPhaseChanged {
+        phase: PlanPhase,
     },
     /// Session title was generated after the first completed turn.
     SessionNamed {
@@ -196,6 +255,12 @@ pub enum SessionCommand {
     SetPlanMode {
         enabled: bool,
     },
+    /// Submit answers from the interview TUI back to the agent.
+    PlanAnswers {
+        answers: Vec<(String, String)>,
+    },
+    /// User chose to dig deeper (f) — ask the model for more questions.
+    PlanFollowUp,
     ForkSession,
     /// Persist the full input history for the current session.
     SaveInputHistory {
@@ -207,15 +272,15 @@ pub struct AgentSession {
     pub agent: Agent,
     pub session_manager: SessionManager,
     pub tool_registry: ToolRegistry,
-    compaction_settings: CompactionSettings,
-    /// Compact threshold as integer percent (0-100). Shared with the main
-    /// thread so `/compact at N` takes effect immediately without going
-    /// through cmd_tx.
-    pub compact_threshold_pct: Arc<AtomicU32>,
-    model_registry: Arc<ModelRegistry>,
-    resources: LoadedResources,
-    cwd: PathBuf,
-    session_cost: Cost,
+    /// Config loaded once at startup. Immutable for the lifetime of the session.
+    pub config: NervConfig,
+    /// Compaction state: settings, threshold, auto-compact flag, and the
+    /// mid-stream trigger flag. Grouped to make hand-off to closures obvious.
+    pub compaction: CompactionController,
+    pub(crate) model_registry: Arc<ModelRegistry>,
+    pub(crate) resources: LoadedResources,
+    pub(crate) cwd: PathBuf,
+    pub(crate) session_cost: Cost,
     last_input_tokens: u32,
     pub permissions_enabled: bool,
     /// Cache of accepted permissions: (tool, args_json) keyed by args hash
@@ -224,22 +289,24 @@ pub struct AgentSession {
     /// Directories the user has granted full access to via the "allow dir"
     /// prompt response. Shared with the main thread so new entries can be
     /// pushed from the UI.
-    pub allowed_dirs: Arc<std::sync::Mutex<Vec<PathBuf>>>,
+    pub allowed_dirs: AllowedDirs,
     /// Worktree path tied to this session (set via --wt or /wt).
-    worktree: Option<PathBuf>,
+    pub(crate) worktree: Option<PathBuf>,
     /// Plan mode: restrict tools to read-only, steer model toward planning.
     plan_mode: bool,
+    /// Path of the plan file for the current plan-mode session.
+    pub plan_path: Option<PathBuf>,
+    /// Current phase of the plan-mode state machine.
+    pub plan_phase: PlanPhase,
     /// Talk mode: no tools, no project context, pure conversational assistant.
     pub talk_mode: bool,
     /// True once the session has been given an auto-generated name, to avoid
     /// re-naming.
-    session_named: bool,
-    /// Whether automatic threshold-based compaction is enabled for this
-    /// session.
-    pub auto_compact: bool,
-    /// Set by the UsageUpdate callback when mid-stream compaction triggers.
-    /// Checked after prompt() returns to decide whether to compact + retry.
-    compaction_triggered: Arc<AtomicBool>,
+    pub(crate) session_named: bool,
+    /// Shared slot for mid-turn message injection. The event loop writes a
+    /// queued message here at TurnEnd; the agent loop picks it up before the
+    /// next API call. Cloned from agent.midturn_inject on construction.
+    pub midturn_inject: Arc<Mutex<Option<String>>>,
 }
 
 impl AgentSession {
@@ -250,13 +317,15 @@ impl AgentSession {
         model_registry: Arc<ModelRegistry>,
         resources: LoadedResources,
         cwd: PathBuf,
+        config: NervConfig,
     ) -> Self {
+        let midturn_inject = agent.midturn_inject.clone();
         Self {
             agent,
             session_manager,
             tool_registry,
-            compaction_settings: CompactionSettings::default(),
-            compact_threshold_pct: Arc::new(AtomicU32::new(50)),
+            config,
+            compaction: CompactionController::default(),
             model_registry,
             resources,
             cwd,
@@ -264,24 +333,154 @@ impl AgentSession {
             last_input_tokens: 0,
             permissions_enabled: false,
             permission_cache: Arc::new(std::sync::Mutex::new(HashSet::new())),
-            allowed_dirs: Arc::new(std::sync::Mutex::new(Vec::new())),
+            allowed_dirs: AllowedDirs::default(),
             worktree: None,
             plan_mode: false,
+            plan_path: None,
+            plan_phase: PlanPhase::Research,
             talk_mode: false,
             session_named: false,
-            auto_compact: true,
-            compaction_triggered: Arc::new(AtomicBool::new(false)),
+            midturn_inject,
         }
+    }
+
+    /// Resolve (and cache) the plan file path. Called lazily so the session ID
+    /// exists by the time we need it.
+    fn resolve_plan_path(&mut self) -> PathBuf {
+        if let Some(ref p) = self.plan_path {
+            return p.clone();
+        }
+        let session_id = self.session_manager.session_id().to_string();
+        let repo_dir = crate::repo_data_dir(&self.cwd);
+        let _ = std::fs::create_dir_all(&repo_dir);
+        let path = repo_dir.join(format!("plan-{}.md", session_id));
+        self.plan_path = Some(path.clone());
+        path
     }
 
     pub fn set_plan_mode(&mut self, enabled: bool, event_tx: &Sender<AgentSessionEvent>) {
         self.plan_mode = enabled;
         if enabled {
-            self.tool_registry.set_active(&["read", "bash", "grep", "find", "ls", "memory"]);
+            // plan_path is resolved lazily (session ID may not exist yet).
+            self.plan_phase = PlanPhase::Research;
+            // Read-only tools + write + edit (write/edit are gated to plan_path only
+            // via permissions).
+            self.tool_registry.set_active(&[
+                "read", "bash", "grep", "find", "ls", "symbols", "codemap", "memory",
+                "write", "edit",
+            ]);
         } else {
+            self.plan_path = None;
+            self.plan_phase = PlanPhase::Research;
             self.tool_registry.set_active(&[]);
         }
         let _ = event_tx.send(AgentSessionEvent::PlanModeChanged { enabled });
+    }
+
+    /// Extract a `{"questions":[...]}` JSON block from the tail of an assistant
+    /// response. Returns `Some(vec)` (possibly empty) when the block is present,
+    /// `None` when absent.
+    fn extract_questions(text: &str) -> Option<Vec<PlanQuestion>> {
+        // Find the last `{` that starts a JSON object containing "questions".
+        let start = text.rfind("{\"questions\"")?;
+        let fragment = &text[start..];
+        // Find the matching closing brace (simple depth counter).
+        let mut depth = 0usize;
+        let mut end = None;
+        for (i, ch) in fragment.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        end = Some(i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let json_str = &fragment[..end?];
+        let val: serde_json::Value = serde_json::from_str(json_str).ok()?;
+        let arr = val.get("questions")?.as_array()?;
+        let questions = arr
+            .iter()
+            .filter_map(|item| {
+                let obj = item.as_object()?;
+                let q = obj.get("q")?.as_str()?.to_string();
+                let options = obj
+                    .get("options")
+                    .and_then(|o| o.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| {
+                                if let Some(s) = v.as_str() {
+                                    // Backward-compat: plain string option.
+                                    Some(PlanOption {
+                                        label: s.to_string(),
+                                        subtext: String::new(),
+                                        recommended: false,
+                                    })
+                                } else if let Some(o) = v.as_object() {
+                                    let label = o.get("label")?.as_str()?.to_string();
+                                    let subtext = o.get("subtext")
+                                        .and_then(|s| s.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let recommended = o.get("recommended")
+                                        .and_then(|r| r.as_bool())
+                                        .unwrap_or(false);
+                                    Some(PlanOption { label, subtext, recommended })
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(PlanQuestion { q, options })
+            })
+            .collect();
+        Some(questions)
+    }
+
+    /// Build and send the answer injection prompt after the interview.
+    pub fn inject_plan_answers(
+        &mut self,
+        answers: Vec<(String, String)>,
+        event_tx: &Sender<AgentSessionEvent>,
+    ) {
+        let plan_path = self.resolve_plan_path().display().to_string();
+        let mut text = format!(
+            "Here are my answers to your questions:\n\n"
+        );
+        for (i, (question, answer)) in answers.iter().enumerate() {
+            if answer.is_empty() {
+                text.push_str(&format!("{}. {}\n   Answer: (no preference — use your judgment)\n\n", i + 1, question));
+            } else {
+                text.push_str(&format!("{}. {}\n   Answer: {}\n\n", i + 1, question, answer));
+            }
+        }
+        text.push_str(&format!(
+            "Please update the plan file at `{}` with a refined version incorporating these answers. \
+             Then either output a new questions JSON block if you need more clarification, or \
+             output `{{\"questions\":[]}}` when the plan is complete.",
+            plan_path
+        ));
+        self.plan_phase = PlanPhase::Refine;
+        let _ = event_tx.send(AgentSessionEvent::PlanPhaseChanged { phase: PlanPhase::Refine });
+        self.prompt(text, event_tx);
+    }
+
+    /// Inject a follow-up prompt asking the model to dig deeper.
+    pub fn inject_plan_followup(&mut self, event_tx: &Sender<AgentSessionEvent>) {
+        let text =
+            "The plan needs more depth. Please ask me more targeted clarifying questions \
+             to sharpen it further. Use the same questions JSON format."
+                .to_string();
+        self.plan_phase = PlanPhase::Refine;
+        let _ = event_tx.send(AgentSessionEvent::PlanPhaseChanged { phase: PlanPhase::Refine });
+        self.prompt(text, event_tx);
     }
 
     pub fn set_worktree(&mut self, path: PathBuf) {
@@ -326,12 +525,12 @@ impl AgentSession {
         self.prepare_callbacks(event_tx);
 
         // Reset in case a previous prompt left it set (e.g. abort during compaction).
-        self.compaction_triggered.store(false, Ordering::Relaxed);
+        self.compaction.reset_triggered();
         let new_messages = self.run_agent_prompt(vec![user_msg], event_tx);
 
         // Mid-stream auto-compaction: the on_event callback detected the context
         // exceeded the threshold and cancelled the stream. Compact now and retry.
-        if self.compaction_triggered.swap(false, Ordering::Relaxed) {
+        if self.compaction.check_and_clear_triggered() {
             crate::log::info("mid-stream auto-compact: running compaction");
             let _ = event_tx.send(AgentSessionEvent::AutoCompactionStart {
                 reason: CompactionReason::Threshold,
@@ -356,10 +555,10 @@ impl AgentSession {
                     };
                     self.prepare_system_prompt();
                     self.prepare_callbacks(event_tx);
-                    let saved_auto_compact = self.auto_compact;
-                    self.auto_compact = false;
+                    let saved_auto_compact = self.compaction.auto_compact;
+                    self.compaction.auto_compact = false;
                     let retry_messages = self.run_agent_prompt(vec![retry_msg], event_tx);
-                    self.auto_compact = saved_auto_compact;
+                    self.compaction.auto_compact = saved_auto_compact;
                     self.post_turn(retry_messages, &text, event_tx);
                 }
                 Ok(None) => {
@@ -402,16 +601,36 @@ impl AgentSession {
             let perm_tx = event_tx.clone();
             let cache = self.permission_cache.clone();
             let allowed_dirs = self.allowed_dirs.clone();
+            let notifications = self.config.notifications.clone();
+            // Write/edit to the plan file are always allowed without a gate.
+            let plan_path = Some(self.resolve_plan_path());
 
-            self.agent.state.permission_fn =
+            self.agent.set_permission_fn(
                 Some(std::sync::Arc::new(move |tool: &str, args: &serde_json::Value| {
+                    // In plan mode, allow write/edit unconditionally to the plan file.
+                    if (tool == "write" || tool == "edit") && let Some(ref pp) = plan_path {
+                        let target = args["path"].as_str().unwrap_or("");
+                        let target_path = std::path::Path::new(target);
+                        if target_path == pp.as_path() {
+                            return true;
+                        }
+                        // Absolute comparison via canonicalize fallback
+                        let canon_target = std::fs::canonicalize(target_path)
+                            .unwrap_or_else(|_| target_path.to_path_buf());
+                        let canon_plan = std::fs::canonicalize(pp)
+                            .unwrap_or_else(|_| pp.clone());
+                        if canon_target == canon_plan {
+                            return true;
+                        }
+                    }
+
                     let args_json = serde_json::to_string(args).unwrap_or_default();
-                    let key = format!("{}:{}", tool, args_json);
+                    let key = permission_key(tool, &args_json);
                     if cache.lock().unwrap().contains(&key) {
                         return true;
                     }
 
-                    let dirs = allowed_dirs.lock().unwrap().clone();
+                    let dirs = allowed_dirs.snapshot();
                     let perm = super::permissions::check_with_allowed_dirs(
                         tool,
                         args,
@@ -440,16 +659,15 @@ impl AgentSession {
                                 c.insert(reason_key);
                             } else {
                                 // Fire onPermissionDenied hooks (fire-and-forget).
-                                let cfg = NervConfig::load(crate::nerv_dir());
                                 super::notifications::fire(
                                     super::notifications::NotificationMatcher::OnPermissionDenied,
-                                    &cfg.notifications,
+                                    &notifications,
                                 );
                             }
                             approved
                         }
                     }
-                }));
+                })));
         }
 
         // Output gate: fires after bash executes when filtered output exceeds
@@ -457,7 +675,7 @@ impl AgentSession {
         // the TUI.
         {
             let output_tx = event_tx.clone();
-            self.agent.state.output_gate_fn =
+            self.agent.set_output_gate_fn(
                 Some(std::sync::Arc::new(move |info: crate::agent::agent::OutputGateInfo| {
                     let (resp_tx, resp_rx) = crossbeam_channel::bounded(1);
                     let _ = output_tx.send(AgentSessionEvent::OutputGateRequest {
@@ -471,12 +689,12 @@ impl AgentSession {
                     } else {
                         crate::agent::agent::OutputGateDecision::Deny
                     }
-                }));
+                })));
         }
 
         // Context gate (circuit breaker for context growth)
         let gate_tx = event_tx.clone();
-        self.agent.state.context_gate_fn =
+        self.agent.set_context_gate_fn(
             Some(std::sync::Arc::new(move |info: crate::agent::agent::ContextGateInfo| {
                 if info.tool_rounds < 4 || info.prev_tokens == 0 {
                     return true;
@@ -497,7 +715,7 @@ impl AgentSession {
                     response_tx: resp_tx,
                 });
                 resp_rx.recv().unwrap_or(false)
-            }));
+            })));
     }
 
     /// Handle overflow compaction and session naming after a completed prompt.
@@ -567,37 +785,114 @@ impl AgentSession {
             self.session_named = true;
             let _ = event_tx.send(AgentSessionEvent::SessionNamed { name });
         }
+
+        // Plan mode: extract questions from the last assistant message.
+        // Only fire during Research/Refine — not once we've reached Interview or Ready.
+        if self.plan_mode
+            && matches!(self.plan_phase, PlanPhase::Research | PlanPhase::Refine)
+        {
+            self.handle_plan_turn(new_messages, event_tx);
+        }
+    }
+
+    /// After a plan-mode turn, parse the questions JSON block and emit the
+    /// appropriate event. If the block is missing, inject a correction prompt
+    /// once. If `questions` is empty, the plan is ready.
+    fn handle_plan_turn(
+        &mut self,
+        new_messages: Vec<AgentMessage>,
+        event_tx: &Sender<AgentSessionEvent>,
+    ) {
+        let last_text = new_messages
+            .iter()
+            .rev()
+            .find_map(|m| {
+                if let AgentMessage::Assistant(a) = m {
+                    let t: String = a
+                        .content
+                        .iter()
+                        .filter_map(|b| {
+                            if let crate::agent::types::ContentBlock::Text { text } = b {
+                                Some(text.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    if t.is_empty() { None } else { Some(t) }
+                } else {
+                    None
+                }
+            });
+
+        let Some(text) = last_text else { return };
+
+        match Self::extract_questions(&text) {
+            Some(questions) if questions.is_empty() => {
+                // Model signals it has enough information — plan is ready.
+                self.plan_phase = PlanPhase::Ready;
+                let _ =
+                    event_tx.send(AgentSessionEvent::PlanPhaseChanged { phase: PlanPhase::Ready });
+            }
+            Some(questions) => {
+                // Questions found — move to Interview phase.
+                self.plan_phase = PlanPhase::Interview;
+                let plan_path = self.resolve_plan_path();
+                let _ = event_tx.send(AgentSessionEvent::PlanPhaseChanged {
+                    phase: PlanPhase::Interview,
+                });
+                let _ = event_tx.send(AgentSessionEvent::PlanQuestionsReady {
+                    questions,
+                    plan_path,
+                });
+            }
+            None => {
+                // No JSON block — inject a one-shot correction prompt.
+                let correction =
+                    "Your response didn't include the required questions JSON block. \
+                     Reply with ONLY the JSON block — for example:\n\
+                     {\"questions\":[{\"q\":\"How should X work?\",\"options\":[{\"label\":\"A\",\"subtext\":\"Simpler but less flexible.\",\"recommended\":true},{\"label\":\"B\",\"subtext\":\"More powerful but adds complexity.\",\"recommended\":false}]}]}\n\
+                     Each option must have label, subtext, and recommended fields. \
+                     Use an empty array if you are satisfied: {\"questions\":[]}"
+                        .to_string();
+                crate::log::info("plan mode: missing questions block — injecting correction prompt");
+                self.prompt(correction, event_tx);
+            }
+        }
     }
 
     fn prepare_system_prompt(&mut self) {
         // In talk mode: use a minimal conversational prompt with no tools,
         // no project context, and no memory.
         if self.talk_mode {
-            self.agent.state.tools = Vec::new();
-            self.agent.state.system_prompt =
-                "You are a helpful assistant. Answer clearly and concisely.".to_string();
+            self.agent.set_tools(Vec::new());
+            self.agent.set_system_prompt(
+                "You are a helpful assistant. Answer clearly and concisely.".to_string());
             return;
         }
 
         // Reload memory in case it was updated by a tool call
         self.resources.memory = std::fs::read_to_string(crate::nerv_dir().join("memory.md")).ok();
 
-        self.agent.state.tools = self.tool_registry.active_tools();
-        let tool_names: Vec<&str> = self.agent.state.tools.iter().map(|t| t.name()).collect();
+        let tools = self.tool_registry.active_tools();
+        let tool_names: Vec<String> = tools.iter().map(|t| t.name().to_string()).collect();
+        self.agent.set_tools(tools);
         let snippets = self.tool_registry.prompt_snippets();
         let guidelines = self.tool_registry.prompt_guidelines();
-        let model_id = self.agent.state.model.as_ref().map(|m| m.id.as_str());
-        self.agent.state.system_prompt = build_system_prompt_for_model(
+        let tool_name_refs: Vec<&str> = tool_names.iter().map(String::as_str).collect();
+        let model_id = self.agent.model().map(|m| m.id.as_str());
+        let mut prompt = build_system_prompt_for_model(
             &self.cwd,
             &self.resources,
-            &tool_names,
+            &tool_name_refs,
             &snippets,
             &guidelines,
             model_id,
         );
 
         if let Some(ref wt) = self.worktree {
-            self.agent.state.system_prompt.push_str(&format!(
+            prompt.push_str(&format!(
                 "\n\nYou are working in a git worktree at {}. \
                  All file paths and commands run from this directory, not the original repo. \
                  Do not cd to other directories.",
@@ -606,14 +901,33 @@ impl AgentSession {
         }
 
         if self.plan_mode {
-            self.agent.state.system_prompt.push_str(
+            let plan_path_str = self.resolve_plan_path().display().to_string();
+            prompt.push_str(&format!(
                 "\n\n# Plan Mode\n\n\
-                 You are in plan mode. Research the codebase and outline an implementation plan. \
-                 Do not modify any files — the edit and write tools are unavailable. \
-                 Focus on: identifying relevant files, understanding existing patterns, \
-                 and producing a clear step-by-step plan.",
-            );
+                 You are in plan mode. Your job is to produce a thorough implementation plan.\n\n\
+                 ## Workflow\n\n\
+                 1. Research the codebase using read, grep, find, ls, symbols, and codemap.\n\
+                 2. Write your initial plan to: `{plan_path}`\n\
+                    Use the write tool for this — it is the only file you may write to.\n\
+                 3. Identify 2–4 specific, targeted questions that would meaningfully improve \
+                    the plan. For each question provide 2–4 concrete options. Each option must \
+                    include a non-empty `subtext` (tradeoffs + reason why if recommended) and a `recommended` flag.\
+                 4. **Your response MUST end with a raw JSON object on its own line, no fences:**\n\n\
+                 {{\"questions\":[{{\"q\":\"<question>\",\"options\":[{{\"label\":\"<opt>\",\"subtext\":\"<tradeoff>\",\"recommended\":false}}, ...]}}]}}\n\n\
+                 Rules:\n\
+                 - Output the JSON as the **very last line** of your response — raw, no markdown fences, no trailing text.\n\
+                 - Each option must have `label` (short choice text), `subtext` (one or two sentences explaining the tradeoffs — and if this option is recommended, explicitly why you recommend it), and `recommended` (true for exactly one option per question, false for the rest). Every option, including the recommended one, must have a non-empty `subtext`.\
+                 - Provide 2–4 options per question. Do NOT include an 'other' option — that is \
+                    added automatically.\n\
+                 - When you have enough information to finalize the plan (after a round of \
+                    answers), output {{\"questions\":[]}} as the last line to signal completion.\n\
+                 - Only write to `{plan_path}`. Do not modify any other files.\n\
+                 - Do not make any other file mutations.",
+                plan_path = plan_path_str,
+            ));
         }
+
+        self.agent.set_system_prompt(prompt);
     }
 
     /// Run agent.prompt() with event forwarding and per-iteration persistence.
@@ -630,12 +944,12 @@ impl AgentSession {
         // Capture compaction state before the destructure so the on_event
         // closure can check the threshold on every UsageUpdate and cancel
         // the stream immediately when the context exceeds it.
-        let auto_compact = self.auto_compact;
-        let compaction_enabled = self.compaction_settings.enabled;
-        let threshold_pct = self.compaction_settings.threshold_pct;
+        let auto_compact = self.compaction.auto_compact;
+        let compaction_enabled = self.compaction.settings.enabled;
+        let threshold_pct = self.compaction.settings.threshold_pct;
         let cancel_flag = self.agent.cancel.clone();
-        let compaction_triggered = self.compaction_triggered.clone();
-        let compact_threshold_pct = self.compact_threshold_pct.clone();
+        let compaction_triggered = self.compaction.triggered.clone();
+        let compact_threshold_pct = self.compaction.threshold_pct.clone();
 
         // Destructure self so the borrow checker sees agent, session_manager,
         // and session_cost as independent borrows (needed because the persist
@@ -738,10 +1052,9 @@ impl AgentSession {
             && !last.stop_reason.is_error()
             && !last.stop_reason.is_context_overflow()
         {
-            let cfg = NervConfig::load(crate::nerv_dir());
             super::notifications::fire(
                 super::notifications::NotificationMatcher::OnResponseComplete,
-                &cfg.notifications,
+                &self.config.notifications,
             );
         }
 
@@ -749,9 +1062,9 @@ impl AgentSession {
     }
 
     /// Rebuild agent message history from the current session entries.
-    fn reload_agent_context(&mut self) {
+    pub(crate) fn reload_agent_context(&mut self) {
         let entries = self.session_manager.entries();
-        self.agent.state.messages = entries
+        self.agent.set_messages(entries
             .iter()
             .filter_map(|e| {
                 if let crate::session::types::SessionEntry::Message(me) = e {
@@ -760,7 +1073,7 @@ impl AgentSession {
                     None
                 }
             })
-            .collect();
+            .collect());
     }
 
     /// Resolve the provider and model id to use for background utility tasks
@@ -801,9 +1114,8 @@ impl AgentSession {
         &mut self,
         _custom_instructions: Option<String>,
     ) -> Result<Option<CompactionResult>, String> {
-        let config = NervConfig::load(crate::nerv_dir());
         let (provider, model_id) =
-            self.resolve_utility_provider(config.compaction_model.as_deref()).ok_or_else(|| {
+            self.resolve_utility_provider(self.config.compaction_model.as_deref()).ok_or_else(|| {
                 "No provider available for compaction. \
                      Set compaction_model in ~/.nerv/config.json or log in to Anthropic (/login)."
                     .to_string()
@@ -829,8 +1141,8 @@ impl AgentSession {
             &branch,
             0,
             branch.len(),
-            self.compaction_settings.keep_recent_tokens,
-            self.compaction_settings.verbatim_window_tokens,
+            self.compaction.settings.keep_recent_tokens,
+            self.compaction.settings.verbatim_window_tokens,
         );
         // first_kept_entry_id is the deletion boundary: the session DB removes
         // everything before this entry and inserts the compaction summary in
@@ -858,23 +1170,57 @@ impl AgentSession {
         let tokens_before =
             to_summarize.iter().map(compaction::estimate_tokens).sum::<usize>() as u32;
 
+        // Estimate tokens remaining after compaction: the verbatim window that
+        // stays in the DB untouched. Display-only — not sent to any model.
+        let tokens_after = branch[cut.verbatim_start_index..]
+            .iter()
+            .filter_map(|e| {
+                if let crate::session::types::SessionEntry::Message(me) = e {
+                    Some(&me.message)
+                } else {
+                    None
+                }
+            })
+            .map(compaction::estimate_tokens)
+            .sum::<usize>() as u32;
+
+        // Archive the full branch (to_summarize + verbatim window) so the export
+        // contains the complete pre-compaction transcript. The verbatim window
+        // stays in the DB but its messages are still included here for
+        // debugging/export — they are not re-sent to any LLM.
+        let archived_messages: Vec<AgentMessage> = branch
+            .iter()
+            .filter_map(|e| {
+                if let crate::session::types::SessionEntry::Message(me) = e {
+                    Some(me.message.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         match generate_summary(&to_summarize, None, provider, &model_id) {
             Ok(summary) => {
                 let _ = self.session_manager.append_compaction(
                     summary.clone(),
                     first_kept_id.clone(),
                     tokens_before,
+                    tokens_after,
+                    model_id.clone(),
+                    self.session_cost.total,
+                    archived_messages,
                 );
                 // Fire onCompactionDone hooks (fire-and-forget).
-                let cfg = NervConfig::load(crate::nerv_dir());
                 super::notifications::fire(
                     super::notifications::NotificationMatcher::OnCompactionDone,
-                    &cfg.notifications,
+                    &self.config.notifications,
                 );
                 Ok(Some(CompactionResult {
                     summary,
                     first_kept_entry_id: first_kept_id,
                     tokens_before,
+                    tokens_after,
+                    model_id,
                 }))
             }
             Err(e) => {
@@ -892,7 +1238,7 @@ impl AgentSession {
         event_tx: &Sender<AgentSessionEvent>,
     ) {
         if let Some(model) = self.model_registry.get_model(provider, model_id) {
-            self.agent.state.model = Some(model.clone());
+            self.agent.set_model(Some(model.clone()));
             let _ = self.session_manager.append_model_change(provider, model_id);
             let _ = event_tx.send(AgentSessionEvent::ModelChanged { model: model.clone() });
             // Persist as session-level override
@@ -907,7 +1253,7 @@ impl AgentSession {
         level: ThinkingLevel,
         event_tx: &Sender<AgentSessionEvent>,
     ) {
-        self.agent.state.thinking_level = level;
+        self.agent.set_thinking_level(level);
         let _ = self.session_manager.append_thinking_level_change(level);
         let _ = event_tx.send(AgentSessionEvent::ThinkingLevelChanged { level });
         // Persist as session-level override
@@ -931,14 +1277,14 @@ impl AgentSession {
                 let api_calls = ctx.api_calls;
                 let input_history = ctx.input_history;
 
-                self.agent.state.messages = ctx.messages;
+                self.agent.set_messages(ctx.messages);
 
                 // Restore accumulated session cost from persisted per-call cost_usd values.
                 self.session_cost = Cost::default();
                 self.session_cost.total = cost_usd;
 
                 // Restore thinking level
-                self.agent.state.thinking_level = ctx.thinking_level;
+                self.agent.set_thinking_level(ctx.thinking_level);
                 let _ = event_tx
                     .send(AgentSessionEvent::ThinkingLevelChanged { level: ctx.thinking_level });
 
@@ -949,9 +1295,8 @@ impl AgentSession {
                     } else {
                         // Model not in registry — check if it's a custom provider we can
                         // re-register
-                        let config = crate::core::config::NervConfig::load(crate::nerv_dir());
                         if let Some(pcfg) =
-                            config.custom_providers.iter().find(|p| p.name == provider)
+                            self.config.custom_providers.iter().find(|p| p.name == provider)
                         {
                             let p = std::sync::Arc::new(crate::agent::OpenAICompatProvider::new(
                                 pcfg.name.clone(),
@@ -976,7 +1321,7 @@ impl AgentSession {
                                     cache_write: 0.0,
                                 },
                             };
-                            self.agent.state.model = Some(model.clone());
+                            self.agent.set_model(Some(model.clone()));
                             let _ = event_tx.send(AgentSessionEvent::ModelChanged { model });
                         } else {
                             let _ = event_tx.send(AgentSessionEvent::Status {
@@ -1022,12 +1367,12 @@ impl AgentSession {
                 // Restore per-session config overrides
                 let scfg = ctx.session_config;
                 if let Some(effort) = scfg.default_effort_level {
-                    self.agent.state.effort_level = Some(effort);
+                    self.agent.set_effort_level(Some(effort));
                     let _ = event_tx
                         .send(AgentSessionEvent::EffortLevelChanged { level: Some(effort) });
                 }
                 if let Some(enabled) = scfg.auto_compact {
-                    self.auto_compact = enabled;
+                    self.compaction.auto_compact = enabled;
                 }
                 // Don't re-name sessions that were already named (or have a preview we could
                 // use). We consider any loaded session as already handled.
@@ -1048,8 +1393,8 @@ impl AgentSession {
     /// was saved, so the caller can notify the UI.
     fn apply_saved_compact_threshold(&mut self) -> Option<u8> {
         let pct = self.session_manager.get_compact_threshold()?;
-        self.compaction_settings.threshold_pct = pct.clamp(0.01, 1.0);
-        self.compact_threshold_pct.store((pct * 100.0) as u32, Ordering::Relaxed);
+        self.compaction.settings.threshold_pct = pct.clamp(0.01, 1.0);
+        self.compaction.threshold_pct.store((pct * 100.0) as u32, Ordering::Relaxed);
         Some((pct * 100.0).round() as u8)
     }
 
@@ -1057,15 +1402,13 @@ impl AgentSession {
     /// in this session. Args should be serialized to JSON for consistent
     /// hashing.
     pub fn is_permission_cached(&self, tool: &str, args_json: &str) -> bool {
-        let key = format!("{}:{}", tool, args_json);
-        self.permission_cache.lock().unwrap().contains(&key)
+        self.permission_cache.lock().unwrap().contains(&permission_key(tool, args_json))
     }
 
     /// Record a permission accept in the session. Writes to DB and updates
     /// in-memory cache.
     pub fn accept_permission(&mut self, tool: &str, args_json: &str) {
-        let key = format!("{}:{}", tool, args_json);
-        self.permission_cache.lock().unwrap().insert(key);
+        self.permission_cache.lock().unwrap().insert(permission_key(tool, args_json));
 
         // Write to session database
         use crate::session::types::{PermissionAcceptEntry, SessionEntry, gen_entry_id, now_iso};
@@ -1088,8 +1431,7 @@ impl AgentSession {
         let mut cache = self.permission_cache.lock().unwrap();
         for entry in entries {
             if let SessionEntry::PermissionAccept(pe) = entry {
-                let key = format!("{}:{}", pe.tool, pe.args);
-                cache.insert(key);
+                cache.insert(permission_key(&pe.tool, &pe.args));
             }
         }
     }
@@ -1273,321 +1615,10 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
     }
 }
 
-fn last_assistant(messages: &[AgentMessage]) -> Option<&AssistantMessage> {
-    messages.iter().rev().find_map(|m| match m {
-        AgentMessage::Assistant(a) => Some(a),
-        _ => None,
-    })
+fn permission_key(tool: &str, args_json: &str) -> String {
+    format!("{}:{}", tool, args_json)
 }
 
-/// The session task — runs in a dedicated thread, processes commands
-/// sequentially.
-pub fn session_task(
-    cmd_rx: crossbeam_channel::Receiver<SessionCommand>,
-    event_tx: Sender<AgentSessionEvent>,
-    mut session: AgentSession,
-) {
-    while let Ok(cmd) = cmd_rx.recv() {
-        match cmd {
-            SessionCommand::Prompt { text } => session.prompt(text, &event_tx),
-            SessionCommand::Abort => session.abort(),
-            SessionCommand::NewSession => {
-                let _ =
-                    session.session_manager.new_session(&session.cwd, session.worktree.as_deref());
-                session.agent.state.messages.clear();
-                session.session_cost = Cost::default();
-                session.session_named = false;
-                let _ = event_tx.send(AgentSessionEvent::SessionStarted {
-                    id: session.session_manager.session_id().to_string(),
-                    name: None,
-                });
-                let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
-                    messages: vec![],
-                    cost_usd: 0.0,
-                    total_input: 0,
-                    total_output: 0,
-                    api_calls: 0,
-                    input_history: vec![],
-                });
-            }
-            SessionCommand::LoadSession { id } => session.load_session(&id, &event_tx),
-            SessionCommand::SetModel { provider, model_id } => {
-                session.set_model(&provider, &model_id, &event_tx)
-            }
-            SessionCommand::SetThinkingLevel { level } => {
-                session.set_thinking_level(level, &event_tx)
-            }
-            SessionCommand::SetEffortLevel { level } => {
-                session.agent.state.effort_level = level;
-                // Persist as session-level override
-                session.session_manager.update_session_config(|cfg| {
-                    cfg.default_effort_level = level;
-                });
-                let _ = event_tx.send(AgentSessionEvent::EffortLevelChanged { level });
-            }
-            SessionCommand::SetPlanMode { enabled } => {
-                session.set_plan_mode(enabled, &event_tx);
-            }
-            SessionCommand::ForkSession => match session.session_manager.fork_session() {
-                Ok(new_id) => {
-                    let short =
-                        new_id.char_indices().nth(8).map_or(new_id.as_str(), |(i, _)| &new_id[..i]);
-                    let _ = event_tx.send(AgentSessionEvent::SessionStarted {
-                        id: new_id.clone(),
-                        name: session.session_manager.name(),
-                    });
-                    let _ = event_tx.send(AgentSessionEvent::Status {
-                        message: format!("Forked to new session {short}."),
-                        is_error: false,
-                    });
-                }
-                Err(e) => {
-                    let _ = event_tx.send(AgentSessionEvent::Status {
-                        message: format!("Fork failed: {e}"),
-                        is_error: true,
-                    });
-                }
-            },
-            SessionCommand::SaveInputHistory { history } => {
-                session.session_manager.save_input_history(&history);
-            }
-            SessionCommand::SetCompactThreshold { pct } => {
-                let frac = (pct as f64 / 100.0).clamp(0.01, 1.0);
-                session.compaction_settings.threshold_pct = frac;
-                session.compact_threshold_pct.store(pct as u32, Ordering::Relaxed);
-                session.session_manager.set_compact_threshold(frac);
-                let _ = event_tx.send(AgentSessionEvent::CompactThresholdChanged { pct });
-                let _ = event_tx.send(AgentSessionEvent::Status {
-                    message: format!("Auto-compact threshold set to {}%.", pct),
-                    is_error: false,
-                });
-            }
-            SessionCommand::SetAutoCompact { enabled } => {
-                session.auto_compact = enabled;
-                session.session_manager.update_session_config(|cfg| {
-                    cfg.auto_compact = Some(enabled);
-                });
-                let label = if enabled { "on" } else { "off" };
-                let _ = event_tx.send(AgentSessionEvent::Status {
-                    message: format!("Auto-compact {}.", label),
-                    is_error: false,
-                });
-            }
-            SessionCommand::Compact { custom_instructions } => {
-                let _ = event_tx.send(AgentSessionEvent::AutoCompactionStart {
-                    reason: CompactionReason::Manual,
-                });
-                match session.run_compaction(custom_instructions) {
-                    Ok(Some(result)) => {
-                        session.reload_agent_context();
-                        let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
-                            summary: Some(result.summary),
-                            will_retry: false,
-                            messages: session.agent.state.messages.clone(),
-                        });
-                    }
-                    Ok(None) => {
-                        let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
-                            summary: None,
-                            will_retry: false,
-                            messages: vec![],
-                        });
-                        let _ = event_tx.send(AgentSessionEvent::Status {
-                            message: "Nothing to compact — context is already short enough.".into(),
-                            is_error: false,
-                        });
-                    }
-                    Err(e) => {
-                        let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
-                            summary: None,
-                            will_retry: false,
-                            messages: vec![],
-                        });
-                        let _ =
-                            event_tx.send(AgentSessionEvent::Status { message: e, is_error: true });
-                    }
-                }
-            }
-            SessionCommand::Export => {
-                let sid = session.session_manager.session_id().to_string();
-                let sid_short = if sid.len() >= 8 { &sid[..8] } else { &sid };
-                let leaf = session.session_manager.leaf_id().unwrap_or("").to_string();
-                let leaf_short = if leaf.len() >= 6 { &leaf[..6] } else { &leaf };
-                let exports_dir = crate::nerv_dir().join("exports");
-                let _ = std::fs::create_dir_all(&exports_dir);
-
-                // Export HTML — current branch (root → leaf) only.
-                let html_path = exports_dir.join(format!("{sid_short}-{leaf_short}.html"));
-                let branch_entries = session.session_manager.current_branch_entries();
-                let html_result = crate::export::export_entries_html(
-                    &branch_entries,
-                    &session.agent.state.messages,
-                    &html_path,
-                );
-
-                // Export JSONL.
-                let jsonl_path = exports_dir.join(format!("{sid_short}-{leaf_short}.jsonl"));
-                let jsonl_result = if let Some(content) = session.session_manager.export_jsonl() {
-                    std::fs::write(&jsonl_path, content)
-                        .map(|_| jsonl_path.to_string_lossy().to_string())
-                        .map_err(|e| e.to_string())
-                } else {
-                    Err("no active session".into())
-                };
-
-                // Combine results into a single status message.
-                let result = match (html_result, jsonl_result) {
-                    (Ok(h), Ok(j)) => Ok(format!("{}\n{}", h, j)),
-                    (Err(e), _) | (_, Err(e)) => Err(e),
-                };
-                let _ = event_tx.send(AgentSessionEvent::ExportDone { result });
-            }
-            SessionCommand::Login { provider } => {
-                handle_login(&provider, &mut session, &event_tx);
-            }
-            SessionCommand::Logout { provider } => {
-                // Remove credentials from storage.
-                let nerv_dir = crate::nerv_dir();
-                let mut auth = super::auth::AuthStorage::load(nerv_dir);
-                auth.remove(&provider);
-
-                // Unregister the provider so available_models() stops showing it.
-                session.agent.provider_registry.write().unwrap().unregister(&provider);
-
-                let _ = event_tx.send(AgentSessionEvent::Status {
-                    message: format!("Logged out from {}.", provider),
-                    is_error: false,
-                });
-            }
-            SessionCommand::ListSessions { repo_root, repo_id } => {
-                let mut sessions = session.session_manager.list_sessions();
-                if let Some(ref rid) = repo_id {
-                    // Filter by stable fingerprint (survives renames/moves).
-                    sessions.retain(|s| s.repo_id.as_deref() == Some(rid.as_str()));
-                } else if let Some(ref root) = repo_root {
-                    // Non-git directory: fall back to cwd-prefix.
-                    sessions.retain(|s| s.cwd.starts_with(root.as_str()));
-                }
-                let _ = event_tx.send(AgentSessionEvent::SessionList { sessions });
-            }
-            SessionCommand::GetTree => {
-                let tree = session.session_manager.get_tree();
-                let current_leaf = session.session_manager.leaf_id().map(|s| s.to_string());
-                let _ = event_tx.send(AgentSessionEvent::TreeData { tree, current_leaf });
-            }
-            SessionCommand::SwitchBranch { entry_id, use_parent, reset_leaf } => {
-                if reset_leaf {
-                    session.session_manager.reset_leaf();
-                } else if use_parent {
-                    // Find the parent of entry_id and branch to it
-                    let parent = session
-                        .session_manager
-                        .entries()
-                        .iter()
-                        .find(|e| e.id() == entry_id)
-                        .and_then(|e| e.parent_id())
-                        .map(|s| s.to_string());
-                    if let Some(ref pid) = parent {
-                        session.session_manager.branch(pid);
-                    } else {
-                        // No parent — treat as reset (root node)
-                        session.session_manager.reset_leaf();
-                    }
-                } else {
-                    session.session_manager.branch(&entry_id);
-                }
-                let ctx = session.session_manager.build_session_context();
-                let full_history = ctx.full_history;
-                let cost_usd = ctx.cost_usd;
-                let total_input = ctx.total_input;
-                let total_output = ctx.total_output;
-                let api_calls = ctx.api_calls;
-                let input_history = ctx.input_history;
-                session.agent.state.messages = ctx.messages;
-                session.agent.state.thinking_level = ctx.thinking_level;
-                let _ = event_tx
-                    .send(AgentSessionEvent::ThinkingLevelChanged { level: ctx.thinking_level });
-                if let Some((provider, model_id)) = ctx.model {
-                    session.set_model(&provider, &model_id, &event_tx);
-                }
-                let _ = event_tx.send(AgentSessionEvent::SessionLoaded {
-                    messages: full_history,
-                    cost_usd,
-                    total_input,
-                    total_output,
-                    api_calls,
-                    input_history,
-                });
-            }
-            SessionCommand::CreateWorktree { branch_name, nerv_dir } => {
-                // Allow if no session, or session exists but has no entries yet (e.g. after
-                // /new)
-                if session.session_manager.entry_count() > 0 {
-                    let _ = event_tx.send(AgentSessionEvent::Status {
-                        message: "/wt only works before the first prompt. Use /new first.".into(),
-                        is_error: true,
-                    });
-                    continue;
-                }
-                let repo_root = match crate::find_repo_root(&session.cwd) {
-                    Some(r) => r,
-                    None => {
-                        let _ = event_tx.send(AgentSessionEvent::Status {
-                            message: "Not in a git repository.".into(),
-                            is_error: true,
-                        });
-                        continue;
-                    }
-                };
-                // Generate session ID prefix for branch naming
-                let prefix = &crate::session::types::gen_session_id()[..8];
-                match crate::worktree::create_worktree(&repo_root, &nerv_dir, &branch_name, prefix)
-                {
-                    Ok(wt_path) => {
-                        session.set_worktree(wt_path.clone());
-                        // Update existing session's DB record if one was already created
-                        if session.session_manager.has_session() {
-                            session.session_manager.update_worktree(&wt_path, &wt_path);
-                        }
-                        let _ = event_tx.send(AgentSessionEvent::WorktreeCreated { path: wt_path });
-                    }
-                    Err(e) => {
-                        let _ = event_tx.send(AgentSessionEvent::Status {
-                            message: format!("Worktree creation failed: {}", e),
-                            is_error: true,
-                        });
-                    }
-                }
-            }
-            SessionCommand::MergeWorktree => {
-                let wt_path = match session.worktree.as_ref() {
-                    Some(p) => p.clone(),
-                    None => {
-                        let _ = event_tx.send(AgentSessionEvent::Status {
-                            message: "No worktree attached to this session.".into(),
-                            is_error: true,
-                        });
-                        continue;
-                    }
-                };
-                match crate::worktree::merge_worktree(&wt_path) {
-                    Ok(main_wt) => {
-                        session.cwd = main_wt.clone();
-                        session.worktree = None;
-                        session.session_manager.clear_worktree();
-                        let _ = event_tx.send(AgentSessionEvent::WorktreeMerged {
-                            original_path: main_wt,
-                            message: "Worktree merged and removed.".into(),
-                        });
-                    }
-                    Err(e) => {
-                        let _ = event_tx.send(AgentSessionEvent::Status {
-                            message: format!("Merge failed: {}", e),
-                            is_error: true,
-                        });
-                    }
-                }
-            }
-        }
-    }
+pub(crate) fn last_assistant(messages: &[AgentMessage]) -> Option<&AssistantMessage> {
+    messages.iter().rev().find_map(AgentMessage::as_assistant)
 }

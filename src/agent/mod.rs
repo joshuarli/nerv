@@ -8,7 +8,7 @@ pub mod provider;
 pub mod transform;
 pub mod types;
 
-pub use agent::{Agent, AgentTool, ToolResult, UpdateCallback};
+pub use agent::{Agent, AgentTool, ToolResult};
 pub use anthropic::AnthropicProvider;
 pub use convert::{LlmContent, LlmMessage, convert_to_llm};
 pub use codex::CodexProvider;

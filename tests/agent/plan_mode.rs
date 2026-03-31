@@ -3,14 +3,14 @@
 use std::sync::Arc;
 
 use nerv::core::agent_session::AgentSessionEvent;
-use nerv::core::tool_registry::{ToolDefinition, ToolRegistry};
+use nerv::core::tool_registry::ToolRegistry;
 
 use crate::helpers::*;
 
 #[test]
 fn set_active_filters_tools() {
     let mut registry = ToolRegistry::new();
-    registry.register(ToolDefinition { tool: Arc::new(EchoTool) });
+    registry.register(Arc::new(EchoTool));
 
     // No active filter → all tools returned
     let all = registry.active_tools();

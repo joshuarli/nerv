@@ -27,9 +27,14 @@ core::permissions::check(tool, args, repo_root) → Allow | Ask(reason)
 
 ### Safe system paths (always allowed in bash)
 
+Defined as constants in `permissions.rs`:
+
 `/usr/bin`, `/usr/local`, `/bin`, `/opt`, `/tmp`, `/dev/null`,
-`/dev/stdout`, `/dev/stderr`, `/proc/self`, `/etc/hosts`,
-`~/.nerv`, `~/.config`, `~/.cargo`
+`/dev/stdout`, `/dev/stderr`, `/proc/self`, `/etc/hosts`
+
+Home subdirectories (`SAFE_HOME_DIRS`): `~/.nerv`, `~/.config`, `~/.cargo` —
+shared between `check_bash` (token-based) and `is_safe_home_path`
+(absolute-path-based) via a single const array.
 
 ## Path resolution
 

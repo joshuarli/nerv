@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::agent::types::*;
+use crate::agent::types::{EffortLevel, Model, ModelPricing, ThinkingLevel, Usage};
 use crate::interactive::theme;
 use crate::tui::tui::Component;
 use crate::tui::utils::{visible_width, wrap_text_with_ansi};
@@ -166,7 +166,6 @@ pub struct FooterComponent {
     cost_output: f64,
     provider_online: Option<bool>,
     plan_mode: bool,
-    /// Auto-compact threshold (0–100). Default 50.
     compact_threshold_pct: u8,
     /// When true, the hexagon bar animates as a loading sweep instead of
     /// showing fill.
@@ -239,7 +238,7 @@ impl FooterComponent {
             cost_output: 0.0,
             provider_online: None,
             plan_mode: false,
-            compact_threshold_pct: 50,
+            compact_threshold_pct: 80,
             compacting: false,
             compact_tick: 0,
             total_input: 0,
@@ -587,11 +586,17 @@ impl Component for FooterComponent {
         let cache_stats = {
             let mut parts = String::new();
             if self.total_cache_read > 0 {
+                let hit_rate = self.total_cache_read as f64
+                    / (self.total_input + self.total_cache_read) as f64
+                    * 100.0;
                 parts.push_str(&format!(
-                    " {}Rc{}{}",
+                    " {}Rc{}{} {}({:.0}%){}",
                     dim,
                     fmt_tokens_u64(self.total_cache_read),
-                    r
+                    r,
+                    dim,
+                    hit_rate,
+                    r,
                 ));
             }
             if self.total_cache_write > 0 {

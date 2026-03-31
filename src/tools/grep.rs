@@ -2,8 +2,9 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use super::truncate::{DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncate_tail};
-use crate::agent::agent::{AgentTool, ToolResult, UpdateCallback};
+use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
+use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
 
 const GREP_MAX_LINE_LENGTH: usize = 500;
@@ -34,6 +35,7 @@ impl AgentTool for GrepTool {
     fn name(&self) -> &str {
         "grep"
     }
+    fn is_readonly(&self) -> bool { true }
     fn description(&self) -> &str {
         "Search file contents using ripgrep. Respects .gitignore."
     }
@@ -70,7 +72,6 @@ impl AgentTool for GrepTool {
     fn execute(
         &self,
         input: serde_json::Value,
-        _update: UpdateCallback,
         _cancel: &CancelFlag,
     ) -> ToolResult {
         let pattern = input["pattern"].as_str().unwrap_or("");
@@ -174,7 +175,7 @@ impl AgentTool for GrepTool {
                 };
                 ToolResult::ok_with_details(
                     content,
-                    serde_json::json!({"truncated": tr.truncated, "display": display}),
+                    ToolDetails { display: Some(display), ..Default::default() },
                 )
             }
             Err(e) => ToolResult::error(format!("Error running rg: {}", e)),
