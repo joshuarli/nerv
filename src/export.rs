@@ -539,6 +539,35 @@ function toggleTool(header) {
         }
     }
 
+    // Build a map of compaction entry id → first post-compaction context_used,
+    // so the banner can show the actual vs estimated tokens_after.
+    let mut compaction_actual_ctx: std::collections::HashMap<&str, u32> =
+        std::collections::HashMap::new();
+    {
+        let mut last_compaction_id: Option<&str> = None;
+        for entry in entries {
+            match entry {
+                SessionEntry::Compaction(ce) => {
+                    last_compaction_id = Some(ce.id.as_str());
+                }
+                SessionEntry::Message(me) => {
+                    if let Some(comp_id) = last_compaction_id {
+                        if let AgentMessage::Assistant(a) = &me.message {
+                            if let Some(u) = &a.usage {
+                                let ctx = u.input + u.output;
+                                if ctx > 0 {
+                                    compaction_actual_ctx.insert(comp_id, ctx);
+                                    last_compaction_id = None;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     let render_archived_msgs =
         |ce: &CompactionEntry,
          html: &mut String,
@@ -649,12 +678,21 @@ function toggleTool(header) {
             } else {
                 format!(" · {}", html_escape_no_br(&ce.model_id))
             };
+            let actual_label = if let Some(&actual) = compaction_actual_ctx.get(ce.id.as_str()) {
+                let delta = actual as i64 - ce.tokens_after as i64;
+                let sign = if delta >= 0 { "+" } else { "" };
+                format!(
+                    " <span style='color:#ef4444'>(actual {actual} tok, est. {sign}{delta})</span>",
+                )
+            } else {
+                String::new()
+            };
             html.push_str(&format!(
                 "<div style='margin:1.5rem 0;padding:0.75rem 1rem;\
                 background:#1e293b;border-radius:6px;border:1px solid #334155;\
                 font-size:0.8rem;color:#94a3b8'>\
                 <span style='color:#f59e0b;font-weight:600'>⟳ compaction</span>\
-                <span style='margin-left:0.75rem'>{before} → {after} tok{model_label}</span>\
+                <span style='margin-left:0.75rem'>{before} → {after} tok{model_label}{actual_label}</span>\
                 <details style='margin-top:0.5rem'>\
                 <summary style='cursor:pointer;color:#64748b'>summary</summary>\
                 <div style='margin-top:0.4rem;color:#cbd5e1;white-space:pre-wrap'>{summary}</div>\
