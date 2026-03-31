@@ -78,11 +78,12 @@ mutation (~1ms) that can avoid an expensive LLM summarization call entirely.
 
 **How it works** (`lite_compact` in `src/agent/transform.rs`):
 
-1. Count turn boundaries (User messages) from newest to oldest
-2. Tool results older than `age_threshold` turns (default: 8) are eligible
-3. Eligible results from compactable tools are replaced with
+1. Snapshot messages before mutating (so full compaction can restore originals if needed)
+2. Count turn boundaries (User messages) from newest to oldest
+3. Tool results older than `age_threshold` turns (default: 8) are eligible
+4. Eligible results from compactable tools are replaced with
    `"[output cleared — re-run if needed]"`
-4. Skips: error results, small results (< 500 bytes), non-compactable tools
+5. Skips: error results, small results (< 500 bytes), non-compactable tools
 
 **Which tools are compactable**: determined by `ToolRegistry::lite_compactable_names()` —
 all readonly tools (read, grep, find, ls, symbols, codemap) plus bash. These are tools
@@ -92,6 +93,10 @@ After lite-compact, if the estimated token count drops below the compaction thre
 `run_compaction` returns `CompactionOutcome::LiteCompact` and the LLM call is skipped.
 The caller does **not** reload from the session DB (which would undo the in-place
 mutations) — it retries with the already-modified message buffer.
+
+If the context is still above threshold after lite-compact, the original (unzeroed)
+messages are restored before proceeding to full LLM summarization. This ensures the
+summarizer and archived transcript see the original tool output, not placeholder text.
 
 ### Tier 2: Full LLM summarization
 
@@ -121,6 +126,15 @@ compaction never fails due to JSON parse errors; the model's raw output is used 
 The structured summary is formatted to markdown via `to_markdown()` for injection into
 the conversation context, and the parsed `StructuredSummary` is threaded through
 `CompactionResult` and `AutoCompactionEnd` for potential UI use.
+
+**Tool call visibility**: `serialize_conversation` emits `[Tool: name, path]` lines for
+each tool call in assistant messages, giving the summarizer the data it needs to populate
+`files_modified` accurately.
+
+**Chained summaries**: when a prior `CompactionSummary` exists in the messages being
+summarized, it is passed to `generate_summary` via the `previous_summary` parameter. The
+summarizer prompt uses a `<previous_summary>` slot to update rather than replace prior
+context.
 
 #### The three-region split
 
@@ -247,4 +261,7 @@ Compaction settings (threshold, token budgets) are in `CompactionSettings`:
 | `StructuredSummary`, `GeneratedSummary`, summarization prompt | `src/compaction/summarize.rs` |
 | `lite_compact` function | `src/agent/transform.rs` |
 | `lite_compactable_names` | `src/core/tool_registry.rs` |
-| Session DB: `append_compaction`, branch walking | `src/session/manager.rs` |
+| Session DB: `append_compaction`, `append_lite_compaction`, branch walking | `src/session/manager.rs` |
+| Footer compaction info line | `src/interactive/footer.rs` |
+| Post-compaction cache logging | `src/interactive/event_loop.rs` |
+| Compaction stats script | `scripts/compaction-stats.py` |
