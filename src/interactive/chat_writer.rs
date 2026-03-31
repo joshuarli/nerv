@@ -243,7 +243,7 @@ impl Component for ChatWriter {
         // Live streaming content (never cached — changes every frame)
         if let Some(ref s) = self.streaming {
             if !s.thinking.is_empty() && !s.thinking_committed {
-                for line in s.thinking.lines().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
+                for line in s.thinking.lines() {
                     out.extend(wrap_text_with_ansi(
                         &format!("{}│ {}{}", theme::THINKING, line, theme::RESET),
                         width,
