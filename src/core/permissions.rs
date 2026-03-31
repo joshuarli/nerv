@@ -69,9 +69,9 @@ pub fn path_for_args(tool: &str, args: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// Resolve a raw path string to an absolute PathBuf (without touching
-/// filesystem).
-fn resolve_path(path: &str, repo_root: Option<&Path>) -> PathBuf {
+/// Expand a path string to an absolute `PathBuf`, handling `~/` prefix.
+/// Relative paths are resolved against `repo_root` when provided.
+pub fn expand_path(path: &str, repo_root: Option<&Path>) -> PathBuf {
     if path.starts_with('/') {
         PathBuf::from(path)
     } else if let Some(rest) = path.strip_prefix("~/") {
@@ -80,6 +80,33 @@ fn resolve_path(path: &str, repo_root: Option<&Path>) -> PathBuf {
         // Relative — resolve against repo root if available.
         if let Some(root) = repo_root { root.join(path) } else { PathBuf::from(path) }
     }
+}
+
+fn resolve_path(path: &str, repo_root: Option<&Path>) -> PathBuf {
+    expand_path(path, repo_root)
+}
+
+/// Format an absolute path for display, replacing the home directory with `~/`.
+pub fn path_to_display(path: &Path) -> String {
+    if let Some(home) = crate::home_dir() {
+        path.strip_prefix(home)
+            .map(|rel| format!("~/{}", rel.display()))
+            .unwrap_or_else(|_| path.display().to_string())
+    } else {
+        path.display().to_string()
+    }
+}
+
+/// Given a path string from a tool arg, resolve to an absolute path, walk up
+/// to the git repo root (falling back to the directory itself), and return it.
+pub fn allow_dir_for_path(path_str: &str) -> PathBuf {
+    let abs = expand_path(path_str, None);
+    let start = if abs.is_dir() {
+        abs.clone()
+    } else {
+        abs.parent().map(|p| p.to_path_buf()).unwrap_or(abs)
+    };
+    crate::find_repo_root(&start).unwrap_or(start)
 }
 
 fn check_read_tool(args: &serde_json::Value, repo_root: Option<&Path>) -> Permission {

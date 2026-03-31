@@ -517,27 +517,9 @@ fn main() {
                                     if let Some((tool, ref args)) = interactive.pending_permission_details.clone()
                                         && let Some(path_str) = nerv::core::permissions::path_for_args(&tool, args)
                                     {
-                                        // Resolve ~/... to absolute.
-                                        let abs = if let Some(rest) = path_str.strip_prefix("~/") {
-                                            nerv::home_dir().map(|h| h.join(rest))
-                                                .unwrap_or_else(|| std::path::PathBuf::from(&path_str))
-                                        } else {
-                                            std::path::PathBuf::from(&path_str)
-                                        };
-                                        let start = if abs.is_dir() { abs.clone() } else {
-                                            abs.parent().map(|p| p.to_path_buf()).unwrap_or(abs)
-                                        };
-                                        // Prefer git root; fall back to the directory itself.
-                                        let dir = nerv::find_repo_root(&start).unwrap_or(start);
+                                        let dir = nerv::core::permissions::allow_dir_for_path(&path_str);
                                         interactive.allowed_dirs.push(dir.clone());
-                                        // Display with ~/ prefix when possible.
-                                        let display = if let Some(home) = nerv::home_dir() {
-                                            dir.strip_prefix(&home)
-                                                .map(|rel| format!("~/{}", rel.display()))
-                                                .unwrap_or_else(|_| dir.display().to_string())
-                                        } else {
-                                            dir.display().to_string()
-                                        };
+                                        let display = nerv::core::permissions::path_to_display(&dir);
                                         layout.chat.push_styled(
                                             nerv::interactive::theme::SUCCESS,
                                             &format!("  → allowed dir: {}", display),
