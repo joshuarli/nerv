@@ -47,12 +47,7 @@ impl SymbolsTool {
     }
 
     fn resolve_path(&self, path: &str) -> PathBuf {
-        if let Some(rest) = path.strip_prefix('~')
-            && let Some(home) = crate::home_dir()
-        {
-            return home.join(rest.trim_start_matches('/'));
-        }
-        if path.starts_with('/') { PathBuf::from(path) } else { self.cwd.join(path) }
+        crate::resolve_path(path, &self.cwd)
     }
 }
 

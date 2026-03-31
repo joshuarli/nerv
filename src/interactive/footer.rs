@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::agent::types::{EffortLevel, Model, ModelPricing, ThinkingLevel, Usage};
+use crate::interactive::display::shorten_path;
 use crate::interactive::theme;
 use crate::tui::tui::Component;
 use crate::tui::utils::{visible_width, wrap_text_with_ansi};
@@ -197,20 +198,8 @@ pub struct FooterComponent {
 }
 
 impl FooterComponent {
-    fn abbrev_cwd(cwd: &str) -> String {
-        // Replace the home prefix with ~ for display.
-        // home_dir() is a OnceLock cache hit after the first call.
-        if let Some(h) = crate::home_dir() {
-            let h = h.to_string_lossy();
-            if cwd.starts_with(h.as_ref()) {
-                return format!("~{}", &cwd[h.len()..]);
-            }
-        }
-        cwd.to_string()
-    }
-
-    pub fn new(cwd: &str) -> Self {
-        let git_branch = std::process::Command::new("git")
+    fn current_git_branch(cwd: &str) -> Option<String> {
+        std::process::Command::new("git")
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(cwd)
             .output()
@@ -221,10 +210,14 @@ impl FooterComponent {
                 } else {
                     None
                 }
-            });
+            })
+    }
+
+    pub fn new(cwd: &str) -> Self {
+        let git_branch = Self::current_git_branch(cwd);
 
         let mut this = Self {
-            cwd: Self::abbrev_cwd(cwd),
+            cwd: shorten_path(cwd, &crate::home_dir().map(|h| h.to_string_lossy().into_owned()).unwrap_or_default(), None),
             git_branch,
             session_id: None,
             session_name: None,
@@ -329,19 +322,8 @@ impl FooterComponent {
     }
 
     pub fn set_cwd(&mut self, cwd: &str) {
-        self.cwd = Self::abbrev_cwd(cwd);
-        self.git_branch = std::process::Command::new("git")
-            .args(["rev-parse", "--abbrev-ref", "HEAD"])
-            .current_dir(cwd)
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-                } else {
-                    None
-                }
-            });
+        self.cwd = shorten_path(cwd, &crate::home_dir().map(|h| h.to_string_lossy().into_owned()).unwrap_or_default(), None);
+        self.git_branch = Self::current_git_branch(cwd);
     }
 
     pub fn set_model(&mut self, model: &Model) {

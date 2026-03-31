@@ -114,3 +114,19 @@ pub fn repo_data_dir(cwd: &std::path::Path) -> std::path::PathBuf {
         .map(|fpr| nerv_dir().join("repos").join(fpr))
         .unwrap_or_else(|| nerv_dir().to_path_buf())
 }
+
+/// Resolve a path string to an absolute `PathBuf`.
+///
+/// Handles three cases:
+/// - `~/…` — expands to `$HOME/…`
+/// - absolute paths — returned as-is
+/// - relative paths — resolved against `cwd`
+pub fn resolve_path(path: &str, cwd: &std::path::Path) -> std::path::PathBuf {
+    if let Some(rest) = path.strip_prefix('~') {
+        if let Some(home) = home_dir() {
+            return home.join(rest.trim_start_matches('/'));
+        }
+    }
+    let p = std::path::Path::new(path);
+    if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) }
+}

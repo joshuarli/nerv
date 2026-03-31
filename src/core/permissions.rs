@@ -100,7 +100,7 @@ pub fn path_to_display(path: &Path) -> String {
 /// Given a path string from a tool arg, resolve to an absolute path, walk up
 /// to the git repo root (falling back to the directory itself), and return it.
 pub fn allow_dir_for_path(path_str: &str) -> PathBuf {
-    let abs = expand_path(path_str, None);
+    let abs = crate::resolve_path(path_str, std::path::Path::new("."));
     let start = if abs.is_dir() {
         abs.clone()
     } else {
