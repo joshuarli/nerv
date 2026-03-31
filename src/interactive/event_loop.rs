@@ -498,7 +498,7 @@ impl InteractiveMode {
                 layout.footer.set_compacting(true);
                 tui.request_render(false);
             }
-            AgentSessionEvent::AutoCompactionEnd { summary, will_retry, messages } => {
+            AgentSessionEvent::AutoCompactionEnd { summary, structured: _, will_retry, messages } => {
                 layout.footer.set_compacting(false);
                 self.is_compacting = false;
                 if will_retry {

@@ -66,27 +66,70 @@ they are byte-identical before and after. Only the conversation portion cold-sta
 
 ---
 
-## How nerv compacts
+## Two-tier compaction
 
-Compaction is handled by `run_compaction` in `src/core/agent_session.rs` and
-`find_cut_point` in `src/compaction/mod.rs`.
+Nerv uses a two-tier approach to manage context growth:
 
-### Trigger conditions
+### Tier 1: Lite-compact (no LLM call)
 
-- **Proactive** (threshold): after each turn, if total context tokens exceed
-  `threshold_pct` of the model's context window, compaction fires before
-  the next user turn
-- **Reactive** (overflow): if the API returns a context-too-long error, compact and retry
-- **Manual**: `/compact` slash command
+Before attempting full LLM summarization, `run_compaction` runs a **lite-compact** pass
+that zeros stale tool results in the live message buffer. This is a cheap, in-place
+mutation (~1ms) that can avoid an expensive LLM summarization call entirely.
 
-### The three-region split
+**How it works** (`lite_compact` in `src/agent/transform.rs`):
+
+1. Count turn boundaries (User messages) from newest to oldest
+2. Tool results older than `age_threshold` turns (default: 8) are eligible
+3. Eligible results from compactable tools are replaced with
+   `"[output cleared — re-run if needed]"`
+4. Skips: error results, small results (< 500 bytes), non-compactable tools
+
+**Which tools are compactable**: determined by `ToolRegistry::lite_compactable_names()` —
+all readonly tools (read, grep, find, ls, symbols, codemap) plus bash. These are tools
+whose output is either re-fetchable or typically large and stale.
+
+After lite-compact, if the estimated token count drops below the compaction threshold,
+`run_compaction` returns `CompactionOutcome::LiteCompact` and the LLM call is skipped.
+The caller does **not** reload from the session DB (which would undo the in-place
+mutations) — it retries with the already-modified message buffer.
+
+### Tier 2: Full LLM summarization
+
+When lite-compact isn't sufficient to drop below threshold, the standard LLM
+summarization path runs.
+
+#### Structured summaries
+
+The summarization prompt requests JSON output matching the `StructuredSummary` schema:
+
+```json
+{
+  "goal": "what the user is trying to accomplish",
+  "progress": "what has been done so far",
+  "files_modified": ["list of file paths"],
+  "key_decisions": ["important choices made"],
+  "next_steps": ["what remains to be done"],
+  "open_questions": ["unresolved questions or blockers"],
+  "critical_context": "any other essential context"
+}
+```
+
+`generate_summary` returns a `GeneratedSummary` enum — either `Structured(StructuredSummary)`
+if JSON parsing succeeds, or `Prose(String)` as a fallback. The prose fallback ensures
+compaction never fails due to JSON parse errors; the model's raw output is used as-is.
+
+The structured summary is formatted to markdown via `to_markdown()` for injection into
+the conversation context, and the parsed `StructuredSummary` is threaded through
+`CompactionResult` and `AutoCompactionEnd` for potential UI use.
+
+#### The three-region split
 
 `find_cut_point` divides the session history into three regions:
 
 ```
-[0 .. first_kept_entry_index)                  → deleted from DB, replaced by summary
+[0 .. first_kept_entry_index)                     → deleted from DB, replaced by summary
 [first_kept_entry_index .. verbatim_start_index)  → summarized by LLM call
-[verbatim_start_index .. end)                  → kept verbatim (cache-warm post-compaction)
+[verbatim_start_index .. end)                     → kept verbatim (cache-warm post-compaction)
 ```
 
 **Deleted region**: entries too old to be useful even in summary form. Removed from the
@@ -107,14 +150,42 @@ Setting `verbatim_window_tokens = 0` disables the verbatim window and summarizes
 entire kept range (simpler, slightly smaller context, but pays more Wc on the first
 post-compaction call).
 
-### Token budget
+---
+
+## Trigger conditions
+
+- **Proactive** (threshold): after each turn, if total context tokens exceed
+  `threshold_pct` of the model's context window, compaction fires before
+  the next user turn
+- **Reactive** (overflow): if the API returns a context-too-long error, compact and retry
+- **Manual**: `/compact` slash command
+
+All three paths go through `run_compaction`, so lite-compact always runs first.
+
+---
+
+## `CompactionOutcome`
+
+`run_compaction` returns one of three outcomes:
+
+| Variant | Meaning | Caller action |
+|---------|---------|---------------|
+| `Full(CompactionResult)` | LLM summarization completed | Reload from DB, retry prompt |
+| `LiteCompact { zeroed }` | Lite-compact was sufficient | Do NOT reload (preserves in-place mutations), retry prompt |
+| `None` | Nothing to compact | No action |
+
+---
+
+## Token budget
 
 - `keep_recent_tokens` (default: 20 000): total token budget for everything after the
   deleted region (summary + verbatim window + any kept messages)
 - `verbatim_window_tokens` (default: 5 000): carved out of `keep_recent_tokens` for the
   verbatim tail; the remaining ~15 000 tokens hold the summary and older kept messages
 
-### Utility model
+---
+
+## Utility model
 
 `resolve_utility_provider` selects the summarization model (`src/core/agent_session.rs`):
 
@@ -132,6 +203,7 @@ model size.
 | Call | Wc | Rc | Notes |
 |------|----|----|-------|
 | Pre-compaction (typical) | last-user-msg only | everything else | High Rc, growing slowly |
+| Lite-compact only | — | — | No API call at all; free |
 | Compaction LLM call | full old context | system + tools | One-time summarization cost |
 | First post-compaction | summary | system + tools + verbatim window | Summary is new; verbatim window stays Rc |
 | Second post-compaction | last-user-msg only | everything | Fully warm again |
@@ -146,12 +218,19 @@ conversation portion. System prompt and tool definitions never go cold.
 ```jsonc
 // ~/.nerv/config.json
 {
-  "compaction": {
-    "enabled": true,
-    "threshold_pct": 0.80,        // compact at this % of context window
-    "keep_recent_tokens": 20000,  // token budget for post-compaction context
-    "verbatim_window_tokens": 5000 // tail of kept window to preserve verbatim
-  }
+  "auto_compact": true,
+  "compaction_model": "claude-haiku-4-5",
+  "lite_compact_age": 8  // turns; tool results older than this are zeroed by lite-compact
+}
+```
+
+Compaction settings (threshold, token budgets) are in `CompactionSettings`:
+
+```jsonc
+{
+  "threshold_pct": 0.80,          // compact at this % of context window
+  "keep_recent_tokens": 20000,    // token budget for post-compaction context
+  "verbatim_window_tokens": 5000  // tail of kept window to preserve verbatim
 }
 ```
 
@@ -163,7 +242,9 @@ conversation portion. System prompt and tool definitions never go cold.
 |---------|------|
 | Cache breakpoints (system, tools, last-user) | `src/agent/anthropic.rs` |
 | Compaction trigger/threshold | `src/core/compaction_controller.rs` |
-| `CompactionSettings`, `find_cut_point`, token estimation | `src/compaction/mod.rs` |
+| `CompactionSettings`, `find_cut_point`, token estimation, `CompactionOutcome` | `src/compaction/mod.rs` |
 | `run_compaction`, trigger logic | `src/core/agent_session.rs` |
-| Summarization prompt and LLM call | `src/compaction/summarize.rs` |
+| `StructuredSummary`, `GeneratedSummary`, summarization prompt | `src/compaction/summarize.rs` |
+| `lite_compact` function | `src/agent/transform.rs` |
+| `lite_compactable_names` | `src/core/tool_registry.rs` |
 | Session DB: `append_compaction`, branch walking | `src/session/manager.rs` |

@@ -601,7 +601,7 @@ fn compaction_archived_messages_includes_full_branch() {
     let result = session.run_compaction(None);
     // May return Ok(None) if there aren't enough tokens to satisfy find_cut_point.
     // In that case the archive test is moot — skip gracefully.
-    let Ok(Some(_compaction_result)) = result else {
+    let Ok(nerv::compaction::CompactionOutcome::Full(_)) = result else {
         return;
     };
 

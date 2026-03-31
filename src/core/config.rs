@@ -26,6 +26,10 @@ pub struct NervConfig {
     /// Accepts any model id recognised by the model registry (fuzzy match).
     /// Defaults to "claude-haiku-4-5" on the anthropic provider when unset.
     pub compaction_model: Option<String>,
+    /// Lite-compaction age threshold (turns). Tool results older than this are
+    /// zeroed before full LLM summarisation is attempted. Default: 8.
+    #[serde(default)]
+    pub lite_compact_age: Option<usize>,
     /// Extra HTTP headers per provider, e.g. {"anthropic": {"user-agent":
     /// "claude-cli/1.0.0"}}
     #[serde(default)]
@@ -97,6 +101,7 @@ impl Default for NervConfig {
             default_effort_level: Some(EffortLevel::Medium),
             auto_compact: Some(true),
             compaction_model: Some(crate::core::model_registry::DEFAULT_COMPACTION_MODEL.to_string()),
+            lite_compact_age: None,
             headers: builtin_default_headers(),
             notifications: Vec::new(),
         }

@@ -697,6 +697,109 @@ fn find_superseded_results(messages: &[AgentMessage]) -> HashSet<String> {
     superseded
 }
 
+/// Default age threshold for lite-compaction: clear results older than this
+/// many turns.
+pub const LITE_COMPACT_AGE_THRESHOLD: usize = 8;
+
+/// Minimum content size (bytes) worth zeroing. Tiny results aren't worth the
+/// "[output cleared]" placeholder.
+const LITE_COMPACT_MIN_BYTES: usize = 500;
+
+/// Lite-compaction pass: zero bulk tool outputs older than `age_threshold`
+/// turns to reduce context pressure without an LLM call.
+///
+/// `compactable_tools` is the set of tool names eligible for zeroing (typically
+/// readonly tools + bash). Obtained from `ToolRegistry::lite_compactable_names()`.
+///
+/// A "turn" boundary is each User message. Results within the most recent
+/// `age_threshold` turns, error results, and small results (< 500 bytes) are
+/// never touched.
+///
+/// This mutates `messages` in place (the live agent state) so the zeroed
+/// content is never sent to the API again. Returns the number of results
+/// zeroed.
+pub fn lite_compact(
+    messages: &mut Vec<AgentMessage>,
+    age_threshold: usize,
+    compactable_tools: &HashSet<String>,
+) -> usize {
+    // Build tool_call_id → tool name map from Assistant messages.
+    let tool_names: HashMap<String, String> = messages
+        .iter()
+        .filter_map(|m| {
+            if let AgentMessage::Assistant(a) = m {
+                Some(a.content.iter().filter_map(|b| {
+                    if let ContentBlock::ToolCall { id, name, .. } = b {
+                        Some((id.clone(), name.clone()))
+                    } else {
+                        None
+                    }
+                }))
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .collect();
+
+    // Walk newest-to-oldest, counting turn boundaries (User messages).
+    // Collect tool_call_ids within the recent window.
+    let mut recent_ids: HashSet<String> = HashSet::new();
+    let mut turns_seen = 0usize;
+    for msg in messages.iter().rev() {
+        if matches!(msg, AgentMessage::User { .. }) {
+            turns_seen += 1;
+            if turns_seen > age_threshold {
+                break;
+            }
+        }
+        if let AgentMessage::ToolResult { tool_call_id, .. } = msg {
+            recent_ids.insert(tool_call_id.clone());
+        }
+    }
+
+    // Second pass: zero eligible stale results.
+    let mut zeroed = 0usize;
+    for msg in messages.iter_mut() {
+        if let AgentMessage::ToolResult {
+            tool_call_id,
+            content,
+            is_error,
+            display,
+            ..
+        } = msg
+        {
+            if *is_error {
+                continue;
+            }
+            if recent_ids.contains(tool_call_id.as_str()) {
+                continue;
+            }
+            let tool_name = tool_names.get(tool_call_id.as_str());
+            if !tool_name.is_some_and(|n| compactable_tools.contains(n)) {
+                continue;
+            }
+            let byte_len: usize = content
+                .iter()
+                .map(|item| match item {
+                    ContentItem::Text { text } => text.len(),
+                    ContentItem::Image { .. } => 0,
+                })
+                .sum();
+            if byte_len < LITE_COMPACT_MIN_BYTES {
+                continue;
+            }
+            *content = vec![ContentItem::Text {
+                text: "[output cleared — re-run if needed]".into(),
+            }];
+            *display = None;
+            zeroed += 1;
+        }
+    }
+
+    zeroed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2223,5 +2326,131 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         // details should now have filtered:true so the next transform call skips this
         let filtered_flag = details.as_ref().map_or(false, |d| d.filtered);
         assert!(filtered_flag, "details.filtered should be true after transform_context filters");
+    }
+
+    fn big_output(n: usize) -> String {
+        "x".repeat(n)
+    }
+
+    fn default_compactable() -> HashSet<String> {
+        ["bash", "read", "grep", "find", "ls", "symbols", "codemap"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn lite_compact_zeroes_old_bash_results() {
+        let mut msgs = vec![
+            // Turn 1 (old)
+            user("first prompt"),
+            assistant_tool_call("t1", "bash", serde_json::json!({"command": "ls"})),
+            tool_result("t1", &big_output(1000)),
+        ];
+        // Add enough recent turns to push turn 1 past the threshold
+        for i in 0..3 {
+            msgs.push(user(&format!("prompt {i}")));
+            msgs.push(assistant_text(&format!("reply {i}")));
+        }
+
+        let zeroed = lite_compact(&mut msgs, 2, &default_compactable());
+        assert_eq!(zeroed, 1);
+        if let AgentMessage::ToolResult { content, .. } = &msgs[2] {
+            let text = match &content[0] { ContentItem::Text { text } => text, _ => panic!() };
+            assert!(text.contains("output cleared"));
+        } else {
+            panic!("expected tool result");
+        }
+    }
+
+    #[test]
+    fn lite_compact_preserves_recent_results() {
+        let mut msgs = vec![
+            user("prompt"),
+            assistant_tool_call("t1", "bash", serde_json::json!({"command": "ls"})),
+            tool_result("t1", &big_output(1000)),
+        ];
+        // Within the threshold — should not be zeroed
+        let zeroed = lite_compact(&mut msgs, 2, &default_compactable());
+        assert_eq!(zeroed, 0);
+    }
+
+    #[test]
+    fn lite_compact_preserves_errors() {
+        let mut msgs = vec![
+            user("old prompt"),
+            assistant_tool_call("t1", "bash", serde_json::json!({"command": "bad"})),
+            tool_error("t1", &big_output(1000)),
+        ];
+        for i in 0..10 {
+            msgs.push(user(&format!("prompt {i}")));
+        }
+        let zeroed = lite_compact(&mut msgs, 2, &default_compactable());
+        assert_eq!(zeroed, 0, "error results must not be zeroed");
+    }
+
+    #[test]
+    fn lite_compact_ignores_small_results() {
+        let mut msgs = vec![
+            user("old prompt"),
+            assistant_tool_call("t1", "read", serde_json::json!({"path": "/foo"})),
+            tool_result("t1", "small"),
+        ];
+        for i in 0..10 {
+            msgs.push(user(&format!("prompt {i}")));
+        }
+        let zeroed = lite_compact(&mut msgs, 2, &default_compactable());
+        assert_eq!(zeroed, 0, "small results (< 500 bytes) must not be zeroed");
+    }
+
+    #[test]
+    fn lite_compact_ignores_non_listed_tools() {
+        let mut msgs = vec![
+            user("old prompt"),
+            assistant_tool_call("t1", "edit", serde_json::json!({"path": "/foo"})),
+            tool_result("t1", &big_output(1000)),
+        ];
+        for i in 0..10 {
+            msgs.push(user(&format!("prompt {i}")));
+        }
+        let zeroed = lite_compact(&mut msgs, 2, &default_compactable());
+        assert_eq!(zeroed, 0, "edit tool not in LITE_COMPACT_TOOLS");
+    }
+
+    #[test]
+    fn lite_compact_returns_count() {
+        let mut msgs = vec![
+            user("turn 1"),
+            assistant_tool_call("t1", "bash", serde_json::json!({"command": "a"})),
+            tool_result("t1", &big_output(600)),
+            assistant_tool_call("t2", "read", serde_json::json!({"path": "/b"})),
+            tool_result("t2", &big_output(600)),
+            user("turn 2"),
+            assistant_tool_call("t3", "grep", serde_json::json!({"pattern": "x"})),
+            tool_result("t3", &big_output(600)),
+        ];
+        for i in 0..5 {
+            msgs.push(user(&format!("padding {i}")));
+        }
+        let zeroed = lite_compact(&mut msgs, 2, &default_compactable());
+        // All three are older than 2 turns (5 padding turns pushed them out)
+        assert_eq!(zeroed, 3, "t1, t2, and t3 should all be zeroed");
+    }
+
+    #[test]
+    fn lite_compact_idempotent() {
+        let mut msgs = vec![
+            user("old prompt"),
+            assistant_tool_call("t1", "bash", serde_json::json!({"command": "ls -la"})),
+            tool_result("t1", &big_output(1000)),
+        ];
+        for i in 0..10 {
+            msgs.push(user(&format!("prompt {i}")));
+        }
+        let first = lite_compact(&mut msgs, 2, &default_compactable());
+        assert_eq!(first, 1);
+        // Second call: the placeholder is < LITE_COMPACT_MIN_BYTES, so nothing to zero.
+        let second = lite_compact(&mut msgs, 2, &default_compactable());
+        assert_eq!(second, 0, "second lite_compact call should be a no-op");
     }
 }

@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::agent::convert::{LlmContent, LlmMessage};
 use crate::str::StrExt as _;
 use crate::agent::provider::{CacheConfig, CompletionRequest, Provider, ProviderEvent, new_cancel_flag};
@@ -30,6 +32,83 @@ fn trunc(s: &str, cap: usize) -> Cow<'_, str> {
     } else {
         Cow::Owned(format!("{}...[truncated]", t))
     }
+}
+
+/// Structured output from the LLM summarizer. Every field is bounded by the
+/// prompt (200 chars per string, 10 items per array) so the formatted markdown
+/// is predictably sized for context injection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuredSummary {
+    pub goal: String,
+    pub progress: String,
+    #[serde(default)]
+    pub files_modified: Vec<String>,
+    #[serde(default)]
+    pub key_decisions: Vec<String>,
+    #[serde(default)]
+    pub next_steps: Vec<String>,
+    #[serde(default)]
+    pub open_questions: Vec<String>,
+    #[serde(default)]
+    pub critical_context: String,
+}
+
+impl StructuredSummary {
+    /// Format as readable markdown for injection into the conversation as the
+    /// CompactionSummary message. This is what the LLM sees post-compaction.
+    pub fn to_markdown(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!("**Goal:** {}\n", self.goal));
+        out.push_str(&format!("**Progress:** {}\n", self.progress));
+        if !self.files_modified.is_empty() {
+            out.push_str(&format!("**Files modified:** {}\n", self.files_modified.join(", ")));
+        }
+        if !self.key_decisions.is_empty() {
+            out.push_str(&format!("**Key decisions:** {}\n", self.key_decisions.join("; ")));
+        }
+        if !self.next_steps.is_empty() {
+            out.push_str(&format!("**Next steps:** {}\n", self.next_steps.join("; ")));
+        }
+        if !self.open_questions.is_empty() {
+            out.push_str(&format!("**Open questions:** {}\n", self.open_questions.join("; ")));
+        }
+        if !self.critical_context.is_empty() {
+            out.push_str(&format!("**Critical context:** {}\n", self.critical_context));
+        }
+        out
+    }
+}
+
+/// Result of `generate_summary()`. The structured variant is preferred; prose
+/// is the fallback when JSON parsing fails.
+pub enum GeneratedSummary {
+    Structured(StructuredSummary),
+    /// Fallback: JSON parse failed, raw LLM output preserved.
+    Prose(String),
+}
+
+impl GeneratedSummary {
+    pub fn to_markdown(&self) -> String {
+        match self {
+            Self::Structured(s) => s.to_markdown(),
+            Self::Prose(s) => s.clone(),
+        }
+    }
+
+    pub fn structured(&self) -> Option<&StructuredSummary> {
+        match self {
+            Self::Structured(s) => Some(s),
+            Self::Prose(_) => None,
+        }
+    }
+}
+
+/// Strip markdown code fences that LLMs commonly wrap around JSON output.
+fn strip_json_fences(s: &str) -> &str {
+    let s = s.trim();
+    let s = s.strip_prefix("```json").or_else(|| s.strip_prefix("```")).unwrap_or(s);
+    let s = s.strip_suffix("```").unwrap_or(s);
+    s.trim()
 }
 
 pub fn serialize_conversation(messages: &[AgentMessage]) -> String {
@@ -111,7 +190,19 @@ pub fn clamp_conversation(s: String, char_cap: usize) -> String {
     format!("{}...\n[Conversation truncated: exceeded summariser context limit]", t)
 }
 
-const SUMMARIZATION_PROMPT: &str = "Summarize the conversation above in structured format: Goal, Progress, Key Decisions, Next Steps, Critical Context. Be concise.";
+const SUMMARIZATION_PROMPT: &str = "\
+Summarize the conversation above. Output ONLY valid JSON matching this exact schema:
+{
+  \"goal\": \"string — what the user is trying to accomplish\",
+  \"progress\": \"string — what has been done so far\",
+  \"files_modified\": [\"list of file paths that were changed\"],
+  \"key_decisions\": [\"important choices made\"],
+  \"next_steps\": [\"what remains to be done\"],
+  \"open_questions\": [\"unresolved questions or blockers\"],
+  \"critical_context\": \"string — any other essential context\"
+}
+Constraints: each string value max 200 chars; arrays max 10 items.
+Output only the JSON object, no prose before or after.";
 
 pub fn generate_summary(
     messages: &[AgentMessage],
@@ -119,7 +210,7 @@ pub fn generate_summary(
     provider: Arc<dyn Provider>,
     model_id: &str,
     summarizer_context_window: u32,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<GeneratedSummary> {
     let conversation = serialize_conversation(messages);
 
     // Reserve the 4 096-token output budget from the context window before
@@ -143,7 +234,8 @@ pub fn generate_summary(
         format!(
             "<previous_summary>\n{prev}\n</previous_summary>\n\n\
              <conversation>\n{conversation}\n</conversation>\n\n\
-             Update the previous summary.\n\n{SUMMARIZATION_PROMPT}"
+             Update the previous summary with information from the new conversation.\n\n\
+             {SUMMARIZATION_PROMPT}"
         )
     } else {
         format!("<conversation>\n{conversation}\n</conversation>\n\n{SUMMARIZATION_PROMPT}")
@@ -167,7 +259,15 @@ pub fn generate_summary(
             result.push_str(&delta);
         }
     })?;
-    Ok(result)
+
+    let stripped = strip_json_fences(&result);
+    match serde_json::from_str::<StructuredSummary>(stripped) {
+        Ok(structured) => Ok(GeneratedSummary::Structured(structured)),
+        Err(e) => {
+            crate::log::warn(&format!("Compaction summary JSON parse failed, using prose fallback: {e}"));
+            Ok(GeneratedSummary::Prose(result))
+        }
+    }
 }
 
 /// Stop-words filtered out when building a session title.
@@ -354,5 +454,78 @@ mod tests {
         // cap at 3 bytes — must not panic
         let result = clamp_conversation(s, 3);
         assert!(result.contains("[Conversation truncated"));
+    }
+
+    #[test]
+    fn structured_summary_to_markdown_all_fields() {
+        let s = StructuredSummary {
+            goal: "fix bug".into(),
+            progress: "halfway".into(),
+            files_modified: vec!["a.rs".into(), "b.rs".into()],
+            key_decisions: vec!["use X".into()],
+            next_steps: vec!["test".into(), "deploy".into()],
+            open_questions: vec!["perf?".into()],
+            critical_context: "deadline friday".into(),
+        };
+        let md = s.to_markdown();
+        assert!(md.contains("**Goal:** fix bug"));
+        assert!(md.contains("**Files modified:** a.rs, b.rs"));
+        assert!(md.contains("**Next steps:** test; deploy"));
+        assert!(md.contains("**Critical context:** deadline friday"));
+    }
+
+    #[test]
+    fn structured_summary_to_markdown_empty_arrays_omitted() {
+        let s = StructuredSummary {
+            goal: "goal".into(),
+            progress: "done".into(),
+            files_modified: vec![],
+            key_decisions: vec![],
+            next_steps: vec![],
+            open_questions: vec![],
+            critical_context: String::new(),
+        };
+        let md = s.to_markdown();
+        assert!(!md.contains("Files modified"));
+        assert!(!md.contains("Key decisions"));
+        assert!(!md.contains("Critical context"));
+    }
+
+    #[test]
+    fn strip_json_fences_basic() {
+        assert_eq!(strip_json_fences("```json\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(strip_json_fences("```\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(strip_json_fences("{\"a\":1}"), "{\"a\":1}");
+    }
+
+    #[test]
+    fn generated_summary_prose_fallback() {
+        let raw = "Just some prose summary.";
+        let result: Result<StructuredSummary, _> = serde_json::from_str(raw);
+        assert!(result.is_err(), "prose should not parse as JSON");
+        // Verify the fallback path works
+        let gs = GeneratedSummary::Prose(raw.into());
+        assert_eq!(gs.to_markdown(), raw);
+        assert!(gs.structured().is_none());
+    }
+
+    #[test]
+    fn generated_summary_structured_roundtrip() {
+        let json = r#"{"goal":"g","progress":"p","files_modified":[],"key_decisions":[],"next_steps":["s1"],"open_questions":[],"critical_context":""}"#;
+        let parsed: StructuredSummary = serde_json::from_str(json).unwrap();
+        let gs = GeneratedSummary::Structured(parsed);
+        assert!(gs.structured().is_some());
+        assert!(gs.to_markdown().contains("**Goal:** g"));
+    }
+
+    #[test]
+    fn structured_summary_parses_with_missing_optional_fields() {
+        // LLMs may omit array fields or critical_context entirely.
+        let json = r#"{"goal":"fix it","progress":"done"}"#;
+        let parsed: StructuredSummary = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.goal, "fix it");
+        assert!(parsed.files_modified.is_empty());
+        assert!(parsed.next_steps.is_empty());
+        assert!(parsed.critical_context.is_empty());
     }
 }

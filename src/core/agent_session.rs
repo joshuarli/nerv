@@ -83,6 +83,9 @@ pub enum AgentSessionEvent {
     },
     AutoCompactionEnd {
         summary: Option<String>,
+        /// Parsed structured summary, if JSON parse succeeded. `None` when
+        /// compaction failed/skipped or the LLM returned prose.
+        structured: Option<crate::compaction::summarize::StructuredSummary>,
         will_retry: bool,
         /// Post-compaction messages (for UI rebuild). Empty when compaction
         /// failed/skipped.
@@ -544,10 +547,11 @@ impl AgentSession {
             });
 
             match self.run_compaction(None) {
-                Ok(Some(result)) => {
+                Ok(compaction::CompactionOutcome::Full(result)) => {
                     self.reload_agent_context();
                     let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                         summary: Some(result.summary),
+                        structured: result.structured,
                         will_retry: true,
                         messages: self.agent.state.messages.clone(),
                     });
@@ -568,9 +572,30 @@ impl AgentSession {
                     self.compaction.auto_compact = saved_auto_compact;
                     self.post_turn(retry_messages, &text, event_tx);
                 }
-                Ok(None) => {
+                Ok(compaction::CompactionOutcome::LiteCompact { zeroed }) => {
+                    // Messages already mutated in place — no reload needed.
+                    let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                        summary: Some(format!("Lite-compact: {zeroed} stale outputs cleared")),
+                        structured: None,
+                        will_retry: true,
+                        messages: self.agent.state.messages.clone(),
+                    });
+                    let retry_msg = AgentMessage::User {
+                        content: vec![ContentItem::Text { text: text.to_string() }],
+                        timestamp: now_millis(),
+                    };
+                    self.prepare_system_prompt();
+                    self.prepare_callbacks(event_tx);
+                    let saved_auto_compact = self.compaction.auto_compact;
+                    self.compaction.auto_compact = false;
+                    let retry_messages = self.run_agent_prompt(vec![retry_msg], event_tx);
+                    self.compaction.auto_compact = saved_auto_compact;
+                    self.post_turn(retry_messages, &text, event_tx);
+                }
+                Ok(compaction::CompactionOutcome::None) => {
                     let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                         summary: None,
+                        structured: None,
                         will_retry: false,
                         messages: vec![],
                     });
@@ -584,6 +609,7 @@ impl AgentSession {
                 Err(e) => {
                     let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                         summary: None,
+                        structured: None,
                         will_retry: false,
                         messages: vec![],
                     });
@@ -744,10 +770,11 @@ impl AgentSession {
             });
 
             match self.run_compaction(None) {
-                Ok(Some(result)) => {
+                Ok(compaction::CompactionOutcome::Full(result)) => {
                     self.reload_agent_context();
                     let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                         summary: Some(result.summary),
+                        structured: result.structured,
                         will_retry: true,
                         messages: self.agent.state.messages.clone(),
                     });
@@ -759,9 +786,25 @@ impl AgentSession {
                     self.prepare_system_prompt();
                     let _retry_messages = self.run_agent_prompt(vec![retry_msg], event_tx);
                 }
-                Ok(None) => {
+                Ok(compaction::CompactionOutcome::LiteCompact { zeroed }) => {
+                    let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                        summary: Some(format!("Lite-compact: {zeroed} stale outputs cleared")),
+                        structured: None,
+                        will_retry: true,
+                        messages: self.agent.state.messages.clone(),
+                    });
+
+                    let retry_msg = AgentMessage::User {
+                        content: vec![ContentItem::Text { text: user_text.to_string() }],
+                        timestamp: now_millis(),
+                    };
+                    self.prepare_system_prompt();
+                    let _retry_messages = self.run_agent_prompt(vec![retry_msg], event_tx);
+                }
+                Ok(compaction::CompactionOutcome::None) => {
                     let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                         summary: None,
+                        structured: None,
                         will_retry: false,
                         messages: vec![],
                     });
@@ -773,6 +816,7 @@ impl AgentSession {
                 Err(e) => {
                     let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                         summary: None,
+                        structured: None,
                         will_retry: false,
                         messages: vec![],
                     });
@@ -1113,14 +1157,43 @@ impl AgentSession {
         Some((provider, model.id.clone()))
     }
 
-    /// Run compaction. Returns `Ok(Some(result))` on success, `Ok(None)` when
-    /// there is nothing to compact (context too small / no messages before
-    /// the cut point), and `Err(msg)` when compaction cannot proceed (no
-    /// suitable provider, summarization API call failed, etc.).
     pub fn run_compaction(
         &mut self,
         _custom_instructions: Option<String>,
-    ) -> Result<Option<CompactionResult>, String> {
+    ) -> Result<compaction::CompactionOutcome, String> {
+        // Lite-compact: cheaply zero stale bulk outputs before trying LLM
+        // summarization. If this drops us below threshold, skip the LLM call.
+        let age = self
+            .config
+            .lite_compact_age
+            .unwrap_or(crate::agent::transform::LITE_COMPACT_AGE_THRESHOLD);
+        let compactable = self.tool_registry.lite_compactable_names();
+        let zeroed = crate::agent::transform::lite_compact(
+            &mut self.agent.state.messages,
+            age,
+            &compactable,
+        );
+        if zeroed > 0 {
+            crate::log::info(&format!("lite-compact: zeroed {zeroed} stale tool results"));
+            let context_window = self
+                .agent
+                .state
+                .model
+                .as_ref()
+                .map(|m| m.context_window)
+                .unwrap_or(200_000);
+            let estimated: usize = self
+                .agent
+                .state
+                .messages
+                .iter()
+                .map(compaction::estimate_tokens)
+                .sum();
+            if !compaction::should_compact(estimated, context_window, &self.compaction.settings) {
+                return Ok(compaction::CompactionOutcome::LiteCompact { zeroed });
+            }
+        }
+
         let (provider, model_id) =
             self.resolve_utility_provider(self.config.compaction_model.as_deref()).ok_or_else(|| {
                 "No provider available for compaction. \
@@ -1141,7 +1214,7 @@ impl AgentSession {
             .map(|m| m.context_window)
             .unwrap_or(200_000);
         if branch.is_empty() {
-            return Ok(None);
+            return Ok(compaction::CompactionOutcome::None);
         }
 
         // The kept window is split into two parts for cache efficiency:
@@ -1180,7 +1253,7 @@ impl AgentSession {
             .collect();
 
         if to_summarize.is_empty() {
-            return Ok(None);
+            return Ok(compaction::CompactionOutcome::None);
         }
 
         // tokens_before: the actual context size at the moment compaction fires.
@@ -1204,7 +1277,9 @@ impl AgentSession {
             .collect();
 
         match generate_summary(&to_summarize, None, provider, &model_id, summarizer_context_window) {
-            Ok(summary) => {
+            Ok(generated) => {
+                let summary = generated.to_markdown();
+                let structured = generated.structured().cloned();
                 // Estimated context size after compaction: summary + verbatim window.
                 let tokens_after = compaction::tokens_after_compaction(
                     &summary,
@@ -1226,8 +1301,9 @@ impl AgentSession {
                     super::notifications::NotificationMatcher::OnCompactionDone,
                     &self.config.notifications,
                 );
-                Ok(Some(CompactionResult {
+                Ok(compaction::CompactionOutcome::Full(CompactionResult {
                     summary,
+                    structured,
                     first_kept_entry_id: first_kept_id,
                     tokens_before,
                     tokens_after,

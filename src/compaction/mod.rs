@@ -152,10 +152,22 @@ pub fn should_compact(tokens: usize, context_window: u32, settings: &CompactionS
 
 pub struct CompactionResult {
     pub summary: String,
+    pub structured: Option<summarize::StructuredSummary>,
     pub first_kept_entry_id: String,
     pub tokens_before: u32,
     pub tokens_after: u32,
     pub model_id: String,
+}
+
+/// Outcome of `run_compaction()`.
+pub enum CompactionOutcome {
+    /// Full LLM compaction performed — caller should reload from DB and retry.
+    Full(CompactionResult),
+    /// Lite-compact zeroed enough stale outputs that the threshold is no longer
+    /// exceeded. Messages are already mutated in place — do NOT reload from DB.
+    LiteCompact { zeroed: usize },
+    /// Nothing to compact (context too small or no messages before cut point).
+    None,
 }
 
 #[cfg(test)]

@@ -46,4 +46,14 @@ impl ToolRegistry {
     pub fn prompt_guidelines(&self) -> Vec<String> {
         self.all.iter().flat_map(|t| t.prompt_guidelines()).collect()
     }
+
+    /// Tool names eligible for lite-compaction: readonly tools (whose output
+    /// can be re-fetched) plus bash (mutable but produces large output).
+    pub fn lite_compactable_names(&self) -> std::collections::HashSet<String> {
+        self.all
+            .iter()
+            .filter(|t| t.is_readonly() || t.name() == "bash")
+            .map(|t| t.name().to_string())
+            .collect()
+    }
 }

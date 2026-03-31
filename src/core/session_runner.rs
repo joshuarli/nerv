@@ -288,17 +288,28 @@ pub fn session_task(
                     reason: CompactionReason::Manual,
                 });
                 match session.run_compaction(custom_instructions) {
-                    Ok(Some(result)) => {
+                    Ok(crate::compaction::CompactionOutcome::Full(result)) => {
                         session.reload_agent_context();
                         let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                             summary: Some(result.summary),
+                            structured: result.structured,
                             will_retry: false,
                             messages: session.agent.state.messages.clone(),
                         });
                     }
-                    Ok(None) => {
+                    Ok(crate::compaction::CompactionOutcome::LiteCompact { zeroed }) => {
+                        // Messages already mutated in place — no reload needed.
+                        let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
+                            summary: Some(format!("Lite-compact: {zeroed} stale outputs cleared")),
+                            structured: None,
+                            will_retry: false,
+                            messages: session.agent.state.messages.clone(),
+                        });
+                    }
+                    Ok(crate::compaction::CompactionOutcome::None) => {
                         let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                             summary: None,
+                            structured: None,
                             will_retry: false,
                             messages: vec![],
                         });
@@ -310,6 +321,7 @@ pub fn session_task(
                     Err(e) => {
                         let _ = event_tx.send(AgentSessionEvent::AutoCompactionEnd {
                             summary: None,
+                            structured: None,
                             will_retry: false,
                             messages: vec![],
                         });
