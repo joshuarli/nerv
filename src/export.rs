@@ -769,3 +769,219 @@ fn html_escape_no_br(s: &str) -> String {
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\n', "<br>")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::types::{AgentMessage, AssistantMessage, ContentBlock, ContentItem, StopReason};
+    use crate::session::types::{CompactionEntry, MessageEntry, SessionEntry};
+
+    fn user_entry(text: &str) -> SessionEntry {
+        SessionEntry::Message(MessageEntry {
+            id: "u1".to_string(),
+            parent_id: None,
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            message: AgentMessage::User {
+                content: vec![ContentItem::Text { text: text.to_string() }],
+                timestamp: 0,
+            },
+            tokens: None,
+        })
+    }
+
+    fn assistant_entry(text: &str) -> SessionEntry {
+        SessionEntry::Message(MessageEntry {
+            id: "a1".to_string(),
+            parent_id: None,
+            timestamp: "2026-01-01T00:00:01Z".to_string(),
+            message: AgentMessage::Assistant(AssistantMessage {
+                content: vec![ContentBlock::Text { text: text.to_string() }],
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+                timestamp: 0,
+            }),
+            tokens: Some(crate::session::types::TokenInfo {
+                input: 100,
+                output: 50,
+                cache_read: 0,
+                cache_write: 0,
+                context_used: 150,
+                context_window: 200_000,
+                cost_usd: 0.0,
+            }),
+        })
+    }
+
+    fn archived_user(text: &str) -> AgentMessage {
+        AgentMessage::User {
+            content: vec![ContentItem::Text { text: text.to_string() }],
+            timestamp: 0,
+        }
+    }
+
+    fn archived_assistant(text: &str) -> AgentMessage {
+        AgentMessage::Assistant(AssistantMessage {
+            content: vec![ContentBlock::Text { text: text.to_string() }],
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+            timestamp: 0,
+        })
+    }
+
+    fn compaction_entry_with_archived(archived: Vec<AgentMessage>) -> SessionEntry {
+        SessionEntry::Compaction(CompactionEntry {
+            id: "c1".to_string(),
+            parent_id: None,
+            timestamp: "2026-01-01T00:01:00Z".to_string(),
+            summary: "Summary of archived work.".to_string(),
+            first_kept_entry_id: "u2".to_string(),
+            tokens_before: 80_000,
+            tokens_after: 3_000,
+            model_id: "claude-haiku".to_string(),
+            cost_usd_before: 0.50,
+            archived_messages: archived,
+        })
+    }
+
+    fn render_to_string(entries: &[SessionEntry]) -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!("nerv_export_test_{n}.html"));
+        render_html_to_file(entries, &tmp).expect("render failed");
+        std::fs::read_to_string(&tmp).expect("read failed")
+    }
+
+    // ── HTML: archived messages appear inline, no <details> ──────────────────
+
+    #[test]
+    fn html_archived_messages_rendered_inline() {
+        let entries = vec![
+            compaction_entry_with_archived(vec![
+                archived_user("archived question"),
+                archived_assistant("archived answer"),
+            ]),
+            user_entry("post-compaction question"),
+            assistant_entry("post-compaction answer"),
+        ];
+
+        let html = render_to_string(&entries);
+
+        // Archived content must appear verbatim in the HTML
+        assert!(
+            html.contains("archived question"),
+            "archived user text must be in HTML"
+        );
+        assert!(
+            html.contains("archived answer"),
+            "archived assistant text must be in HTML"
+        );
+    }
+
+    #[test]
+    fn html_no_details_tag_for_archived_messages() {
+        let entries = vec![
+            compaction_entry_with_archived(vec![
+                archived_user("old turn"),
+                archived_assistant("old reply"),
+            ]),
+        ];
+
+        let html = render_to_string(&entries);
+        // Archived text must appear in the HTML directly, not only inside a <details>.
+        // Find the position of the archived text vs any <details> open/close tags.
+        let old_turn_pos = html.find("old turn").expect("archived text missing");
+        // If the text is inside a <details>, a <details> tag would appear before it
+        // with no matching </details> before the text. Check it's outside.
+        let details_before: Vec<_> = html[..old_turn_pos].match_indices("<details").collect();
+        let details_closed_before: Vec<_> = html[..old_turn_pos].match_indices("</details>").collect();
+        assert_eq!(
+            details_before.len(),
+            details_closed_before.len(),
+            "archived text must not be inside a <details> element (unclosed details before pos {old_turn_pos})"
+        );
+    }
+
+    #[test]
+    fn html_archived_messages_appear_before_compaction_banner() {
+        let entries = vec![
+            compaction_entry_with_archived(vec![
+                archived_user("before compaction"),
+            ]),
+            user_entry("after compaction"),
+        ];
+
+        let html = render_to_string(&entries);
+
+        let archived_pos = html.find("before compaction").expect("archived text missing");
+        // The compaction banner contains the token ratio text
+        let banner_pos = html.find("compacted").or_else(|| html.find("Summary of archived"))
+            .expect("compaction banner missing");
+
+        assert!(
+            archived_pos < banner_pos,
+            "archived content (pos {archived_pos}) must appear before the compaction banner (pos {banner_pos})"
+        );
+    }
+
+    #[test]
+    fn html_surviving_messages_appear_after_compaction_banner() {
+        let entries = vec![
+            compaction_entry_with_archived(vec![archived_user("old")]),
+            user_entry("new question after compaction"),
+            assistant_entry("new answer after compaction"),
+        ];
+
+        let html = render_to_string(&entries);
+
+        let banner_pos = html.find("Summary of archived").expect("compaction banner missing");
+        let surviving_pos = html.find("new question after compaction").expect("surviving text missing");
+
+        assert!(
+            surviving_pos > banner_pos,
+            "surviving message must appear after the compaction banner"
+        );
+    }
+
+    #[test]
+    fn html_empty_archived_messages_no_crash() {
+        let entries = vec![
+            compaction_entry_with_archived(vec![]),
+            user_entry("clean session"),
+        ];
+
+        let html = render_to_string(&entries);
+        assert!(html.contains("clean session"));
+    }
+
+    // ── SessionStats: archived assistant messages count toward api_calls ──────
+
+    #[test]
+    fn session_stats_counts_archived_assistant_calls() {
+        let entries = vec![
+            compaction_entry_with_archived(vec![
+                archived_user("q1"),
+                archived_assistant("a1"),
+                archived_user("q2"),
+                archived_assistant("a2"),
+            ]),
+            user_entry("live q"),
+            assistant_entry("live a"),
+        ];
+
+        let stats = SessionStats::from_entries(&entries);
+        // 2 archived assistant calls + 1 live assistant call = 3
+        assert_eq!(stats.api_calls, 3, "archived assistant messages must count toward api_calls");
+    }
+
+    #[test]
+    fn session_stats_no_archived_messages_unaffected() {
+        let entries = vec![
+            user_entry("q"),
+            assistant_entry("a"),
+        ];
+
+        let stats = SessionStats::from_entries(&entries);
+        assert_eq!(stats.api_calls, 1);
+    }
+}

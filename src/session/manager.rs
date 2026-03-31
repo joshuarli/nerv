@@ -1682,4 +1682,218 @@ mod tests {
         );
         assert_eq!(db_entry_count(&mgr, &src_id), 3, "source still has all 3 entries");
     }
+
+    // ── export_jsonl: compaction flattening ───────────────────────────────────
+
+    fn make_archived_messages() -> Vec<AgentMessage> {
+        vec![
+            user_msg("archived user turn"),
+            assistant_msg("archived assistant reply"),
+        ]
+    }
+
+    fn make_compaction_record(
+        mgr: &SessionManager,
+        first_kept: &str,
+        archived: Vec<AgentMessage>,
+    ) -> CompactionRecord {
+        CompactionRecord {
+            summary: "Summary of prior work.".to_string(),
+            first_kept_entry_id: first_kept.to_string(),
+            tokens_before: 50_000,
+            tokens_after: 2_000,
+            model_id: "claude-haiku".to_string(),
+            cost_usd_before: 1.23,
+            archived_messages: archived,
+        }
+    }
+
+    #[test]
+    fn export_jsonl_flattens_archived_messages_before_marker() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+        mgr.append_message(&user_msg("hello"), None).unwrap();
+        let kept_id = mgr.leaf_id().unwrap().to_string();
+        mgr.append_message(&assistant_msg("world"), None).unwrap();
+
+        let archived = make_archived_messages();
+        let record = make_compaction_record(&mgr, &kept_id, archived);
+        mgr.append_compaction(record).unwrap();
+
+        let jsonl = mgr.export_jsonl().unwrap();
+        let lines: Vec<serde_json::Value> = jsonl
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+
+        // Find archived message lines
+        let archived_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| l["archived"] == serde_json::Value::Bool(true))
+            .collect();
+        assert_eq!(archived_lines.len(), 2, "both archived messages must appear as top-level lines");
+
+        // First archived line is the user turn
+        let role0 = archived_lines[0]["message"]["role"].as_str().unwrap();
+        assert_eq!(role0, "user");
+
+        // Second archived line is the assistant turn
+        let role1 = archived_lines[1]["message"]["role"].as_str().unwrap();
+        assert_eq!(role1, "assistant");
+    }
+
+    #[test]
+    fn export_jsonl_compaction_marker_has_no_archived_messages_key() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+        mgr.append_message(&user_msg("a"), None).unwrap();
+        let kept_id = mgr.leaf_id().unwrap().to_string();
+        mgr.append_message(&assistant_msg("b"), None).unwrap();
+
+        let record = make_compaction_record(&mgr, &kept_id, make_archived_messages());
+        mgr.append_compaction(record).unwrap();
+
+        let jsonl = mgr.export_jsonl().unwrap();
+        let lines: Vec<serde_json::Value> = jsonl
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+
+        let marker = lines
+            .iter()
+            .find(|l| l["type"] == "compaction")
+            .expect("compaction marker must exist");
+
+        assert!(
+            marker.get("archived_messages").is_none(),
+            "compaction marker must not carry the archived_messages blob"
+        );
+        // Metadata fields must be present
+        assert!(marker["tokens_before"].is_number());
+        assert!(marker["tokens_after"].is_number());
+        assert_eq!(marker["summary"], "Summary of prior work.");
+    }
+
+    #[test]
+    fn export_jsonl_archived_messages_appear_before_compaction_marker() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+        mgr.append_message(&user_msg("q"), None).unwrap();
+        let kept_id = mgr.leaf_id().unwrap().to_string();
+        mgr.append_message(&assistant_msg("r"), None).unwrap();
+
+        let record = make_compaction_record(&mgr, &kept_id, make_archived_messages());
+        mgr.append_compaction(record).unwrap();
+
+        let jsonl = mgr.export_jsonl().unwrap();
+        let lines: Vec<serde_json::Value> = jsonl
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+
+        let archived_pos = lines
+            .iter()
+            .position(|l| l["archived"] == serde_json::Value::Bool(true))
+            .expect("must have at least one archived line");
+        let marker_pos = lines
+            .iter()
+            .position(|l| l["type"] == "compaction")
+            .expect("must have compaction marker");
+
+        assert!(
+            archived_pos < marker_pos,
+            "archived messages (pos {archived_pos}) must come before the compaction marker (pos {marker_pos})"
+        );
+    }
+
+    #[test]
+    fn export_jsonl_surviving_messages_appear_before_compaction_marker() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+        // These two messages will be deleted by compaction (before kept_id).
+        mgr.append_message(&user_msg("to be archived 1"), None).unwrap();
+        mgr.append_message(&assistant_msg("to be archived 2"), None).unwrap();
+
+        // This message is the kept boundary — it survives in the branch.
+        mgr.append_message(&user_msg("surviving message"), None).unwrap();
+        let kept_id = mgr.leaf_id().unwrap().to_string();
+
+        let record = make_compaction_record(&mgr, &kept_id, make_archived_messages());
+        mgr.append_compaction(record).unwrap();
+
+        // A truly post-compaction message.
+        mgr.append_message(&assistant_msg("post compaction reply"), None).unwrap();
+
+        let jsonl = mgr.export_jsonl().unwrap();
+        let lines: Vec<serde_json::Value> = jsonl
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+
+        let marker_pos = lines
+            .iter()
+            .position(|l| l["type"] == "compaction")
+            .expect("compaction marker");
+
+        // The kept-boundary entry (first_kept_entry_id) sits before the
+        // compaction marker in branch order — the compaction was appended
+        // after it, summarising the history that preceded it.
+        let surviving_pos = lines.iter().position(|l| {
+            l.get("archived").is_none()
+                && l["type"] == "message"
+                && l["message"]["role"] == "user"
+        });
+
+        if let Some(pos) = surviving_pos {
+            assert!(
+                pos < marker_pos,
+                "kept boundary entry (pos {pos}) must appear before the compaction marker (pos {marker_pos})"
+            );
+        }
+
+        // The post-compaction reply is after the marker.
+        let post_pos = lines.iter().position(|l| {
+            l.get("archived").is_none()
+                && l["type"] == "message"
+                && l["message"]["role"] == "assistant"
+        });
+        if let Some(pos) = post_pos {
+            assert!(
+                pos > marker_pos,
+                "post-compaction message (pos {pos}) must appear after the compaction marker (pos {marker_pos})"
+            );
+        }
+    }
+
+    #[test]
+    fn export_jsonl_no_archived_messages_emits_no_archived_lines() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+        mgr.append_message(&user_msg("first"), None).unwrap();
+        let kept_id = mgr.leaf_id().unwrap().to_string();
+
+        // Compaction with empty archived_messages (valid edge case)
+        let record = CompactionRecord {
+            summary: "nothing to archive".to_string(),
+            first_kept_entry_id: kept_id,
+            tokens_before: 1_000,
+            tokens_after: 500,
+            model_id: String::new(),
+            cost_usd_before: 0.0,
+            archived_messages: vec![],
+        };
+        mgr.append_compaction(record).unwrap();
+
+        let jsonl = mgr.export_jsonl().unwrap();
+        let archived_count = jsonl
+            .lines()
+            .filter(|l| l.contains("\"archived\":true"))
+            .count();
+        assert_eq!(archived_count, 0);
+    }
 }
