@@ -44,16 +44,12 @@ impl ModelRegistry {
             registry.register("anthropic", Arc::new(provider));
         }
 
-        // Register Codex (OpenAI) provider if auth is available.
-        // Codex uses the standard OpenAI chat completions API.
+        // Register Codex provider if auth is available.
+        // Codex uses the ChatGPT backend Responses API, not the public OpenAI API.
         if let Some(api_key) = auth.api_key("codex") {
             let extra_headers = config.effective_headers("codex");
-            let provider = OpenAICompatProvider::new(
-                "codex".to_string(),
-                "https://api.openai.com/v1".to_string(),
-                Some(api_key),
-            )
-            .with_headers(extra_headers);
+            let provider =
+                crate::agent::CodexProvider::new(api_key).with_headers(extra_headers);
             registry.register("codex", Arc::new(provider));
         }
 

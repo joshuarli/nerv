@@ -1220,12 +1220,8 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
 
                     let nerv_config = super::config::NervConfig::load(nerv_dir);
                     let provider = std::sync::Arc::new(
-                        crate::agent::OpenAICompatProvider::new(
-                            "codex".to_string(),
-                            "https://api.openai.com/v1".to_string(),
-                            Some(api_key),
-                        )
-                        .with_headers(nerv_config.effective_headers("codex")),
+                        crate::agent::CodexProvider::new(api_key)
+                            .with_headers(nerv_config.effective_headers("codex")),
                     );
                     session
                         .agent
