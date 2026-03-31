@@ -321,13 +321,11 @@ pub fn session_task(
             SessionCommand::Export => {
                 let sid = session.session_manager.session_id().to_string();
                 let sid_short = if sid.len() >= 8 { &sid[..8] } else { &sid };
-                let leaf = session.session_manager.leaf_id().unwrap_or("").to_string();
-                let leaf_short = if leaf.len() >= 6 { &leaf[..6] } else { &leaf };
                 let exports_dir = crate::nerv_dir().join("exports");
                 let _ = std::fs::create_dir_all(&exports_dir);
 
                 // Export HTML — current branch (root → leaf) only.
-                let html_path = exports_dir.join(format!("{sid_short}-{leaf_short}.html"));
+                let html_path = exports_dir.join(format!("{sid_short}.html"));
                 let branch_entries = session.session_manager.current_branch_entries();
                 let html_result = crate::export::export_entries_html(
                     &branch_entries,
@@ -336,7 +334,7 @@ pub fn session_task(
                 );
 
                 // Export JSONL.
-                let jsonl_path = exports_dir.join(format!("{sid_short}-{leaf_short}.jsonl"));
+                let jsonl_path = exports_dir.join(format!("{sid_short}.jsonl"));
                 let jsonl_result = if let Some(content) = session.session_manager.export_jsonl() {
                     std::fs::write(&jsonl_path, content)
                         .map(|_| jsonl_path.to_string_lossy().to_string())
