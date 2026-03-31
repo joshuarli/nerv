@@ -36,7 +36,7 @@ pub fn create_worktree(
         );
     }
 
-    let output = std::process::Command::new("git")
+    let output = std::process::Command::new(crate::git())
         .args([
             "-c",
             "core.lockTimeout=30000", // wait up to 30s for .git/index.lock
@@ -89,13 +89,13 @@ pub fn merge_worktree(wt_path: &Path) -> anyhow::Result<PathBuf> {
     }
 
     // Merge from the main worktree
-    let merge_out = std::process::Command::new("git")
+    let merge_out = std::process::Command::new(crate::git())
         .args(["merge", &branch])
         .current_dir(&main_wt)
         .output()?;
     if !merge_out.status.success() {
         // Abort the failed merge to restore clean state
-        std::process::Command::new("git")
+        std::process::Command::new(crate::git())
             .args(["merge", "--abort"])
             .current_dir(&main_wt)
             .output()
@@ -117,7 +117,7 @@ pub fn merge_worktree(wt_path: &Path) -> anyhow::Result<PathBuf> {
     }
 
     // Remove the worktree
-    let rm_out = std::process::Command::new("git")
+    let rm_out = std::process::Command::new(crate::git())
         .args(["worktree", "remove", &wt_path.to_string_lossy()])
         .current_dir(&main_wt)
         .output()?;
@@ -127,7 +127,7 @@ pub fn merge_worktree(wt_path: &Path) -> anyhow::Result<PathBuf> {
     }
 
     // Delete the branch
-    let del_out = std::process::Command::new("git")
+    let del_out = std::process::Command::new(crate::git())
         .args(["branch", "-d", &branch])
         .current_dir(&main_wt)
         .output()?;
@@ -141,7 +141,7 @@ pub fn merge_worktree(wt_path: &Path) -> anyhow::Result<PathBuf> {
 }
 
 fn git_output(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let output = std::process::Command::new("git").args(args).current_dir(cwd).output()?;
+    let output = std::process::Command::new(crate::git()).args(args).current_dir(cwd).output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("git {} failed: {}", args[0], stderr.trim());

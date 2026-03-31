@@ -141,6 +141,8 @@ fn main() {
     }
     nerv::log::info("nerv starting");
 
+    let bin_warnings = nerv::bootstrap::resolve_binaries();
+
     let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut worktree_path: Option<PathBuf> = None;
 
@@ -303,14 +305,8 @@ fn main() {
         layout.chat.push_styled(nerv::interactive::theme::WARN, &format!("⚠  {}", warning));
     }
 
-    // Warn if required external tools are missing.
-    for tool in &["rg", "fd"] {
-        if std::process::Command::new(tool).arg("--version").output().is_err() {
-            layout.chat.push_styled(
-                nerv::interactive::theme::WARN,
-                &format!("⚠  `{}` not found — install it for full functionality.", tool),
-            );
-        }
+    for warning in &bin_warnings {
+        layout.chat.push_styled(nerv::interactive::theme::WARN, &format!("⚠  {}", warning));
     }
 
     tui.terminal_mut().start();
@@ -1115,6 +1111,9 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    for warning in &nerv::bootstrap::resolve_binaries() {
+        eprintln!("{}", warning);
+    }
     let b = nerv::bootstrap::bootstrap(
         &cwd,
         nerv_dir,

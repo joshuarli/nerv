@@ -681,15 +681,17 @@ pub const SOURCE_EXTENSIONS: &[&str] = &["rs", "go", "py", "ts", "tsx"];
 fn collect_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
     // Prefer fd: respects .gitignore by default.
     let ext_args: Vec<_> = SOURCE_EXTENSIONS.iter().flat_map(|e| ["--extension", e]).collect();
-    let output = std::process::Command::new("fd")
-        .arg("--type")
-        .arg("f")
-        .args(&ext_args)
-        .arg("--absolute-path")
-        .current_dir(root)
-        .output();
+    let output = crate::fd().map(|fd| {
+        std::process::Command::new(fd)
+            .arg("--type")
+            .arg("f")
+            .args(&ext_args)
+            .arg("--absolute-path")
+            .current_dir(root)
+            .output()
+    });
 
-    if let Ok(o) = output
+    if let Some(Ok(o)) = output
         && o.status.success()
     {
         let stdout = String::from_utf8_lossy(&o.stdout);
@@ -707,7 +709,7 @@ fn collect_rs_files(root: &Path) -> HashMap<PathBuf, SystemTime> {
 
     // Fallback: `git ls-files` also respects .gitignore.
     let glob_args: Vec<_> = SOURCE_EXTENSIONS.iter().map(|e| format!("*.{}", e)).collect();
-    let output = std::process::Command::new("git")
+    let output = std::process::Command::new(crate::git())
         .args(["ls-files", "--cached", "--others", "--exclude-standard"])
         .args(&glob_args)
         .current_dir(root)

@@ -46,6 +46,55 @@ impl Default for BootstrapOptions {
     }
 }
 
+/// Resolve required and optional external binaries, storing them globally.
+///
+/// Returns a list of warnings for optional missing tools (`rg`, `fd`).
+/// Exits the process with a clear error message if a required binary is absent.
+pub fn resolve_binaries() -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    let git = crate::which("git").unwrap_or_else(|| {
+        eprintln!("error: `git` not found in $PATH — nerv requires git");
+        std::process::exit(1);
+    });
+
+    let rg = crate::which("rg");
+    if rg.is_none() {
+        warnings.push("warning: `rg` (ripgrep) not found — grep and symbol search tools will be unavailable".into());
+    }
+
+    let fd = crate::which("fd");
+    if fd.is_none() {
+        warnings.push("warning: `fd` not found — find tool will be unavailable".into());
+    }
+
+    #[cfg(target_os = "macos")]
+    let security = {
+        let path = crate::which("security");
+        match &path {
+            Some(p) if p == std::path::Path::new("/usr/bin/security") => {}
+            Some(p) => {
+                eprintln!(
+                    "error: `security` resolved to `{}` — expected /usr/bin/security; \
+                     this is a security risk",
+                    p.display()
+                );
+                std::process::exit(1);
+            }
+            None => {
+                eprintln!("error: `/usr/bin/security` not found — Keychain access is unavailable");
+                std::process::exit(1);
+            }
+        }
+        path
+    };
+    #[cfg(not(target_os = "macos"))]
+    let security = None;
+
+    crate::init_binaries(crate::Binaries { git, rg, fd, security });
+    warnings
+}
+
 /// Construct agent + tools + session from disk config.
 /// Both interactive and headless modes call this.
 pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstrap {

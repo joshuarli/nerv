@@ -133,14 +133,14 @@ fn keychain_service(provider: &str) -> String {
 fn keychain_set(provider: &str, value: &str) {
     let service = keychain_service(provider);
     // -U updates if exists, creates if not
-    let _ = std::process::Command::new("security")
+    let _ = std::process::Command::new(crate::security().expect("security binary not resolved"))
         .args(["add-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", &service, "-w", value, "-U"])
         .output();
 }
 
 fn keychain_get(provider: &str) -> Option<String> {
     let service = keychain_service(provider);
-    let output = std::process::Command::new("security")
+    let output = std::process::Command::new(crate::security().expect("security binary not resolved"))
         .args(["find-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", &service, "-w"])
         .output()
         .ok()?;
@@ -153,7 +153,7 @@ fn keychain_get(provider: &str) -> Option<String> {
 
 fn keychain_delete(provider: &str) {
     let service = keychain_service(provider);
-    let _ = std::process::Command::new("security")
+    let _ = std::process::Command::new(crate::security().expect("security binary not resolved"))
         .args(["delete-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", &service])
         .output();
 }

@@ -209,7 +209,7 @@ fn parse_kind_filter(s: &str) -> Option<SymbolKind> {
 /// Find markdown doc files in the project root.
 fn find_doc_files(cwd: &std::path::Path) -> Vec<String> {
     // Prefer git ls-files: respects .gitignore, any depth, no extra deps.
-    let output = std::process::Command::new("git")
+    let output = std::process::Command::new(crate::git())
         .args(["ls-files", "--", "*.md"])
         .current_dir(cwd)
         .output();
@@ -222,20 +222,26 @@ fn find_doc_files(cwd: &std::path::Path) -> Vec<String> {
         return files;
     }
     // Outside a git repo (e.g. tests): fall back to rg.
-    let output = std::process::Command::new("rg")
-        .args(["--files", "--glob", "*.md", "--sort=path"])
-        .current_dir(cwd)
-        .output();
-    if let Ok(out) = output
-        && out.status.success()
-    {
-        return String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_owned()).collect();
+    if let Some(rg) = crate::rg() {
+        let output = std::process::Command::new(rg)
+            .args(["--files", "--glob", "*.md", "--sort=path"])
+            .current_dir(cwd)
+            .output();
+        if let Ok(out) = output
+            && out.status.success()
+        {
+            return String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_owned()).collect();
+        }
     }
     vec![]
 }
 
 fn find_references(symbol: &str, cwd: &std::path::Path) -> Vec<String> {
-    let output = match std::process::Command::new("rg")
+    let rg = match crate::rg() {
+        Some(p) => p,
+        None => return vec![],
+    };
+    let output = match std::process::Command::new(rg)
         .args([
             "--no-heading",
             "--line-number",

@@ -769,6 +769,8 @@ pub fn list_all_models() {
 
 pub fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
     use nerv::core::local_models::*;
+    // Resolve external binaries so any tool invocations below use absolute paths.
+    nerv::bootstrap::resolve_binaries();
 
     match cmd {
         "models" => {
@@ -1076,22 +1078,24 @@ pub fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
             }
 
             if want_refs {
-                let output = std::process::Command::new("rg")
-                    .args([
-                        "--no-heading",
-                        "--line-number",
-                        "--color=never",
-                        "--word-regexp",
-                        query,
-                    ])
-                    .current_dir(&cwd)
-                    .output();
-                if let Ok(o) = output {
-                    let refs = String::from_utf8_lossy(&o.stdout);
-                    if !refs.is_empty() {
-                        println!("\nREFERENCES:");
-                        for line in refs.lines().take(50) {
-                            println!("  {}", line);
+                if let Some(rg) = nerv::rg() {
+                    let output = std::process::Command::new(rg)
+                        .args([
+                            "--no-heading",
+                            "--line-number",
+                            "--color=never",
+                            "--word-regexp",
+                            query,
+                        ])
+                        .current_dir(&cwd)
+                        .output();
+                    if let Ok(o) = output {
+                        let refs = String::from_utf8_lossy(&o.stdout);
+                        if !refs.is_empty() {
+                            println!("\nREFERENCES:");
+                            for line in refs.lines().take(50) {
+                                println!("  {}", line);
+                            }
                         }
                     }
                 }

@@ -50,7 +50,11 @@ impl AgentTool for FindTool {
         let pattern = input["pattern"].as_str().unwrap_or("");
         let path = input["path"].as_str().unwrap_or(".");
         let resolved_path = self.resolve_path(path);
-        match Command::new("fd")
+        let fd = match crate::fd() {
+            Some(p) => p,
+            None => return ToolResult::ok("fd is not installed"),
+        };
+        match Command::new(fd)
             .arg("--color=never")
             .arg("--show-errors")
             .arg("--glob")

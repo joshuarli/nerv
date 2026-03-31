@@ -1189,7 +1189,7 @@ impl SessionManager {
             }
         }
 
-        let mut emit_archived = |ce: &CompactionEntry, lines: &mut Vec<String>| {
+        let emit_archived = |ce: &CompactionEntry, lines: &mut Vec<String>| {
             let fingerprints = verbatim_fingerprints.get(&ce.id);
             for msg in &ce.archived_messages {
                 // Skip messages already present as live verbatim-window entries

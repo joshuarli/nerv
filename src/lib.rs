@@ -64,7 +64,7 @@ pub fn repo_fingerprint(repo_root: &std::path::Path) -> Option<String> {
         return cached.clone();
     }
     let result = (|| {
-        let out = std::process::Command::new("git")
+        let out = std::process::Command::new(crate::git())
             .args(["rev-list", "--max-parents=0", "HEAD"])
             .current_dir(repo_root)
             .output()
@@ -113,6 +113,60 @@ pub fn repo_data_dir(cwd: &std::path::Path) -> std::path::PathBuf {
         .and_then(|root| repo_fingerprint(&root))
         .map(|fpr| nerv_dir().join("repos").join(fpr))
         .unwrap_or_else(|| nerv_dir().to_path_buf())
+}
+
+/// Resolved absolute paths for external binaries, set once at startup.
+///
+/// Every binary that nerv shells out to is resolved at bootstrap time so:
+/// - we fail fast with a clear error if a required tool is missing
+/// - subsequent `Command::new(git())` calls use the absolute path, immune to
+///   mid-session `$PATH` changes or a binary being swapped out
+pub struct Binaries {
+    pub git: std::path::PathBuf,
+    pub rg: Option<std::path::PathBuf>,
+    pub fd: Option<std::path::PathBuf>,
+    /// macOS Keychain CLI — always `/usr/bin/security`; `None` on non-macOS.
+    pub security: Option<std::path::PathBuf>,
+}
+
+static BINARIES: std::sync::OnceLock<Binaries> = std::sync::OnceLock::new();
+
+/// Walk `$PATH` to find an executable named `name`.
+pub fn which(name: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths).find_map(|dir| {
+            let full = dir.join(name);
+            if full.is_file() { Some(full) } else { None }
+        })
+    })
+}
+
+/// Store the resolved binaries. Called once from `bootstrap::resolve_binaries`.
+/// Silently no-ops if called more than once (e.g. subcommand + main both call resolve_binaries).
+pub fn init_binaries(b: Binaries) {
+    BINARIES.set(b).ok();
+}
+
+/// Get the resolved path for `git`. Falls back to `"git"` if called before `init_binaries`.
+pub fn git() -> &'static std::path::Path {
+    static GIT_FALLBACK: std::sync::LazyLock<std::path::PathBuf> =
+        std::sync::LazyLock::new(|| std::path::PathBuf::from("git"));
+    BINARIES.get().map(|b| b.git.as_path()).unwrap_or(&*GIT_FALLBACK)
+}
+
+/// Get the resolved path for `rg` (ripgrep), or `None` if not installed or not yet resolved.
+pub fn rg() -> Option<&'static std::path::Path> {
+    BINARIES.get()?.rg.as_deref()
+}
+
+/// Get the resolved path for `fd`, or `None` if not installed or not yet resolved.
+pub fn fd() -> Option<&'static std::path::Path> {
+    BINARIES.get()?.fd.as_deref()
+}
+
+/// Get the resolved path for the macOS `security` CLI, or `None` on non-macOS or unresolved.
+pub fn security() -> Option<&'static std::path::Path> {
+    BINARIES.get()?.security.as_deref()
 }
 
 /// Resolve a path string to an absolute `PathBuf`.

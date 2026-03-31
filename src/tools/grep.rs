@@ -81,7 +81,11 @@ impl AgentTool for GrepTool {
             input.get("files_with_matches").and_then(|v| v.as_bool()).unwrap_or(false);
         let count_mode = input.get("count").and_then(|v| v.as_bool()).unwrap_or(false);
 
-        let mut cmd = Command::new("rg");
+        let rg = match crate::rg() {
+            Some(p) => p,
+            None => return ToolResult::ok("rg (ripgrep) is not installed"),
+        };
+        let mut cmd = Command::new(rg);
         cmd.arg("--color=never").arg(format!("--max-count={}", limit)).current_dir(&self.cwd);
 
         if files_with_matches {

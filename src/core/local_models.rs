@@ -265,16 +265,7 @@ pub fn save_models(nerv_dir: &Path, models: &[LocalModel]) -> anyhow::Result<()>
 
 /// Find llama-server binary on PATH.
 pub fn find_llama_server() -> Option<PathBuf> {
-    which("llama-server")
-}
-
-fn which(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths).find_map(|dir| {
-            let full = dir.join(name);
-            if full.is_file() { Some(full) } else { None }
-        })
-    })
+    crate::which("llama-server")
 }
 
 /// Check if llama-server is healthy on a port.

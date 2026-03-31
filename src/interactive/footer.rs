@@ -199,7 +199,7 @@ pub struct FooterComponent {
 
 impl FooterComponent {
     fn current_git_branch(cwd: &str) -> Option<String> {
-        std::process::Command::new("git")
+        std::process::Command::new(crate::git())
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(cwd)
             .output()
