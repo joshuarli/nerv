@@ -316,6 +316,7 @@ impl Provider for CodexProvider {
             };
 
             let line = line.trim();
+            crate::log::debug(&format!("codex sse line: {}", line));
             if line.is_empty() || line.starts_with(':') {
                 continue;
             }
@@ -328,9 +329,11 @@ impl Provider for CodexProvider {
             }
 
             let Ok(raw) = serde_json::from_str::<serde_json::Value>(data) else {
+                crate::log::debug(&format!("codex sse parse error on: {}", data));
                 continue;
             };
             let Some(event_type) = raw["type"].as_str() else {
+                crate::log::debug(&format!("codex sse missing 'type' in: {}", data));
                 continue;
             };
 
@@ -403,7 +406,9 @@ impl Provider for CodexProvider {
                     crate::log::warn(&format!("codex error event: {}", msg));
                     return Err(ProviderError::Server { status: 200, message: msg });
                 }
-                _ => {}
+                other => {
+                    crate::log::debug(&format!("codex sse unhandled event: {}", other));
+                }
             }
         }
     }
