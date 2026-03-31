@@ -284,7 +284,10 @@ impl Agent {
                 let msg = AssistantMessage {
                     content: vec![],
                     stop_reason: StopReason::Error {
-                        message: format!("provider '{}' not found", model.provider_name),
+                        message: format!(
+                            "provider '{}' not found — run `/login {}`",
+                            model.provider_name, model.provider_name
+                        ),
                     },
                     usage: None,
                     timestamp: now_millis(),
