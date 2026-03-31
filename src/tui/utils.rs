@@ -225,6 +225,133 @@ pub fn truncate_to_width(s: &str, max_width: u16) -> String {
     result
 }
 
+/// Wrap a pre-styled string (may contain ANSI escapes) by character columns,
+/// producing continuation lines when a line exceeds `width`. Used for code
+/// blocks where word-wrapping would break indentation and syntax.
+pub fn char_wrap_with_ansi(s: &str, width: u16) -> Vec<String> {
+    if width == 0 {
+        return vec![String::new()];
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut current_line = String::new();
+    let mut current_width: u16 = 0;
+    let mut active_sgr = String::new();
+    let bytes = s.as_bytes();
+    let mut state = AnsiState::Normal;
+    let mut i = 0;
+    let mut normal_start = 0;
+
+    let flush_char_segment = |segment: &str,
+                               lines: &mut Vec<String>,
+                               current_line: &mut String,
+                               current_width: &mut u16,
+                               active_sgr: &str| {
+        for g in segment.graphemes(true) {
+            let gw = UnicodeWidthStr::width(g) as u16;
+            if *current_width + gw > width {
+                current_line.push_str("\x1b[0m");
+                lines.push(std::mem::take(current_line));
+                current_line.push_str(active_sgr);
+                *current_width = 0;
+            }
+            current_line.push_str(g);
+            *current_width += gw;
+        }
+    };
+
+    while i < bytes.len() {
+        match state {
+            AnsiState::Normal => {
+                if bytes[i] == 0x1B {
+                    if normal_start < i {
+                        let segment = &s[normal_start..i];
+                        flush_char_segment(
+                            segment,
+                            &mut lines,
+                            &mut current_line,
+                            &mut current_width,
+                            &active_sgr,
+                        );
+                    }
+                    state = AnsiState::Escape;
+                    normal_start = i;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+            }
+            AnsiState::Escape => match bytes[i] {
+                b'[' => {
+                    state = AnsiState::Csi;
+                    i += 1;
+                }
+                b']' => {
+                    state = AnsiState::Osc;
+                    i += 1;
+                }
+                b'_' => {
+                    state = AnsiState::Apc;
+                    i += 1;
+                }
+                _ => {
+                    current_line.push_str(&s[normal_start..=i]);
+                    state = AnsiState::Normal;
+                    i += 1;
+                    normal_start = i;
+                }
+            },
+            AnsiState::Csi => {
+                if is_csi_final(bytes[i]) {
+                    let seq = &s[normal_start..=i];
+                    current_line.push_str(seq);
+                    if bytes[i] == b'm' {
+                        update_sgr_state(&mut active_sgr, seq);
+                    }
+                    state = AnsiState::Normal;
+                    i += 1;
+                    normal_start = i;
+                } else {
+                    i += 1;
+                }
+            }
+            AnsiState::Osc => {
+                if is_osc_terminator(bytes, i) {
+                    current_line.push_str(&s[normal_start..=i]);
+                    state = AnsiState::Normal;
+                    i += 1;
+                    normal_start = i;
+                } else {
+                    i += 1;
+                }
+            }
+            AnsiState::Apc => {
+                if bytes[i] == 0x07 || (bytes[i] == 0x5C && i > 0 && bytes[i - 1] == 0x1B) {
+                    current_line.push_str(&s[normal_start..=i]);
+                    state = AnsiState::Normal;
+                    i += 1;
+                    normal_start = i;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    if normal_start < bytes.len() && state == AnsiState::Normal {
+        let segment = &s[normal_start..];
+        flush_char_segment(
+            segment,
+            &mut lines,
+            &mut current_line,
+            &mut current_width,
+            &active_sgr,
+        );
+    }
+
+    lines.push(current_line);
+    lines
+}
+
 /// Wrap text to lines of at most `width` columns, preserving ANSI state across
 /// line breaks. Breaks at word boundaries (spaces); falls back to character-wrap
 /// only for words wider than the column limit.

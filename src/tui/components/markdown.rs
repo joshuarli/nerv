@@ -2,7 +2,7 @@ use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
 use crate::tui::highlight;
 use crate::tui::tui::Component;
-use crate::tui::utils::wrap_text_with_ansi;
+use crate::tui::utils::{char_wrap_with_ansi, wrap_text_with_ansi};
 
 /// Theme functions for markdown rendering. Each takes raw text and returns
 /// ANSI-styled output.
@@ -131,15 +131,23 @@ impl Markdown {
                 Event::End(TagEnd::CodeBlock) => {
                     if !current_text.is_empty() {
                         let rules = code_lang.as_deref().and_then(highlight::rules_for_lang);
+                        // Code blocks are character-wrapped (not word-wrapped) so
+                        // long lines are fully visible without breaking indentation.
+                        let code_indent = 2u16;
+                        let code_width = content_width.saturating_sub(code_indent);
                         for code_line in current_text.lines() {
                             let styled = if let Some(r) = rules {
-                                let hl_line =
-                                    highlight::highlight_line(code_line, &mut hl_state, r);
-                                format!("  {}", hl_line)
+                                highlight::highlight_line(code_line, &mut hl_state, r)
                             } else {
                                 (self.theme.code_block)(code_line)
                             };
-                            lines.push(format!("{}{}", padding, styled));
+                            for wrapped in char_wrap_with_ansi(&styled, code_width) {
+                                if rules.is_some() {
+                                    lines.push(format!("{}  {}", padding, wrapped));
+                                } else {
+                                    lines.push(format!("{}{}", padding, wrapped));
+                                }
+                            }
                         }
                         current_text.clear();
                     }
