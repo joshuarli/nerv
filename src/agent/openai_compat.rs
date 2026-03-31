@@ -24,6 +24,19 @@ struct OaiUsage {
     prompt_tokens: u32,
     #[serde(default)]
     completion_tokens: u32,
+    #[serde(default)]
+    prompt_tokens_details: OaiPromptTokensDetails,
+    // OpenRouter: cache token usage (Anthropic-style fields at top level).
+    #[serde(default)]
+    cache_read_input_tokens: u32,
+    #[serde(default)]
+    cache_creation_input_tokens: u32,
+}
+
+#[derive(Deserialize, Default)]
+struct OaiPromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: u32,
 }
 
 #[derive(Deserialize)]
@@ -316,7 +329,17 @@ impl Provider for OpenAICompatProvider {
                     u.prompt_tokens
                 };
                 usage.output = u.completion_tokens;
-                usage.cache_read = chunk.timings.cache_n;
+                // OpenRouter emits Anthropic-style top-level fields;
+                // fall back to OpenAI prompt_tokens_details.cached_tokens
+                // (OpenAI, Gemini), then llama.cpp timings.cache_n.
+                usage.cache_read = if u.cache_read_input_tokens > 0 {
+                    u.cache_read_input_tokens
+                } else if u.prompt_tokens_details.cached_tokens > 0 {
+                    u.prompt_tokens_details.cached_tokens
+                } else {
+                    chunk.timings.cache_n
+                };
+                usage.cache_write = u.cache_creation_input_tokens;
                 on_event(ProviderEvent::UsageUpdate(usage));
             }
             let Some(choice) = chunk.choices.into_iter().next() else {
