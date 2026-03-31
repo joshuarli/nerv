@@ -95,9 +95,74 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
                 }
             }
         }
+        "codex" => {
+            let tx = event_tx.clone();
+            let result = super::auth::login_codex(
+                &|url| {
+                    let _ = tx.send(AgentSessionEvent::Status {
+                        message: format!(
+                            "Opening browser for Codex login...\n\nIf the browser doesn't open, visit:\n{}",
+                            url
+                        ),
+                        is_error: false,
+                    });
+                    let _ = std::process::Command::new("open").arg(url).spawn();
+                },
+                &|msg| {
+                    let _ = tx.send(AgentSessionEvent::Status {
+                        message: msg.to_string(),
+                        is_error: false,
+                    });
+                },
+            );
+            match result {
+                Ok(creds) => {
+                    let nerv_dir = crate::nerv_dir();
+                    let mut auth = super::auth::AuthStorage::load(nerv_dir);
+                    let api_key = creds.access.clone();
+                    auth.set("codex", super::auth::Credential::OAuth(creds));
+
+                    let provider = std::sync::Arc::new(crate::agent::CodexProvider::new(api_key));
+                    session.agent.provider_registry.write().unwrap().register("codex", provider);
+
+                    // Default to the first available codex model if none is set.
+                    if session.agent.state.model.is_none() {
+                        if let Some(model) = session
+                            .model_registry
+                            .all_models()
+                            .into_iter()
+                            .find(|m| m.provider_name == "codex")
+                            .cloned()
+                        {
+                            session.agent.set_model(Some(model.clone()));
+                            let _ = event_tx.send(AgentSessionEvent::ModelChanged { model });
+                        }
+                    }
+
+                    let mut msg = String::from("Logged in to Codex.\n\nAvailable models:");
+                    let current_id =
+                        session.agent.state.model.as_ref().map(|m| m.id.as_str()).unwrap_or("");
+                    for m in session.model_registry.all_models() {
+                        if m.provider_name == "codex" {
+                            let marker = if m.id == current_id { " *" } else { "" };
+                            msg.push_str(&format!("\n  {} ({}){}", m.name, m.id, marker));
+                        }
+                    }
+                    msg.push_str("\n\n/model <name> — switch model");
+                    let _ =
+                        event_tx.send(AgentSessionEvent::Status { message: msg, is_error: false });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(AgentSessionEvent::Status {
+                        message: format!("Login failed: {}", e),
+                        is_error: true,
+                    });
+                }
+            }
+        }
         _ => {
             let _ = event_tx.send(AgentSessionEvent::Status {
-                message: format!("Unknown provider: {}. Supported: anthropic", provider),
+                message: format!("Unknown provider: {}. Supported: anthropic, codex", provider),
                 is_error: true,
             });
         }
