@@ -50,7 +50,7 @@ impl ModelRegistry {
             let extra_headers = config.effective_headers("codex");
             let provider = OpenAICompatProvider::new(
                 "codex".to_string(),
-                "https://api.openai.com".to_string(),
+                "https://api.openai.com/v1".to_string(),
                 Some(api_key),
             )
             .with_headers(extra_headers);
