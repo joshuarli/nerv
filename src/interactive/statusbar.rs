@@ -1,3 +1,4 @@
+use crate::interactive::display::fmt_tokens;
 use crate::tui::tui::Component;
 use crate::tui::utils::wrap_text_with_ansi;
 
@@ -163,8 +164,8 @@ impl Component for StatusBar {
                     " {}·{} ↑{} ↓{}{}",
                     theme::DIM,
                     theme::FOOTER_LABEL,
-                    fmt_tok(info.input_delta),
-                    fmt_tok(info.output_tokens),
+                    fmt_tokens(info.input_delta as u64),
+                    fmt_tokens(info.output_tokens as u64),
                     tps,
                 )
             } else {
@@ -273,14 +274,14 @@ impl StatusBar {
                 theme::DIM,
                 r,
                 theme::FOOTER_LABEL,
-                fmt_tok(self.output_tokens),
+                fmt_tokens(self.output_tokens as u64),
                 r,
                 tps_str,
             )
         } else if self.input_tokens > 0 {
             // Upload / waiting phase — show ↑ only (from API's message_start)
             let input_delta = self.input_tokens.saturating_sub(self.prev_input_tokens);
-            format!(" {}·{} {}↑{}{}", theme::DIM, r, theme::FOOTER_LABEL, fmt_tok(input_delta), r,)
+            format!(" {}·{} {}↑{}{}", theme::DIM, r, theme::FOOTER_LABEL, fmt_tokens(input_delta as u64), r,)
         } else {
             // No token data yet — plain spinner
             String::new()
@@ -322,18 +323,6 @@ impl StatusBar {
 fn fmt_elapsed(d: std::time::Duration) -> String {
     let secs = d.as_secs();
     if secs < 60 { format!("{}s", secs) } else { format!("{}m {}s", secs / 60, secs % 60) }
-}
-
-fn fmt_tok(n: u32) -> String {
-    if n == 0 {
-        "0".into()
-    } else if n < 1_000 {
-        n.to_string()
-    } else if n < 10_000 {
-        format!("{:.1}k", n as f64 / 1_000.0)
-    } else {
-        format!("{}k", n / 1_000)
-    }
 }
 
 /// Word-wrap `text` into lines of at most `max_chars` display characters.

@@ -8,6 +8,8 @@ use crossbeam_channel as channel;
 use crate::agent::agent::Agent;
 use crate::agent::provider::{CancelFlag, ProviderRegistry, new_cancel_flag};
 use crate::agent::types::{AgentEvent, AgentMessage, ContentItem, Model, StopReason, StreamDelta};
+use crate::interactive::display::{fmt_tokens, fmt_cost};
+use crate::interactive::btw_overlay::wrap_text;
 use crate::interactive::theme;
 use crate::tui::tui::Component;
 
@@ -204,19 +206,18 @@ impl Component for BtwPanel {
         let stats_str = if self.usage.input > 0 || self.usage.output > 0 {
             let mut s = String::from(" ");
             if self.usage.cache_read > 0 {
-                s.push_str(&format!("Rc{} ", fmt_tok(self.usage.cache_read)));
+                s.push_str(&format!("Rc{} ", fmt_tokens(self.usage.cache_read as u64)));
             }
             if self.usage.cache_write > 0 {
-                s.push_str(&format!("Wc{} ", fmt_tok(self.usage.cache_write)));
+                s.push_str(&format!("Wc{} ", fmt_tokens(self.usage.cache_write as u64)));
             }
             s.push_str(&format!(
                 "in{} out{}",
-                fmt_tok(self.usage.input),
-                fmt_tok(self.usage.output)
+                fmt_tokens(self.usage.input as u64),
+                fmt_tokens(self.usage.output as u64)
             ));
             if self.cost.total > 0.0 {
-                s.push_str(&format!(" ${}", fmt_cost(self.cost.total)));
-            }
+                s.push_str(&format!(" ${}", fmt_cost(self.cost.total)));            }
             s.push(' ');
             s
         } else {
@@ -247,65 +248,6 @@ impl Component for BtwPanel {
 }
 
 // ─────────────────────────────── helpers ─────────────────────────────────────
-
-/// Wrap `text` to at most `max_chars` visible characters per line, splitting on
-/// word boundaries.  Handles `\n` in the source text.
-fn fmt_tok(count: u32) -> String {
-    if count < 1_000 {
-        count.to_string()
-    } else if count < 10_000 {
-        format!("{:.1}k", count as f64 / 1_000.0)
-    } else if count < 1_000_000 {
-        format!("{}k", count / 1_000)
-    } else {
-        format!("{:.1}M", count as f64 / 1_000_000.0)
-    }
-}
-
-fn fmt_cost(dollars: f64) -> String {
-    if dollars < 0.01 {
-        format!("{:.4}", dollars)
-    } else if dollars < 1.0 {
-        format!("{:.3}", dollars)
-    } else {
-        format!("{:.2}", dollars)
-    }
-}
-
-fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
-    if max_chars == 0 {
-        return vec![];
-    }
-    let mut out = Vec::new();
-    for paragraph in text.split('\n') {
-        if paragraph.is_empty() {
-            out.push(String::new());
-            continue;
-        }
-        let mut line = String::new();
-        let mut line_len = 0usize;
-        for word in paragraph.split_whitespace() {
-            let wlen = word.chars().count();
-            if line.is_empty() {
-                line.push_str(word);
-                line_len = wlen;
-            } else if line_len + 1 + wlen <= max_chars {
-                line.push(' ');
-                line.push_str(word);
-                line_len += 1 + wlen;
-            } else {
-                out.push(line.clone());
-                line.clear();
-                line.push_str(word);
-                line_len = wlen;
-            }
-        }
-        if !line.is_empty() {
-            out.push(line);
-        }
-    }
-    out
-}
 
 /// Count visible characters (ASCII only; good enough for prose responses that
 /// don't contain ANSI escapes in the response text itself).

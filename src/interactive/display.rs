@@ -102,6 +102,34 @@ pub fn shorten_path(path: &str, home: &str, repo_root: Option<&str>) -> String {
     path.to_string()
 }
 
+/// Format a token count as a compact human-readable string (e.g. "1.2k", "3M").
+pub fn fmt_tokens(n: u64) -> String {
+    if n == 0 {
+        "0".into()
+    } else if n < 1_000 {
+        n.to_string()
+    } else if n < 10_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else if n < 1_000_000 {
+        format!("{}k", n / 1_000)
+    } else if n < 10_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else {
+        format!("{}M", n / 1_000_000)
+    }
+}
+
+/// Format a dollar cost as a compact string (4, 3, or 2 decimal places).
+pub fn fmt_cost(dollars: f64) -> String {
+    if dollars < 0.01 {
+        format!("{:.4}", dollars)
+    } else if dollars < 1.0 {
+        format!("{:.3}", dollars)
+    } else {
+        format!("{:.2}", dollars)
+    }
+}
+
 /// Truncate a string at a char boundary.
 pub fn truncate_str(s: &str, max: usize) -> &str {
     s.truncate_bytes(max)

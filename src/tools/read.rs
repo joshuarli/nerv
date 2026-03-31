@@ -25,8 +25,7 @@ impl ReadTool {
         Self { cwd, cache: Mutex::new(std::collections::HashMap::new()) }
     }
     fn resolve_path(&self, path: &str) -> PathBuf {
-        let p = Path::new(path);
-        if p.is_absolute() { p.to_path_buf() } else { self.cwd.join(p) }
+        crate::resolve_path(path, &self.cwd)
     }
 }
 

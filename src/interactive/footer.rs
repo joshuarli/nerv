@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::agent::types::{EffortLevel, Model, ModelPricing, ThinkingLevel, Usage};
-use crate::interactive::display::shorten_path;
+use crate::interactive::display::{fmt_cost, fmt_tokens, shorten_path};
 use crate::interactive::theme;
 use crate::tui::tui::Component;
 use crate::tui::utils::{visible_width, wrap_text_with_ansi};
@@ -560,8 +560,8 @@ impl Component for FooterComponent {
         let counter = format!(
             "{}{}/{}{}{}",
             ctx_color,
-            fmt_tokens(self.context_used),
-            fmt_tokens(self.context_window),
+            fmt_tokens(self.context_used as u64),
+            fmt_tokens(self.context_window as u64),
             r,
             compact_tag,
         );
@@ -574,7 +574,7 @@ impl Component for FooterComponent {
                 parts.push_str(&format!(
                     " {}Rc{}{} {}({:.0}%){}",
                     dim,
-                    fmt_tokens_u64(self.total_cache_read),
+                    fmt_tokens(self.total_cache_read),
                     r,
                     dim,
                     hit_rate,
@@ -585,7 +585,7 @@ impl Component for FooterComponent {
                 parts.push_str(&format!(
                     " {}Wc{}{}",
                     dim,
-                    fmt_tokens_u64(self.total_cache_write),
+                    fmt_tokens(self.total_cache_write),
                     r
                 ));
             }
@@ -612,9 +612,9 @@ impl Component for FooterComponent {
             "{}{} calls, {} tok in{}, {} tok out{}{}",
             dim,
             self.api_calls,
-            fmt_tokens_u64(self.total_input),
+            fmt_tokens(self.total_input),
             in_cost,
-            fmt_tokens_u64(self.total_output),
+            fmt_tokens(self.total_output),
             out_cost,
             r,
         );
@@ -689,47 +689,7 @@ fn right_align(left: &str, right: &str, width: usize) -> Vec<String> {
     }
 }
 
-fn fmt_cost(dollars: f64) -> String {
-    if dollars < 0.01 {
-        format!("{:.4}", dollars)
-    } else if dollars < 1.0 {
-        format!("{:.3}", dollars)
-    } else {
-        format!("{:.2}", dollars)
-    }
-}
 
-fn fmt_tokens_u64(count: u64) -> String {
-    if count == 0 {
-        "0".to_string()
-    } else if count < 1_000 {
-        count.to_string()
-    } else if count < 10_000 {
-        format!("{:.1}k", count as f64 / 1_000.0)
-    } else if count < 1_000_000 {
-        format!("{}k", count / 1_000)
-    } else if count < 10_000_000 {
-        format!("{:.1}M", count as f64 / 1_000_000.0)
-    } else {
-        format!("{}M", count / 1_000_000)
-    }
-}
-
-fn fmt_tokens(count: u32) -> String {
-    if count == 0 {
-        "0".to_string()
-    } else if count < 1_000 {
-        count.to_string()
-    } else if count < 10_000 {
-        format!("{:.1}k", count as f64 / 1_000.0)
-    } else if count < 1_000_000 {
-        format!("{}k", count / 1_000)
-    } else if count < 10_000_000 {
-        format!("{:.1}M", count as f64 / 1_000_000.0)
-    } else {
-        format!("{}M", count / 1_000_000)
-    }
-}
 
 #[cfg(test)]
 mod tests {

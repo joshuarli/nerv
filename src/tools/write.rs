@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
@@ -13,8 +13,7 @@ impl WriteTool {
         Self { cwd }
     }
     fn resolve_path(&self, path: &str) -> PathBuf {
-        let p = Path::new(path);
-        if p.is_absolute() { p.to_path_buf() } else { self.cwd.join(p) }
+        crate::resolve_path(path, &self.cwd)
     }
 }
 
