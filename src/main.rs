@@ -140,8 +140,22 @@ fn main() {
         nerv::log::set_level(level);
     }
     nerv::log::info("nerv starting");
-
-    let bin_warnings = nerv::bootstrap::resolve_binaries();
+    if nerv::git_bin().is_none() {
+        eprintln!("error: `git` not found in $PATH — nerv requires git");
+        std::process::exit(1);
+    }
+    #[cfg(target_os = "macos")]
+    match nerv::security_bin() {
+        Some(p) if p != std::path::Path::new("/usr/bin/security") => {
+            eprintln!("error: `security` resolved to `{}` — expected /usr/bin/security", p.display());
+            std::process::exit(1);
+        }
+        None => {
+            eprintln!("error: `/usr/bin/security` not found — Keychain access unavailable");
+            std::process::exit(1);
+        }
+        _ => {}
+    }
 
     let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut worktree_path: Option<PathBuf> = None;
@@ -304,9 +318,11 @@ fn main() {
     for warning in &b.config_warnings {
         layout.chat.push_styled(nerv::interactive::theme::WARN, &format!("⚠  {}", warning));
     }
-
-    for warning in &bin_warnings {
-        layout.chat.push_styled(nerv::interactive::theme::WARN, &format!("⚠  {}", warning));
+    if nerv::rg_bin().is_none() {
+        layout.chat.push_styled(nerv::interactive::theme::WARN, "⚠  `rg` (ripgrep) not found — grep and symbol search tools will be unavailable");
+    }
+    if nerv::fd_bin().is_none() {
+        layout.chat.push_styled(nerv::interactive::theme::WARN, "⚠  `fd` not found — find tool will be unavailable");
     }
 
     tui.terminal_mut().start();
@@ -1111,9 +1127,12 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
     }
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    for warning in &nerv::bootstrap::resolve_binaries() {
-        eprintln!("{}", warning);
+    if nerv::git_bin().is_none() {
+        eprintln!("error: `git` not found in $PATH — nerv requires git");
+        std::process::exit(1);
     }
+    if nerv::rg_bin().is_none() { eprintln!("warning: `rg` (ripgrep) not found — grep and symbol search tools will be unavailable"); }
+    if nerv::fd_bin().is_none() { eprintln!("warning: `fd` not found — find tool will be unavailable"); }
     let b = nerv::bootstrap::bootstrap(
         &cwd,
         nerv_dir,

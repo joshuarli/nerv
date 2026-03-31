@@ -769,8 +769,10 @@ pub fn list_all_models() {
 
 pub fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
     use nerv::core::local_models::*;
-    // Resolve external binaries so any tool invocations below use absolute paths.
-    nerv::bootstrap::resolve_binaries();
+    if nerv::git_bin().is_none() {
+        eprintln!("error: `git` not found in $PATH — nerv requires git");
+        std::process::exit(1);
+    }
 
     match cmd {
         "models" => {
