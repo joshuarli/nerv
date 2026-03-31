@@ -34,6 +34,7 @@ impl ModelRegistry {
         // Always include built-in models; available_models() filters by registered providers.
         let mut built_in = builtin_anthropic_models();
         built_in.extend(builtin_codex_models());
+        built_in.extend(builtin_openrouter_models());
 
         // Register Anthropic provider if auth is available
         let is_oauth = auth.is_oauth("anthropic");
@@ -55,6 +56,19 @@ impl ModelRegistry {
             let provider =
                 crate::agent::CodexProvider::new(api_key).with_headers(extra_headers);
             registry.register("codex", Arc::new(provider));
+        }
+
+        // Register OpenRouter provider if auth is available.
+        // OpenRouter is OpenAI-compat at https://openrouter.ai/api/v1.
+        if let Some(api_key) = auth.api_key("openrouter") {
+            let extra_headers = config.effective_headers("openrouter");
+            let provider = OpenAICompatProvider::new(
+                "openrouter".into(),
+                "https://openrouter.ai/api/v1".into(),
+                Some(api_key),
+            )
+            .with_headers(extra_headers);
+            registry.register("openrouter", Arc::new(provider));
         }
 
         // Register custom providers
@@ -124,8 +138,7 @@ impl ModelRegistry {
         self.all_models().into_iter().find(|m| m.provider_name == provider && m.id == id)
     }
 
-    /// Find a model by partial/fuzzy match. Checks id, name, and common
-    /// aliases.
+    /// Find a model by partial/fuzzy match on id or name.
     pub fn find_model(&self, query: &str) -> Option<&Model> {
         let q = query.to_lowercase();
         let models = self.all_models();
@@ -136,14 +149,9 @@ impl ModelRegistry {
         }
 
         // Substring match on id or name
-        if let Some(m) = models
-            .iter()
+        models
+            .into_iter()
             .find(|m| m.id.to_lowercase().contains(&q) || m.name.to_lowercase().contains(&q))
-        {
-            return Some(m);
-        }
-
-        None
     }
 
     pub fn default_model(&self, config: &NervConfig) -> Option<&Model> {
@@ -266,4 +274,46 @@ impl ModelPricing {
     fn default_custom() -> Self {
         Self { input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0 }
     }
+}
+
+fn builtin_openrouter_models() -> Vec<Model> {
+    #[allow(clippy::too_many_arguments)]
+    fn m(id: &str, name: &str, ctx: u32, max_out: u32, reasoning: bool, inp: f64, out: f64, cr: f64) -> Model {
+        Model {
+            id: id.into(),
+            name: name.into(),
+            provider_name: "openrouter".into(),
+            context_window: ctx,
+            max_output_tokens: max_out,
+            reasoning,
+            supports_adaptive_thinking: false,
+            supports_xhigh: false,
+            pricing: ModelPricing { input: inp, output: out, cache_read: cr, cache_write: 0.0 },
+        }
+    }
+    vec![
+        // Auto-router: OpenRouter picks the best available model for each request.
+        m("auto",                           "Auto (OpenRouter)",                2_000_000, 30_000,  true,  0.0,  0.0,  0.0),
+        // Anthropic via OpenRouter
+        m("anthropic/claude-sonnet-4.6",    "Claude Sonnet 4.6 (OpenRouter)",   1_000_000, 128_000, true,  3.0,  15.0, 0.3),
+        m("anthropic/claude-opus-4.6",      "Claude Opus 4.6 (OpenRouter)",     1_000_000, 128_000, true,  5.0,  25.0, 0.5),
+        m("anthropic/claude-haiku-4.5",     "Claude Haiku 4.5 (OpenRouter)",    200_000,   64_000,  true,  1.0,  5.0,  0.1),
+        // Google via OpenRouter
+        m("google/gemini-2.5-pro",          "Gemini 2.5 Pro (OpenRouter)",      1_048_576, 65_536,  true,  1.25, 10.0, 0.125),
+        m("google/gemini-2.5-flash",        "Gemini 2.5 Flash (OpenRouter)",    1_048_576, 65_535,  true,  0.3,  2.5,  0.03),
+        // DeepSeek via OpenRouter
+        m("deepseek/deepseek-r1",           "DeepSeek R1 (OpenRouter)",         64_000,    16_000,  true,  0.7,  2.5,  0.0),
+        m("deepseek/deepseek-chat-v3-0324", "DeepSeek V3 (OpenRouter)",         163_840,   4_096,   false, 0.2,  0.77, 0.135),
+        // OpenAI via OpenRouter
+        m("openai/gpt-4o",                  "GPT-4o (OpenRouter)",              128_000,   16_384,  false, 2.5,  10.0, 1.25),
+        m("openai/gpt-4.1",                 "GPT-4.1 (OpenRouter)",             1_047_576, 32_768,  false, 2.0,  8.0,  0.5),
+        m("openai/o3",                      "o3 (OpenRouter)",                  200_000,   100_000, true,  2.0,  8.0,  0.5),
+        m("openai/o4-mini",                 "o4 Mini (OpenRouter)",             200_000,   100_000, true,  1.1,  4.4,  0.275),
+        m("openai/gpt-5",                   "GPT-5 (OpenRouter)",               400_000,   128_000, true,  1.25, 10.0, 0.125),
+        m("openai/gpt-5.1",                 "GPT-5.1 (OpenRouter)",             400_000,   128_000, true,  1.25, 10.0, 0.125),
+        // Meta via OpenRouter
+        m("meta-llama/llama-4-maverick",    "Llama 4 Maverick (OpenRouter)",    1_048_576, 16_384,  false, 0.15, 0.6,  0.0),
+        m("meta-llama/llama-4-scout",       "Llama 4 Scout (OpenRouter)",       327_680,   16_384,  false, 0.08, 0.3,  0.0),
+        m("qwen/qwen3.6-plus-preview:free", "Qwen3.6 Plus Preview Free (OpenRouter)", 131_072, 16_384, false, 0.0,  0.0,  0.0),
+    ]
 }

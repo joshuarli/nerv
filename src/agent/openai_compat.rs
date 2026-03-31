@@ -176,7 +176,12 @@ impl OpenAICompatProvider {
         if let Some(ref thinking) = request.thinking {
             match thinking {
                 ThinkingRequest::Budget { tokens } => {
-                    body["reasoning_effort"] = serde_json::json!("medium");
+                    // OpenRouter uses a nested reasoning object; standard OpenAI-compat uses reasoning_effort.
+                    if self.name == "openrouter" {
+                        body["reasoning"] = serde_json::json!({ "effort": "medium" });
+                    } else {
+                        body["reasoning_effort"] = serde_json::json!("medium");
+                    }
                     body["max_completion_tokens"] =
                         serde_json::json!(request.max_tokens + tokens);
                 }

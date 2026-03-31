@@ -56,8 +56,14 @@ fn builtin_default_headers()
         .insert("anthropic-beta".to_string(), "claude-code-20250219,oauth-2025-04-20".to_string());
     anthropic.insert("user-agent".to_string(), "claude-cli/1.0.0".to_string());
     anthropic.insert("x-app".to_string(), "cli".to_string());
+    // OpenRouter recommends these headers for attribution and app identification.
+    let mut openrouter = std::collections::HashMap::new();
+    openrouter.insert("HTTP-Referer".to_string(), "https://github.com/joshka/nerv".to_string());
+    openrouter.insert("X-Title".to_string(), "nerv".to_string());
+
     let mut map = std::collections::HashMap::new();
     map.insert("anthropic".to_string(), anthropic);
+    map.insert("openrouter".to_string(), openrouter);
     map
 }
 

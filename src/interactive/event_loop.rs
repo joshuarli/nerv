@@ -1072,7 +1072,7 @@ impl InteractiveMode {
             "/login" => {
                 if args.is_empty() {
                     self.status_message =
-                        Some("Usage: /login <provider>  (available: anthropic, codex)".into());
+                        Some("Usage: /login <provider>  (available: anthropic, codex)  — note: openrouter requires OPENROUTER_API_KEY env var, not OAuth".into());
                 } else {
                     self.status_message = Some(format!("Starting {} login...", args));
                     let _ =
@@ -1119,7 +1119,7 @@ impl InteractiveMode {
                      /model          — list/switch models\n\
                      /think [on|off] — toggle extended thinking (Shift+Tab to cycle)\n\
                      /effort [low|medium|high|max] — set adaptive effort level (^E to cycle)\n\
-                     /login <provider>  — OAuth login (anthropic, codex)\n\
+                     /login <provider>  — OAuth login (anthropic, codex); openrouter uses OPENROUTER_API_KEY\n\
                      /logout <provider> — remove stored credentials\n\
                      /compact        — compact context now\n\
                      /compact on|off — toggle auto-compact for this session\n\

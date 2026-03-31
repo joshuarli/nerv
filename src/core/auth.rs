@@ -62,6 +62,7 @@ impl AuthStorage {
         let env_key = match provider {
             "anthropic" => std::env::var("ANTHROPIC_API_KEY").ok(),
             "codex" => std::env::var("OPENAI_API_KEY").ok(),
+            "openrouter" => std::env::var("OPENROUTER_API_KEY").ok(),
             _ => None,
         };
         if let Some(ref key) = env_key {
@@ -116,6 +117,7 @@ impl AuthStorage {
         let env = match provider {
             "anthropic" => std::env::var("ANTHROPIC_API_KEY").is_ok(),
             "codex" => std::env::var("OPENAI_API_KEY").is_ok(),
+            "openrouter" => std::env::var("OPENROUTER_API_KEY").is_ok(),
             _ => false,
         };
         env || keychain_get(provider).is_some()
