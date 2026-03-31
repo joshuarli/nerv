@@ -101,7 +101,7 @@ impl ModelRegistry {
                 provider_name,
                 context_window: local.context_length,
                 max_output_tokens: 32_000,
-                reasoning: false,
+                reasoning: local.reasoning,
                 supports_adaptive_thinking: false,
                 supports_xhigh: false,
                 pricing: ModelPricing::default_custom(),

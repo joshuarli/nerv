@@ -18,6 +18,10 @@ pub struct LocalModel {
     pub extra_args: Vec<String>,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// Set to true for models that produce reasoning_content chunks (e.g.
+    /// DeepSeek-R1, Qwen3 with thinking mode). Enables the thinking-level UI.
+    #[serde(default)]
+    pub reasoning: bool,
 }
 
 fn default_context() -> u32 {
@@ -145,6 +149,7 @@ pub fn recommended_defaults(model_path: &Path) -> LocalModel {
         gpu_layers,
         extra_args,
         port: 1234,
+        reasoning: false,
     }
 }
 
