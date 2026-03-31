@@ -1163,6 +1163,7 @@ impl AgentSession {
     ) -> Result<compaction::CompactionOutcome, String> {
         // Lite-compact: cheaply zero stale bulk outputs before trying LLM
         // summarization. If this drops us below threshold, skip the LLM call.
+        // Snapshot first so full compaction can use original content if needed.
         let age = self
             .config
             .lite_compact_age
@@ -1175,6 +1176,7 @@ impl AgentSession {
             .map(compaction::estimate_tokens)
             .sum();
         let compactable = self.tool_registry.lite_compactable_names();
+        let snapshot = self.agent.state.messages.clone();
         let zeroed = crate::agent::transform::lite_compact(
             &mut self.agent.state.messages,
             age,
@@ -1204,6 +1206,9 @@ impl AgentSession {
                 );
                 return Ok(compaction::CompactionOutcome::LiteCompact { zeroed });
             }
+            // Full compaction will follow — restore original messages so the
+            // summarizer and archived transcript see unzeroed tool output.
+            self.agent.state.messages = snapshot;
         }
 
         let (provider, model_id) =
@@ -1288,7 +1293,17 @@ impl AgentSession {
             })
             .collect();
 
-        match generate_summary(&to_summarize, None, provider, &model_id, summarizer_context_window) {
+        // Extract prior compaction summary so the summarizer can update it
+        // rather than starting from scratch.
+        let previous_summary: Option<String> = to_summarize.iter().find_map(|m| {
+            if let AgentMessage::CompactionSummary { summary, .. } = m {
+                Some(summary.clone())
+            } else {
+                None
+            }
+        });
+
+        match generate_summary(&to_summarize, previous_summary.as_deref(), provider, &model_id, summarizer_context_window) {
             Ok(generated) => {
                 let summary = generated.to_markdown();
                 let structured = generated.structured().cloned();

@@ -125,25 +125,37 @@ pub fn serialize_conversation(messages: &[AgentMessage]) -> String {
                 out.push('\n');
             }
             AgentMessage::Assistant(a) => {
-                // Only emit Text blocks. Thinking blocks are internal
-                // chain-of-thought; including them wastes tokens and can
-                // mislead the summariser.
-                let text: String = a
-                    .content
-                    .iter()
-                    .filter_map(|b| {
-                        if let ContentBlock::Text { text } = b {
-                            Some(text.as_str())
-                        } else {
-                            None
+                // Emit text blocks and tool call metadata. Thinking blocks
+                // are internal chain-of-thought and excluded.
+                let mut has_content = false;
+                for block in &a.content {
+                    match block {
+                        ContentBlock::Text { text } if !text.is_empty() => {
+                            if !has_content {
+                                out.push_str("Assistant: ");
+                                has_content = true;
+                            }
+                            out.push_str(&trunc(text, FIELD_CAP_USER_ASSISTANT));
+                            out.push('\n');
                         }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                if !text.is_empty() {
-                    out.push_str("Assistant: ");
-                    out.push_str(&trunc(&text, FIELD_CAP_USER_ASSISTANT));
-                    out.push('\n');
+                        ContentBlock::ToolCall { name, arguments, .. } => {
+                            // Include tool name + key arg so the summarizer
+                            // knows which files were touched.
+                            let arg_hint = arguments
+                                .get("file_path")
+                                .or_else(|| arguments.get("path"))
+                                .or_else(|| arguments.get("pattern"))
+                                .or_else(|| arguments.get("command"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            out.push_str(&format!("[Tool: {name}"));
+                            if !arg_hint.is_empty() {
+                                out.push_str(&format!(", {}", trunc(arg_hint, 120)));
+                            }
+                            out.push_str("]\n");
+                        }
+                        _ => {}
+                    }
                 }
             }
             AgentMessage::ToolResult { content, is_error, .. } => {
@@ -430,6 +442,44 @@ mod tests {
         };
         let out = serialize_conversation(&[msg]);
         assert_eq!(out, "[Branch summary: branch context]\n");
+    }
+
+    #[test]
+    fn serialize_includes_tool_calls() {
+        use crate::agent::types::{AssistantMessage, StopReason};
+        let msg = AgentMessage::Assistant(AssistantMessage {
+            content: vec![
+                ContentBlock::Text { text: "I'll edit the file.".into() },
+                ContentBlock::ToolCall {
+                    id: "tc1".into(),
+                    name: "edit".into(),
+                    arguments: serde_json::json!({"file_path": "src/main.rs", "old_string": "a", "new_string": "b"}),
+                },
+            ],
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+            timestamp: 0,
+        });
+        let out = serialize_conversation(&[msg]);
+        assert!(out.contains("[Tool: edit, src/main.rs]"), "got: {out}");
+        assert!(out.contains("I'll edit the file."));
+    }
+
+    #[test]
+    fn serialize_tool_call_no_path() {
+        use crate::agent::types::{AssistantMessage, StopReason};
+        let msg = AgentMessage::Assistant(AssistantMessage {
+            content: vec![ContentBlock::ToolCall {
+                id: "tc2".into(),
+                name: "web_search".into(),
+                arguments: serde_json::json!({"query": "rust async"}),
+            }],
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+            timestamp: 0,
+        });
+        let out = serialize_conversation(&[msg]);
+        assert!(out.contains("[Tool: web_search]"), "got: {out}");
     }
 
     // clamp_conversation
