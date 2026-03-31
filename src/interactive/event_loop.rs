@@ -273,9 +273,31 @@ impl InteractiveMode {
                 } else {
                     reason.clone()
                 };
+                // Compute which git root 'a' would grant, for display.
+                let allow_dir_label = crate::core::permissions::path_for_args(&tool, &args)
+                    .and_then(|path_str| {
+                        let abs = if let Some(rest) = path_str.strip_prefix("~/") {
+                            crate::home_dir().map(|h| h.join(rest))?
+                        } else {
+                            std::path::PathBuf::from(&path_str)
+                        };
+                        let start = if abs.is_dir() { abs.clone() } else {
+                            abs.parent().map(|p| p.to_path_buf()).unwrap_or(abs)
+                        };
+                        let dir = crate::find_repo_root(&start).unwrap_or(start);
+                        let display = if let Some(home) = crate::home_dir() {
+                            dir.strip_prefix(&home)
+                                .map(|rel| format!("~/{}", rel.display()))
+                                .unwrap_or_else(|_| dir.display().to_string())
+                        } else {
+                            dir.display().to_string()
+                        };
+                        Some(display)
+                    })
+                    .unwrap_or_else(|| "dir".to_string());
                 self.status_message = Some(format!(
-                    "⚠ Permission: {}\n  {}\n  y = allow, n = deny, a = allow dir",
-                    tool, detail
+                    "⚠ Permission: {}\n  {}\n  y = allow, n = deny, a = allow dir ({})",
+                    tool, detail, allow_dir_label
                 ));
                 self.status_is_error = true;
                 self.pending_permission = Some(response_tx);

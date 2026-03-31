@@ -59,9 +59,12 @@ pub fn path_for_args(tool: &str, args: &serde_json::Value) -> Option<String> {
         "read" | "edit" | "write" | "grep" | "find" | "ls" | "symbols" | "codemap" => {
             args["path"].as_str().map(|s| s.to_string())
         }
-        // bash commands are not paths — returning None disables the "allow dir"
-        // shortcut so pressing 'a' on a bash prompt falls back to a simple allow.
-        "bash" => None,
+        // For bash, extract the first path token so "allow dir" can find the git root.
+        "bash" => {
+            let cmd = args["command"].as_str()?;
+            let tokens = extract_path_tokens(cmd);
+            tokens.into_iter().next()
+        }
         _ => None,
     }
 }
@@ -146,9 +149,21 @@ fn check_bash(args: &serde_json::Value, repo_root: Option<&Path>) -> Permission 
                 }
                 return Permission::Ask(format!("path outside repo: {}", token));
             }
-            if token.starts_with("~/")
-                && !token.starts_with(&format!("~/{}", root_str.trim_start_matches('/')))
-            {
+            if token.starts_with("~/") {
+                // Expand ~/... to an absolute path for comparison.
+                let expanded = if let Some(rest) = token.strip_prefix("~/") {
+                    crate::home_dir().map(|h| h.join(rest))
+                } else {
+                    None
+                };
+                let within_repo = expanded.as_ref().map(|abs| {
+                    let abs = normalize_path(abs);
+                    let root = normalize_path(root);
+                    abs.starts_with(&root)
+                }).unwrap_or(false);
+                if within_repo {
+                    continue;
+                }
                 if is_safe_home_dir_token(token) {
                     continue;
                 }

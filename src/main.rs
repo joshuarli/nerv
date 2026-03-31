@@ -511,22 +511,36 @@ fn main() {
                         StdinEvent::Sequence(ref seq) => {
                             // Permission prompt input (y/n/a)
                             if interactive.pending_permission.is_some() {
-                                // 'a' / 'A' — allow the entire directory containing the path
+                                // 'a' / 'A' — allow the git root containing the path
                                 if seq == b"a" || seq == b"A" {
-                                    // Extract path from pending details and find its parent dir.
+                                    // Extract path from pending details, resolve it, then walk up to its git root.
                                     if let Some((tool, ref args)) = interactive.pending_permission_details.clone()
                                         && let Some(path_str) = nerv::core::permissions::path_for_args(&tool, args)
                                     {
-                                        let path = std::path::PathBuf::from(&path_str);
-                                        let dir = if path.is_dir() {
-                                            path.clone()
+                                        // Resolve ~/... to absolute.
+                                        let abs = if let Some(rest) = path_str.strip_prefix("~/") {
+                                            nerv::home_dir().map(|h| h.join(rest))
+                                                .unwrap_or_else(|| std::path::PathBuf::from(&path_str))
                                         } else {
-                                            path.parent().map(|p| p.to_path_buf()).unwrap_or(path)
+                                            std::path::PathBuf::from(&path_str)
                                         };
+                                        let start = if abs.is_dir() { abs.clone() } else {
+                                            abs.parent().map(|p| p.to_path_buf()).unwrap_or(abs)
+                                        };
+                                        // Prefer git root; fall back to the directory itself.
+                                        let dir = nerv::find_repo_root(&start).unwrap_or(start);
                                         interactive.allowed_dirs.push(dir.clone());
+                                        // Display with ~/ prefix when possible.
+                                        let display = if let Some(home) = nerv::home_dir() {
+                                            dir.strip_prefix(&home)
+                                                .map(|rel| format!("~/{}", rel.display()))
+                                                .unwrap_or_else(|_| dir.display().to_string())
+                                        } else {
+                                            dir.display().to_string()
+                                        };
                                         layout.chat.push_styled(
                                             nerv::interactive::theme::SUCCESS,
-                                            &format!("  → allowed dir: {}", dir.display()),
+                                            &format!("  → allowed dir: {}", display),
                                         );
                                     }
                                     if let Some(tx) = interactive.pending_permission.take() {
