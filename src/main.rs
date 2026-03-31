@@ -15,6 +15,7 @@ use nerv::interactive::statusbar::StatusBar;
 use nerv::nerv_dir;
 use nerv::tui::components::editor::Editor;
 use nerv::tui::*;
+use nerv::str::StrExt as _;
 
 /// Render a frame and notify ChatWriter of how many lines have been flushed to
 /// terminal scrollback, so it can free heap memory for blocks it will never
@@ -1080,7 +1081,7 @@ fn format_args_brief(args: &serde_json::Value) -> String {
         let v_str = match v {
             serde_json::Value::String(s) if s.len() <= 60 => s.clone(),
             serde_json::Value::String(s) => {
-                format!("{}…", &s[..s.floor_char_boundary(57)])
+                format!("{}…", s.truncate_chars(57))
             }
             serde_json::Value::Bool(b) => b.to_string(),
             serde_json::Value::Number(n) => n.to_string(),
@@ -1373,7 +1374,7 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
                 let text = if text.len() > 500 {
                     format!(
                         "{}...[truncated {}b]",
-                        &text[..text.floor_char_boundary(500)],
+                        text.truncate_chars(500),
                         text.len()
                     )
                 } else {

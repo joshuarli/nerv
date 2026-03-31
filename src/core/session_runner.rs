@@ -5,6 +5,7 @@ use crossbeam_channel::Sender;
 use crate::agent::types::Cost;
 
 use super::agent_session::{AgentSession, AgentSessionEvent, CompactionReason, SessionCommand};
+use crate::str::StrExt as _;
 
 fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<AgentSessionEvent>) {
     match provider {
@@ -238,8 +239,7 @@ pub fn session_task(
             }
             SessionCommand::ForkSession => match session.session_manager.fork_session() {
                 Ok(new_id) => {
-                    let short =
-                        new_id.char_indices().nth(8).map_or(new_id.as_str(), |(i, _)| &new_id[..i]);
+                    let short = new_id.truncate_chars(8);
                     let _ = event_tx.send(AgentSessionEvent::SessionStarted {
                         id: new_id.clone(),
                         name: session.session_manager.name(),

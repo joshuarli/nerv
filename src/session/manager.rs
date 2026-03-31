@@ -5,6 +5,7 @@ use rusqlite::{Connection, params};
 
 use super::types::*;
 use crate::agent::types::{AgentMessage, ContentBlock, ContentItem, ThinkingLevel};
+use crate::str::StrExt as _;
 
 pub struct SessionContext {
     /// Messages for the agent's context window (post-compaction only).
@@ -1271,7 +1272,7 @@ fn truncate(s: &str, max: usize) -> String {
     let s = s.trim();
     // Take first line only
     let line = s.lines().next().unwrap_or("");
-    if line.len() <= max { line.to_string() } else { format!("{}...", &line[..line.floor_char_boundary(max - 3)]) }
+    if line.len() <= max { line.to_string() } else { format!("{}...", line.truncate_chars(max - 3)) }
 }
 
 #[derive(Debug, Clone)]

@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod str;
 pub mod bootstrap;
 pub mod compaction;
 pub mod core;

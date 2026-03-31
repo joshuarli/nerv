@@ -1,6 +1,7 @@
 //! Session export (HTML, JSONL).
 
 use crate::agent::types::{AgentMessage, ContentBlock, ContentItem};
+use crate::str::StrExt as _;
 use crate::session::types::SessionEntry;
 
 /// Aggregate token stats across all API calls in a session.
@@ -248,18 +249,17 @@ fn args_preview_for(name: &str, arguments: &serde_json::Value, args_str: &str) -
                     p.to_string()
                 } else {
                     // path is a sibling of edits at the top level for multi-edit
-                    args_str[..args_str.floor_char_boundary(120.min(args_str.len()))].to_string()
-                        + if args_str.len() > 120 { "..." } else { "" }
+                    let t = args_str.truncate_chars(120);
+                    if t.len() < args_str.len() { format!("{}...", t) } else { t.to_string() }
                 }
             } else {
-                let n = args_str.len().min(120);
-                args_str[..args_str.floor_char_boundary(n)].to_string()
-                    + if args_str.len() > 120 { "..." } else { "" }
+                let t = args_str.truncate_chars(120);
+                if t.len() < args_str.len() { format!("{}...", t) } else { t.to_string() }
             }
         }
         _ => {
             if args_str.len() > 120 {
-                format!("{}...", &args_str[..args_str.floor_char_boundary(120)])
+                format!("{}...", args_str.truncate_chars(120))
             } else {
                 args_str.to_string()
             }

@@ -6,6 +6,7 @@ use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
 use crate::agent::types::ToolDetails;
 use crate::errors::ToolError;
+use crate::str::StrExt as _;
 
 const GREP_MAX_LINE_LENGTH: usize = 500;
 
@@ -190,7 +191,7 @@ fn truncate_long_lines(text: &str, max_chars: usize) -> String {
             out.push('\n');
         }
         if line.len() > max_chars {
-            out.push_str(&line[..max_chars]);
+            out.push_str(line.truncate_bytes(max_chars));
             out.push_str("...");
         } else {
             out.push_str(line);

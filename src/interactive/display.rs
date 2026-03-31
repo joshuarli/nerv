@@ -1,5 +1,6 @@
 /// Display utilities for the interactive mode.
 use super::theme;
+use crate::str::StrExt as _;
 
 /// Colorize a single line of tool result output (diffs, errors, context).
 pub fn render_tool_result_line(line: &str, is_error: bool) -> String {
@@ -103,5 +104,5 @@ pub fn shorten_path(path: &str, home: &str, repo_root: Option<&str>) -> String {
 
 /// Truncate a string at a char boundary.
 pub fn truncate_str(s: &str, max: usize) -> &str {
-    &s[..s.floor_char_boundary(max)]
+    s.truncate_bytes(max)
 }

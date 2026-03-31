@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::types::*;
+use crate::str::StrExt as _;
 use crate::tools::output_filter;
 
 /// Frozen context decisions for one prompt loop. Computed once before the
@@ -419,8 +420,7 @@ fn summarize_tool_content(content: &[ContentItem]) -> String {
     // Take first few lines as preview
     let preview: String = full_text.lines().take(3).collect::<Vec<_>>().join("\n");
     let preview = if preview.len() > TRUNCATED_MAX_CHARS {
-        let cut = preview.floor_char_boundary(TRUNCATED_MAX_CHARS);
-        format!("{}...", &preview[..cut])
+        format!("{}...", preview.truncate_chars(TRUNCATED_MAX_CHARS))
     } else {
         preview
     };

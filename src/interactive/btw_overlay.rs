@@ -20,6 +20,7 @@ use crate::agent::types::{
 use crate::interactive::theme;
 use crate::tui::keys;
 use crate::tui::stdin_buffer::{StdinBuffer, StdinEvent};
+use crate::str::StrExt as _;
 
 // ─────────────────────────────── public entry ────────────────────────────────
 
@@ -191,7 +192,7 @@ fn tool_call_summary(name: &str, args: &serde_json::Value) -> String {
         "bash" => args
             .get("command")
             .and_then(|v| v.as_str())
-            .map(|s| s.char_indices().nth(120).map_or(s, |(i, _)| &s[..i]).to_string()),
+            .map(|s| s.truncate_chars(120).to_string()),
         "read" | "edit" | "write" | "ls" | "find" => {
             args.get("path").and_then(|v| v.as_str()).map(|s| s.to_string())
         }
@@ -227,8 +228,7 @@ pub fn strip_tool_content(messages: Vec<AgentMessage>) -> Vec<AgentMessage> {
                 })
                 .unwrap_or("");
             let first_line = first_text.lines().next().unwrap_or("");
-            let snippet =
-                first_line.char_indices().nth(120).map_or(first_line, |(i, _)| &first_line[..i]);
+            let snippet = first_line.truncate_chars(120);
             let prefix = if *is_error { "error: " } else { "" };
             result_snippets.insert(tool_call_id.clone(), format!("{prefix}{snippet}"));
         }
@@ -490,7 +490,7 @@ pub fn pad_right(s: &str, width: usize) -> String {
     let len = s.chars().count();
     if len >= width {
         // Truncate safely at char boundary.
-        s.char_indices().nth(width).map_or(s, |(i, _)| &s[..i]).to_string()
+        s.truncate_chars(width).to_string()
     } else {
         let mut out = s.to_string();
         for _ in 0..(width - len) {

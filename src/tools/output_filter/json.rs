@@ -6,6 +6,8 @@
 //!
 //! Threshold: only activates for outputs over `MIN_CHARS` characters.
 
+use crate::str::StrExt as _;
+
 const MIN_CHARS: usize = 2_000;
 /// Maximum depth to expand before collapsing to "{ ... }"
 const MAX_DEPTH: usize = 4;
@@ -43,7 +45,7 @@ fn render_schema(v: &serde_json::Value, depth: usize) -> String {
         serde_json::Value::Number(n) => format!("number ({})", n),
         serde_json::Value::String(s) => {
             if s.len() > 40 {
-                format!("\"{}...\"", &s[..s.floor_char_boundary(37)])
+                format!("\"{}...\"", s.truncate_chars(37))
             } else {
                 format!("\"{}\"", s)
             }

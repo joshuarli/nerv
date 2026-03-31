@@ -18,6 +18,7 @@ use crate::core::config::NervConfig;
 use crate::core::model_registry::ModelRegistry;
 use crate::session::types::SessionTreeNode;
 use crate::tui;
+use crate::str::StrExt as _;
 
 /// Returned by [`InteractiveMode::handle_event`] when a full-screen picker
 /// should be launched by the caller.
@@ -312,8 +313,7 @@ impl InteractiveMode {
                 // Show the command, size, and hint so user can make an informed decision.
                 // Truncate long commands for display.
                 let cmd_display = if command.len() > 80 {
-                    let end = command.floor_char_boundary(80);
-                    format!("{}…", &command[..end])
+                    format!("{}…", command.truncate_chars(80))
                 } else {
                     command.clone()
                 };
@@ -390,8 +390,7 @@ impl InteractiveMode {
                             for item in content {
                                 if let ContentItem::Text { text } = item {
                                     let preview = if text.len() > 200 {
-                                        let end = text.floor_char_boundary(200);
-                                        &text[..end]
+                                        text.truncate_chars(200)
                                     } else {
                                         text.as_str()
                                     };

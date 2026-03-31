@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::agent::convert::{LlmContent, LlmMessage};
+use crate::str::StrExt as _;
 use crate::agent::provider::{CacheConfig, CompletionRequest, Provider, ProviderEvent, new_cancel_flag};
 use crate::agent::types::{AgentMessage, ContentBlock, ContentItem};
 
@@ -23,11 +24,12 @@ const FIELD_CAP_TOOL_OUTPUT: usize = 2_000;
 /// the string was cut. Uses `floor_char_boundary` so the result is always
 /// valid UTF-8.
 fn trunc(s: &str, cap: usize) -> Cow<'_, str> {
-    if s.len() <= cap {
-        return Cow::Borrowed(s);
+    let t = s.truncate_chars(cap);
+    if t.len() == s.len() {
+        Cow::Borrowed(s)
+    } else {
+        Cow::Owned(format!("{}...[truncated]", t))
     }
-    let end = s.floor_char_boundary(cap);
-    Cow::Owned(format!("{}...[truncated]", &s[..end]))
 }
 
 pub fn serialize_conversation(messages: &[AgentMessage]) -> String {
@@ -102,14 +104,11 @@ pub fn serialize_conversation(messages: &[AgentMessage]) -> String {
 /// input was cut. This is the final safety net before the string is embedded
 /// in the summariser prompt.
 pub fn clamp_conversation(s: String, char_cap: usize) -> String {
-    if s.len() <= char_cap {
+    let t = s.truncate_chars(char_cap);
+    if t.len() == s.len() {
         return s;
     }
-    let end = s.floor_char_boundary(char_cap);
-    format!(
-        "{}...\n[Conversation truncated: exceeded summariser context limit]",
-        &s[..end]
-    )
+    format!("{}...\n[Conversation truncated: exceeded summariser context limit]", t)
 }
 
 const SUMMARIZATION_PROMPT: &str = "Summarize the conversation above in structured format: Goal, Progress, Key Decisions, Next Steps, Critical Context. Be concise.";
@@ -189,12 +188,7 @@ const STOP_WORDS: &[&str] = &[
 /// take the first 5 meaningful words, title-case each one.
 pub fn generate_session_name(first_user_message: &str) -> String {
     // Work only with the first 400 chars to keep things fast.
-    let text = if first_user_message.len() > 400 {
-        let end = first_user_message.floor_char_boundary(400);
-        &first_user_message[..end]
-    } else {
-        first_user_message
-    };
+    let text = first_user_message.truncate_chars(400);
 
     // Split on anything that isn't a letter, digit, underscore, dot, or hyphen.
     // This handles punctuation and whitespace in one pass.
@@ -225,8 +219,7 @@ pub fn generate_session_name(first_user_message: &str) -> String {
     if kept.is_empty() {
         // Absolute fallback: use the raw start of the message.
         let fallback = text.trim();
-        let end = fallback.char_indices().nth(40).map(|(i, _)| i).unwrap_or(fallback.len());
-        return fallback[..end].to_string();
+        return fallback.truncate_chars(40).to_string();
     }
 
     kept.join(" ")

@@ -19,6 +19,7 @@ use std::io::Write;
 use super::fullscreen_picker::FullscreenList;
 use super::theme;
 use crate::session::types::SessionTreeNode;
+use crate::str::StrExt as _;
 use crate::tui::keys;
 
 // ─────────────────────────── filter mode ─────────────────────────────────────
@@ -660,7 +661,7 @@ fn has_visible(node: &SessionTreeNode, filter: FilterMode) -> bool {
 
 /// Truncate a string to at most `max` chars at a char boundary.
 fn char_truncate(s: &str, max: usize) -> &str {
-    &s[..s.floor_char_boundary(max)]
+    s.truncate_bytes(max)
 }
 
 // ─────────────────────────── tests ───────────────────────────────────────────
