@@ -515,12 +515,43 @@ function toggleTool(header) {
         }
     }
 
+    // Build per-compaction fingerprint sets of live verbatim-window messages
+    // so we can skip duplicates (old sessions stored the full branch in
+    // archived_messages, including the verbatim window that stays in the DB).
+    let mut verbatim_fingerprints: std::collections::HashMap<&str, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+    for entry in entries {
+        if let SessionEntry::Compaction(ce) = entry {
+            let mut collecting = false;
+            for e2 in entries {
+                match e2 {
+                    SessionEntry::Message(me) => {
+                        if me.id == ce.first_kept_entry_id { collecting = true; }
+                        if collecting {
+                            let key = serde_json::to_string(&me.message).unwrap_or_default();
+                            verbatim_fingerprints.entry(ce.id.as_str()).or_default().insert(key);
+                        }
+                    }
+                    SessionEntry::Compaction(ce2) if ce2.id == ce.id => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+
     let render_archived_msgs =
         |ce: &CompactionEntry,
          html: &mut String,
          call_result: &std::collections::HashMap<String, (Option<String>, String, bool)>,
          tool_idx: &mut usize| {
+            let fingerprints = verbatim_fingerprints.get(ce.id.as_str());
             for msg in &ce.archived_messages {
+                if let Some(fps) = fingerprints {
+                    let key = serde_json::to_string(msg).unwrap_or_default();
+                    if fps.contains(&key) {
+                        continue;
+                    }
+                }
                 match msg {
                     AgentMessage::User { content, .. } => {
                         html.push_str("<div class='user'>");

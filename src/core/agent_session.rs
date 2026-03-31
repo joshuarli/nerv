@@ -1189,11 +1189,10 @@ impl AgentSession {
         // estimate_tokens sum when no usage data exists yet.
         let tokens_before: u32 = compaction::tokens_before_compaction(&branch);
 
-        // Archive the full branch (to_summarize + verbatim window) so the export
-        // contains the complete pre-compaction transcript. The verbatim window
-        // stays in the DB but its messages are still included here for
-        // debugging/export — they are not re-sent to any LLM.
-        let archived_messages: Vec<AgentMessage> = branch
+        // Archive only the entries being deleted (before the verbatim window).
+        // The verbatim window entries stay as live DB rows, so including them
+        // here would produce duplicates in exports.
+        let archived_messages: Vec<AgentMessage> = branch[..cut.verbatim_start_index]
             .iter()
             .filter_map(|e| {
                 if let crate::session::types::SessionEntry::Message(me) = e {

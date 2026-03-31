@@ -1163,8 +1163,43 @@ impl SessionManager {
             }
         }
 
+        // Build per-compaction fingerprint sets of live verbatim-window messages
+        // so we can skip duplicates (old sessions stored the full branch in
+        // archived_messages, including the verbatim window that stays in the DB).
+        let mut verbatim_fingerprints: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+        for entry in &branch {
+            if let SessionEntry::Compaction(ce) = entry {
+                // Collect all Message entries from first_kept_entry_id onward
+                // (the verbatim window) — these stay as live DB rows.
+                let mut collecting = false;
+                for e2 in &branch {
+                    match e2 {
+                        SessionEntry::Message(me) => {
+                            if me.id == ce.first_kept_entry_id { collecting = true; }
+                            if collecting {
+                                let key = serde_json::to_string(&me.message).unwrap_or_default();
+                                verbatim_fingerprints.entry(ce.id.clone()).or_default().insert(key);
+                            }
+                        }
+                        SessionEntry::Compaction(ce2) if ce2.id == ce.id => break,
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         let mut emit_archived = |ce: &CompactionEntry, lines: &mut Vec<String>| {
+            let fingerprints = verbatim_fingerprints.get(&ce.id);
             for msg in &ce.archived_messages {
+                // Skip messages already present as live verbatim-window entries
+                // (old sessions stored the full branch in archived_messages).
+                if let Some(fps) = fingerprints {
+                    let key = serde_json::to_string(msg).unwrap_or_default();
+                    if fps.contains(&key) {
+                        continue;
+                    }
+                }
                 // Reconstruct TokenInfo from the usage stored on the AgentMessage
                 // itself so archived assistant messages carry per-call token data.
                 let tokens = match msg {
