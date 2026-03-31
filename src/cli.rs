@@ -62,6 +62,7 @@ pub enum Cmd {
         rest: Vec<String>,
     },
     Version,
+    BenchStartup,
 }
 
 pub enum ResumeOpt {
@@ -554,6 +555,7 @@ pub fn parse_args() -> Cmd {
             }
             Cmd::Codemap { rest: remaining_strings(parser) }
         }
+        Value(v) if v == "bench-startup" => Cmd::BenchStartup,
         Value(v) if v == "symbols" => {
             if matches!(parser.clone().next(), Ok(Some(Short('h') | Long("help")))) {
                 println!("Usage: nerv symbols <query> [path] [--kind <kind>] [--refs]");
@@ -715,8 +717,7 @@ pub fn repo_gate(cwd: &std::path::Path, nerv_dir: &std::path::Path) -> RepoGateR
 pub fn list_all_models() {
     let nerv_dir = nerv::nerv_dir();
     let config = nerv::core::NervConfig::load(nerv_dir);
-    let mut auth = nerv::core::auth::AuthStorage::load(nerv_dir);
-    let registry = nerv::core::model_registry::ModelRegistry::new(&config, &mut auth, nerv_dir);
+    let registry = nerv::core::model_registry::ModelRegistry::new(&config, nerv_dir);
 
     let all = registry.all_models();
 

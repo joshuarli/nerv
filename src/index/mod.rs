@@ -280,6 +280,14 @@ impl SymbolIndex {
         Self::new_inner(cache)
     }
 
+    /// Open the on-disk symbol cache and attach it to this (already constructed)
+    /// index. Called from the background index thread — after the write lock is
+    /// held — so the SQLite open doesn't block bootstrap.
+    pub fn open_cache(&mut self, repo_dir: &Path, repo_root: &Path) {
+        self.cache = SymbolCache::open(repo_dir)
+            .map(|c| c.with_repo_root(repo_root.to_path_buf()));
+    }
+
     fn new_inner(cache: Option<SymbolCache>) -> Self {
         let rust_lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
         let go_lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();

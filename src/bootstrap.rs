@@ -53,48 +53,70 @@ impl Default for BootstrapOptions {
 /// Construct agent + tools + session from disk config.
 /// Both interactive and headless modes call this.
 pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstrap {
-    // Symbol index scan is the most expensive startup cost — kick it off first
-    // so it overlaps with everything else. Joined explicitly at the bottom of
-    // bootstrap so the index is ready before the session is returned.
-    let (symbols, symbols_handle) = if !opts.talk_mode {
-        let symbols_tool = Arc::new(SymbolsTool::new_with_cache(cwd.to_path_buf(), nerv_dir));
+    // Config is fast (1.5ms) and needed by the registry thread.
+    let config = NervConfig::load(nerv_dir);
+
+    // Registry thread: Keychain subprocess calls are the dominant startup cost
+    // (~88ms). Spawn immediately after config so they overlap with everything else.
+    let config_for_registry = config.clone();
+    let nerv_dir_for_registry = nerv_dir.to_path_buf();
+    let registry_handle = std::thread::Builder::new()
+        .name("nerv-registry".into())
+        .spawn(move || {
+            ModelRegistry::new(&config_for_registry, &nerv_dir_for_registry)
+        })
+        .expect("failed to spawn registry thread");
+
+    // SessionManager opens sessions.db (DDL on first run, ~19ms cold).
+    // Spawn alongside the registry so the SQLite open overlaps with Keychain.
+    let repo_dir_for_session = crate::repo_data_dir(cwd);
+    let session_mgr_handle = std::thread::Builder::new()
+        .name("nerv-session-mgr".into())
+        .spawn(move || SessionManager::new(&repo_dir_for_session))
+        .expect("failed to spawn session-mgr thread");
+
+    // Index + resource threads (skipped in talk mode).
+    let (symbols, symbols_handle, resources_handle) = if !opts.talk_mode {
+        // SymbolsTool::new performs tree-sitter initialisation. The SQLite cache
+        // open is deferred into the index thread via open_cache().
+        let symbols_tool = Arc::new(SymbolsTool::new(cwd.to_path_buf()));
         let symbol_index = symbols_tool.index();
         let idx = symbol_index.clone();
         let root = cwd.to_path_buf();
-        let handle = std::thread::Builder::new()
+        let repo_root = crate::find_repo_root(cwd);
+        let repo_dir = crate::repo_data_dir(cwd);
+        let index_handle = std::thread::Builder::new()
             .name("nerv-index".into())
             .stack_size(1024 * 1024)
             .spawn(move || {
                 if let Ok(mut index) = idx.write() {
+                    if let Some(ref rr) = repo_root {
+                        if crate::repo_fingerprint(rr).is_some() {
+                            index.open_cache(&repo_dir, rr);
+                        }
+                    }
                     index.force_index_dir(&root);
                 }
             })
             .expect("failed to spawn index thread");
-        (Some((symbols_tool, symbol_index)), Some(handle))
-    } else {
-        (None, None)
-    };
 
-    // Resource loading (ancestor AGENTS.md walk, skills scan, memory, etc.) is
-    // I/O-bound and independent of config/auth/registry — run it concurrently.
-    let resources_handle = if !opts.talk_mode {
         let cwd_buf = cwd.to_path_buf();
         let nerv_dir_buf = nerv_dir.to_path_buf();
-        Some(
-            std::thread::Builder::new()
-                .name("nerv-resources".into())
-                .spawn(move || {
-                    crate::core::resource_loader::load_resources(&cwd_buf, &nerv_dir_buf)
-                })
-                .expect("failed to spawn resources thread"),
-        )
+        let resources_handle = std::thread::Builder::new()
+            .name("nerv-resources".into())
+            .spawn(move || {
+                crate::core::resource_loader::load_resources(&cwd_buf, &nerv_dir_buf)
+            })
+            .expect("failed to spawn resources thread");
+
+        (Some((symbols_tool, symbol_index)), Some(index_handle), Some(resources_handle))
     } else {
-        None
+        (None, None, None)
     };
 
-    let config = NervConfig::load(nerv_dir);
-    let mut auth = crate::core::auth::AuthStorage::load(nerv_dir);
-    let model_registry = Arc::new(ModelRegistry::new(&config, &mut auth, nerv_dir));
+    // Join registry — was 88ms blocking on main thread, now overlaps with
+    // tree-sitter init + index cache open + resource loading.
+    let model_registry = Arc::new(registry_handle.join().expect("nerv-registry thread panicked"));
 
     // In talk mode we skip all project context, memory, and the symbol index
     // scan — the session is a plain conversational assistant with no tools.
@@ -169,7 +191,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     let cancel_flag = agent.cancel.clone();
     let midturn_inject = agent.midturn_inject.clone();
 
-    let session_manager = SessionManager::new(&crate::repo_data_dir(cwd));
+    let session_manager = session_mgr_handle.join().expect("nerv-session-mgr thread panicked");
 
     let mut session = AgentSession::new(
         agent,

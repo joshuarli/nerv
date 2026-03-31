@@ -44,6 +44,10 @@ fn main() {
             println!("nerv {}", env!("CARGO_PKG_VERSION"));
             return;
         }
+        Cmd::BenchStartup => {
+            bench_startup();
+            return;
+        }
         Cmd::Print { model, max_turns, verbose } => {
             print_mode(model.as_deref(), max_turns, verbose);
             return;
@@ -1107,6 +1111,58 @@ fn format_args_brief(args: &serde_json::Value) -> String {
         parts.push(part);
     }
     parts.join(", ")
+}
+
+fn bench_startup() {
+    use std::time::Instant;
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let nerv_dir = nerv::nerv_dir();
+    std::fs::create_dir_all(nerv_dir).ok();
+
+    // Parallel bootstrap first — before anything warms the Keychain cache.
+    let t1 = Instant::now();
+    let b = nerv::bootstrap::bootstrap(
+        &cwd,
+        nerv_dir,
+        nerv::bootstrap::BootstrapOptions { memory: false, permissions: false, talk_mode: false },
+    );
+    let t_bootstrap = t1.elapsed();
+    std::hint::black_box(&b.config);
+    println!("parallel bootstrap wall time: {:>8.2?}", t_bootstrap);
+    println!();
+
+    // Serial breakdown — shows the cost of each component in isolation.
+    let t0 = Instant::now();
+
+    let config = nerv::core::config::NervConfig::load(nerv_dir);
+    let t_config = t0.elapsed();
+
+    let t_auth = t0.elapsed();
+
+    let _registry = nerv::core::model_registry::ModelRegistry::new(&config, nerv_dir);
+    let t_registry = t0.elapsed();
+
+    let _resources = nerv::core::resource_loader::load_resources(&cwd, nerv_dir);
+    let t_resources = t0.elapsed();
+
+    let _symbols = nerv::tools::SymbolsTool::new(cwd.clone());
+    let t_symbols_new = t0.elapsed();
+
+    let repo_dir = nerv::repo_data_dir(&cwd);
+    let _session_mgr = nerv::session::SessionManager::new(&repo_dir);
+    let t_session = t0.elapsed();
+
+    println!("serial phase costs (warm cache):");
+    println!("  config load:       {:>8.2?}", t_config);
+    println!("  auth load:         {:>8.2?}", t_auth - t_config);
+    println!("  model registry:    {:>8.2?}", t_registry - t_auth);
+    println!("  load_resources:    {:>8.2?}", t_resources - t_registry);
+    println!("  symbol init:       {:>8.2?}", t_symbols_new - t_resources);
+    println!("  session_mgr open:  {:>8.2?}", t_session - t_symbols_new);
+    println!("  ─────────────────────────────");
+    println!("  serial total:      {:>8.2?}", t_session);
+    println!("  (serial run benefits from Keychain cache warmed by bootstrap above)")
 }
 
 fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {

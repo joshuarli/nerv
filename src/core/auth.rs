@@ -55,6 +55,47 @@ impl AuthStorage {
         matches!(self.get(provider), Some(Credential::OAuth(_)))
     }
 
+    /// Resolve credentials for a provider in a single Keychain call, returning
+    /// `(api_key, is_oauth)`. Replaces the separate `is_oauth` + `api_key` calls
+    /// that previously spawned two `security` subprocesses for OAuth providers.
+    pub fn resolve(&mut self, provider: &str) -> Option<(String, bool)> {
+        // 1. Environment variable (never OAuth)
+        let env_key = match provider {
+            "anthropic" => std::env::var("ANTHROPIC_API_KEY").ok(),
+            "codex" => std::env::var("OPENAI_API_KEY").ok(),
+            "openrouter" => std::env::var("OPENROUTER_API_KEY").ok(),
+            _ => None,
+        };
+        if let Some(key) = env_key {
+            return Some((key, false));
+        }
+        // 2. Single Keychain lookup
+        match self.get(provider)? {
+            Credential::ApiKey { key } => Some((key, false)),
+            Credential::OAuth(creds) => {
+                let now = epoch_millis();
+                if now >= creds.expires {
+                    match refresh_oauth_token(provider, &creds) {
+                        Ok(new_creds) => {
+                            let access = new_creds.access.clone();
+                            self.set(provider, Credential::OAuth(new_creds));
+                            Some((access, true))
+                        }
+                        Err(e) => {
+                            crate::log::error(&format!(
+                                "OAuth refresh failed for {}: {}",
+                                provider, e
+                            ));
+                            None
+                        }
+                    }
+                } else {
+                    Some((creds.access, true))
+                }
+            }
+        }
+    }
+
     /// Get an API key for a provider, checking env vars first, then Keychain.
     /// For OAuth credentials, auto-refreshes if expired.
     pub fn api_key(&mut self, provider: &str) -> Option<String> {

@@ -28,7 +28,7 @@ impl ModelRegistry {
         }
     }
 
-    pub fn new(config: &NervConfig, auth: &mut AuthStorage, nerv_dir: &std::path::Path) -> Self {
+    pub fn new(config: &NervConfig, nerv_dir: &std::path::Path) -> Self {
         let mut registry = ProviderRegistry::new();
 
         // Always include built-in models; available_models() filters by registered providers.
@@ -36,10 +36,21 @@ impl ModelRegistry {
         built_in.extend(builtin_codex_models());
         built_in.extend(builtin_openrouter_models());
 
-        // Register Anthropic provider if auth is available
-        let is_oauth = auth.is_oauth("anthropic");
-        let extra_headers: Vec<(String, String)> = config.effective_headers("anthropic");
-        if let Some(api_key) = auth.api_key("anthropic") {
+        // Resolve all three provider credentials in parallel — each previously
+        // spawned a `security` subprocess (~32ms each, ~96ms total serial).
+        let nd = nerv_dir.to_path_buf();
+        let anthropic_h = std::thread::spawn(move || AuthStorage::load(&nd).resolve("anthropic"));
+        let nd = nerv_dir.to_path_buf();
+        let codex_h = std::thread::spawn(move || AuthStorage::load(&nd).resolve("codex"));
+        let nd = nerv_dir.to_path_buf();
+        let openrouter_h = std::thread::spawn(move || AuthStorage::load(&nd).resolve("openrouter"));
+        let anthropic_cred = anthropic_h.join().unwrap_or(None);
+        let codex_cred = codex_h.join().unwrap_or(None);
+        let openrouter_cred = openrouter_h.join().unwrap_or(None);
+
+        // Register Anthropic provider if auth is available.
+        if let Some((api_key, is_oauth)) = anthropic_cred {
+            let extra_headers = config.effective_headers("anthropic");
             let provider = if is_oauth {
                 AnthropicProvider::new_oauth(api_key)
             } else {
@@ -51,7 +62,7 @@ impl ModelRegistry {
 
         // Register Codex provider if auth is available.
         // Codex uses the ChatGPT backend Responses API, not the public OpenAI API.
-        if let Some(api_key) = auth.api_key("codex") {
+        if let Some((api_key, _)) = codex_cred {
             let extra_headers = config.effective_headers("codex");
             let provider =
                 crate::agent::CodexProvider::new(api_key).with_headers(extra_headers);
@@ -60,7 +71,7 @@ impl ModelRegistry {
 
         // Register OpenRouter provider if auth is available.
         // OpenRouter is OpenAI-compat at https://openrouter.ai/api/v1.
-        if let Some(api_key) = auth.api_key("openrouter") {
+        if let Some((api_key, _)) = openrouter_cred {
             let extra_headers = config.effective_headers("openrouter");
             let provider = OpenAICompatProvider::new(
                 "openrouter".into(),
