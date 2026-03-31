@@ -27,9 +27,9 @@ impl ModelRegistry {
     pub fn new(config: &NervConfig, auth: &mut AuthStorage, nerv_dir: &std::path::Path) -> Self {
         let mut registry = ProviderRegistry::new();
 
-        // Always include built-in models; available_models() filters by registered
-        // providers
-        let built_in = builtin_anthropic_models();
+        // Always include built-in models; available_models() filters by registered providers.
+        let mut built_in = builtin_anthropic_models();
+        built_in.extend(builtin_codex_models());
 
         // Register Anthropic provider if auth is available
         let is_oauth = auth.is_oauth("anthropic");
@@ -42,6 +42,15 @@ impl ModelRegistry {
             }
             .with_headers(extra_headers);
             registry.register("anthropic", Arc::new(provider));
+        }
+
+        // Register Codex provider if auth is available.
+        // Codex uses the ChatGPT backend Responses API, not the public OpenAI API.
+        if let Some(api_key) = auth.api_key("codex") {
+            let extra_headers = config.effective_headers("codex");
+            let provider =
+                crate::agent::CodexProvider::new(api_key).with_headers(extra_headers);
+            registry.register("codex", Arc::new(provider));
         }
 
         // Register custom providers
@@ -217,6 +226,34 @@ fn builtin_anthropic_models() -> Vec<Model> {
             supports_xhigh: false,
             pricing: ModelPricing { input: 0.80, output: 4.0, cache_read: 0.08, cache_write: 1.0 },
         },
+    ]
+}
+
+fn builtin_codex_models() -> Vec<Model> {
+    fn m(id: &str, name: &str, ctx: u32, max_out: u32, reasoning: bool, inp: f64, out: f64, cr: f64) -> Model {
+        Model {
+            id: id.into(),
+            name: name.into(),
+            provider_name: "codex".into(),
+            context_window: ctx,
+            max_output_tokens: max_out,
+            reasoning,
+            supports_adaptive_thinking: reasoning,
+            supports_xhigh: reasoning,
+            pricing: ModelPricing { input: inp, output: out, cache_read: cr, cache_write: 0.0 },
+        }
+    }
+    vec![
+        m("gpt-5",               "GPT-5",               272_000, 128_000, true,  3.0,  12.0, 0.3),
+        m("gpt-5.1",             "GPT-5.1",             272_000, 128_000, true,  1.25, 10.0, 0.125),
+        m("gpt-5.1-codex-max",   "GPT-5.1 Codex Max",   272_000, 128_000, true,  1.25, 10.0, 0.125),
+        m("gpt-5.1-codex-mini",  "GPT-5.1 Codex Mini",  272_000, 128_000, true,  0.25,  2.0, 0.025),
+        m("gpt-5.2",             "GPT-5.2",             272_000, 128_000, true,  1.75, 14.0, 0.175),
+        m("gpt-5.2-codex",       "GPT-5.2 Codex",       272_000, 128_000, true,  1.75, 14.0, 0.175),
+        m("gpt-5.3-codex",       "GPT-5.3 Codex",       272_000, 128_000, true,  1.75, 14.0, 0.175),
+        m("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark", 128_000, 128_000, true,  0.0,   0.0, 0.0),
+        m("gpt-5.4",             "GPT-5.4",             272_000, 128_000, true,  2.5,  15.0, 0.25),
+        m("gpt-5.4-mini",        "GPT-5.4 Mini",        272_000, 128_000, true,  0.75,  4.5, 0.075),
     ]
 }
 

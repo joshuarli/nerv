@@ -75,17 +75,25 @@ pub struct OpenAICompatProvider {
     api_key: Option<String>,
     base_url: String,
     name: String,
+    extra_headers: Vec<(String, String)>,
 }
 
 impl OpenAICompatProvider {
     pub fn new(name: String, base_url: String, api_key: Option<String>) -> Self {
-        Self { api_key, base_url, name }
+        Self { api_key, base_url, name, extra_headers: Vec::new() }
+    }
+
+    pub fn with_headers(mut self, headers: Vec<(String, String)>) -> Self {
+        self.extra_headers = headers;
+        self
     }
 
     pub fn build_request_body(&self, request: &CompletionRequest) -> serde_json::Value {
         let mut body = serde_json::json!({
             "model": request.model_id,
-            "max_tokens": request.max_tokens,
+            // max_completion_tokens is the current field; max_tokens is the
+            // deprecated alias. Some newer OpenAI models reject max_tokens.
+            "max_completion_tokens": request.max_tokens,
             "stream": true,
             "stream_options": { "include_usage": true },
         });
@@ -169,7 +177,8 @@ impl OpenAICompatProvider {
             match thinking {
                 ThinkingRequest::Budget { tokens } => {
                     body["reasoning_effort"] = serde_json::json!("medium");
-                    body["max_completion_tokens"] = serde_json::json!(request.max_tokens + tokens);
+                    body["max_completion_tokens"] =
+                        serde_json::json!(request.max_tokens + tokens);
                 }
             }
         }
@@ -190,6 +199,9 @@ impl Provider for OpenAICompatProvider {
         if let Some(ref key) = self.api_key {
             req = req.header("authorization", &format!("Bearer {}", key));
         }
+        for (k, v) in &self.extra_headers {
+            req = req.header(k, v);
+        }
         matches!(req.call().map(|r| r.status().as_u16()), Ok(200))
     }
 
@@ -205,6 +217,9 @@ impl Provider for OpenAICompatProvider {
         let mut req = crate::http::agent().post(&url).header("content-type", "application/json");
         if let Some(ref key) = self.api_key {
             req = req.header("authorization", &format!("Bearer {}", key));
+        }
+        for (k, v) in &self.extra_headers {
+            req = req.header(k, v);
         }
 
         let response =

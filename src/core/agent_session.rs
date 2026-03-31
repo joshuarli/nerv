@@ -1443,6 +1443,178 @@ impl AgentSession {
     }
 }
 
+fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<AgentSessionEvent>) {
+    match provider {
+        "anthropic" => {
+            let tx = event_tx.clone();
+            let result = super::auth::login_anthropic(
+                &|url| {
+                    let _ = tx.send(AgentSessionEvent::Status {
+                        message: format!(
+                            "Opening browser for Anthropic login...\n\nIf the browser doesn't open, visit:\n{}",
+                            url
+                        ),
+                        is_error: false,
+                    });
+                    // Try to open browser
+                    let _ = std::process::Command::new("open").arg(url).spawn();
+                },
+                &|msg| {
+                    let _ = tx.send(AgentSessionEvent::Status {
+                        message: msg.to_string(),
+                        is_error: false,
+                    });
+                },
+            );
+
+            match result {
+                Ok(creds) => {
+                    let nerv_dir = crate::nerv_dir();
+                    let mut auth = super::auth::AuthStorage::load(nerv_dir);
+                    let api_key = creds.access.clone();
+                    auth.set("anthropic", super::auth::Credential::OAuth(creds));
+
+                    // Register the provider (OAuth uses Bearer auth)
+                    let nerv_config = super::config::NervConfig::load(nerv_dir);
+                    let extra_headers: Vec<(String, String)> =
+                        nerv_config.effective_headers("anthropic");
+                    let provider = std::sync::Arc::new(
+                        crate::agent::AnthropicProvider::new_oauth(api_key)
+                            .with_headers(extra_headers),
+                    );
+                    session
+                        .agent
+                        .provider_registry
+                        .write()
+                        .unwrap()
+                        .register("anthropic", provider);
+
+                    // Set default model — haiku is always available with OAuth
+                    if session.agent.state.model.is_none() {
+                        let model = crate::agent::types::Model {
+                            id: "claude-sonnet-4-6".into(),
+                            name: "Claude Sonnet 4.6".into(),
+                            provider_name: "anthropic".into(),
+                            context_window: 200_000,
+                            max_output_tokens: 32_000,
+                            reasoning: true,
+                            supports_adaptive_thinking: true,
+                            supports_xhigh: false,
+                            pricing: crate::agent::types::ModelPricing {
+                                input: 3.0,
+                                output: 15.0,
+                                cache_read: 0.3,
+                                cache_write: 3.75,
+                            },
+                        };
+                        session.agent.state.model = Some(model.clone());
+                        let _ = event_tx.send(AgentSessionEvent::ModelChanged { model });
+                    }
+
+                    // Show available models from this provider
+                    let mut msg = String::from("Logged in to Anthropic.\n\nAvailable models:");
+                    let current_id =
+                        session.agent.state.model.as_ref().map(|m| m.id.as_str()).unwrap_or("");
+                    for m in session.model_registry.all_models() {
+                        if m.provider_name == "anthropic" {
+                            let marker = if m.id == current_id { " *" } else { "" };
+                            msg.push_str(&format!("\n  {} ({}){}", m.name, m.id, marker));
+                        }
+                    }
+                    msg.push_str("\n\n/model <name> — switch model (e.g. /model opus)");
+                    let _ =
+                        event_tx.send(AgentSessionEvent::Status { message: msg, is_error: false });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(AgentSessionEvent::Status {
+                        message: format!("Login failed: {}", e),
+                        is_error: true,
+                    });
+                }
+            }
+        }
+        "codex" => {
+            let tx = event_tx.clone();
+            let result = super::auth::login_codex(
+                &|url| {
+                    let _ = tx.send(AgentSessionEvent::Status {
+                        message: format!(
+                            "Opening browser for Codex login...\n\nIf the browser doesn't open, visit:\n{}",
+                            url
+                        ),
+                        is_error: false,
+                    });
+                    let _ = std::process::Command::new("open").arg(url).spawn();
+                },
+                &|msg| {
+                    let _ = tx.send(AgentSessionEvent::Status {
+                        message: msg.to_string(),
+                        is_error: false,
+                    });
+                },
+            );
+            match result {
+                Ok(creds) => {
+                    let nerv_dir = crate::nerv_dir();
+                    let mut auth = super::auth::AuthStorage::load(nerv_dir);
+                    let api_key = creds.access.clone();
+                    auth.set("codex", super::auth::Credential::OAuth(creds));
+
+                    let nerv_config = super::config::NervConfig::load(nerv_dir);
+                    let provider = std::sync::Arc::new(
+                        crate::agent::CodexProvider::new(api_key)
+                            .with_headers(nerv_config.effective_headers("codex")),
+                    );
+                    session
+                        .agent
+                        .provider_registry
+                        .write()
+                        .unwrap()
+                        .register("codex", provider);
+
+                    // Default to the first available codex model if none is set.
+                    if session.agent.state.model.is_none()
+                        && let Some(model) = session
+                            .model_registry
+                            .all_models()
+                            .into_iter()
+                            .find(|m| m.provider_name == "codex")
+                            .cloned()
+                    {
+                        session.agent.state.model = Some(model.clone());
+                        let _ = event_tx.send(AgentSessionEvent::ModelChanged { model });
+                    }
+
+                    let mut msg = String::from("Logged in to Codex.\n\nAvailable models:");
+                    let current_id =
+                        session.agent.state.model.as_ref().map(|m| m.id.as_str()).unwrap_or("");
+                    for m in session.model_registry.all_models() {
+                        if m.provider_name == "codex" {
+                            let marker = if m.id == current_id { " *" } else { "" };
+                            msg.push_str(&format!("\n  {} ({}){}", m.name, m.id, marker));
+                        }
+                    }
+                    msg.push_str("\n\n/model <name> — switch model");
+                    let _ =
+                        event_tx.send(AgentSessionEvent::Status { message: msg, is_error: false });
+                }
+                Err(e) => {
+                    let _ = event_tx.send(AgentSessionEvent::Status {
+                        message: format!("Login failed: {}", e),
+                        is_error: true,
+                    });
+                }
+            }
+        }
+        _ => {
+            let _ = event_tx.send(AgentSessionEvent::Status {
+                message: format!("Unknown provider: {}. Supported: anthropic, codex", provider),
+                is_error: true,
+            });
+        }
+    }
+}
+
 fn permission_key(tool: &str, args_json: &str) -> String {
     format!("{}:{}", tool, args_json)
 }
