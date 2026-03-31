@@ -374,6 +374,19 @@ impl SessionManager {
         self.append_entry(entry)
     }
 
+    pub fn append_btw(&mut self, note: &str, response: &str, model_id: &str) -> anyhow::Result<()> {
+        use crate::session::types::BtwEntry;
+        let entry = SessionEntry::Btw(BtwEntry {
+            id: self.next_id(),
+            parent_id: self.leaf_id.clone(),
+            timestamp: now_iso(),
+            note: note.to_string(),
+            response: response.to_string(),
+            model_id: model_id.to_string(),
+        });
+        self.append_entry(entry)
+    }
+
     pub fn append_thinking_level_change(&mut self, level: ThinkingLevel) -> anyhow::Result<()> {
         let level_str = serde_json::to_value(level)?.as_str().unwrap_or("off").to_string();
         let entry = SessionEntry::ThinkingLevelChange(ThinkingLevelChangeEntry {
@@ -1217,6 +1230,13 @@ fn summarize_entry(entry: &SessionEntry) -> (String, String, String, bool, bool)
             false,
             false,
         ),
+        SessionEntry::Btw(b) => (
+            "btw".into(),
+            truncate(&b.note, 80),
+            String::new(),
+            false,
+            false,
+        ),
     }
 }
 
@@ -1232,6 +1252,7 @@ fn entry_timestamp(entry: &SessionEntry) -> String {
         SessionEntry::SystemPrompt(e) => e.timestamp.clone(),
         SessionEntry::CustomMessage(e) => e.timestamp.clone(),
         SessionEntry::PermissionAccept(e) => e.timestamp.clone(),
+        SessionEntry::Btw(e) => e.timestamp.clone(),
     }
 }
 

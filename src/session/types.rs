@@ -27,6 +27,8 @@ pub enum SessionEntry {
     SystemPrompt(SystemPromptEntry),
     #[serde(rename = "permission_accept")]
     PermissionAccept(PermissionAcceptEntry),
+    #[serde(rename = "btw")]
+    Btw(BtwEntry),
 }
 
 impl SessionEntry {
@@ -42,6 +44,7 @@ impl SessionEntry {
             Self::SessionInfo(e) => &e.id,
             Self::SystemPrompt(e) => &e.id,
             Self::PermissionAccept(e) => &e.id,
+            Self::Btw(e) => &e.id,
         }
     }
 
@@ -57,6 +60,7 @@ impl SessionEntry {
             Self::SessionInfo(e) => e.id = new_id,
             Self::SystemPrompt(e) => e.id = new_id,
             Self::PermissionAccept(e) => e.id = new_id,
+            Self::Btw(e) => e.id = new_id,
         }
     }
 
@@ -72,6 +76,7 @@ impl SessionEntry {
             Self::SessionInfo(e) => e.parent_id = new_parent,
             Self::SystemPrompt(e) => e.parent_id = new_parent,
             Self::PermissionAccept(e) => e.parent_id = new_parent,
+            Self::Btw(e) => e.parent_id = new_parent,
         }
     }
 
@@ -87,6 +92,7 @@ impl SessionEntry {
             Self::SessionInfo(e) => e.parent_id.as_deref(),
             Self::SystemPrompt(e) => e.parent_id.as_deref(),
             Self::PermissionAccept(e) => e.parent_id.as_deref(),
+            Self::Btw(e) => e.parent_id.as_deref(),
         }
     }
 }
@@ -205,6 +211,20 @@ pub struct SystemPromptEntry {
     pub timestamp: String,
     pub prompt: String,
     pub token_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtwEntry {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub timestamp: String,
+    /// The user's original question/note.
+    pub note: String,
+    /// The model's response (may be empty if dismissed before completion).
+    pub response: String,
+    /// Model ID used for this btw call.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -646,10 +646,44 @@ fn main() {
                                 && (keys::matches_key(seq, "escape") || keys::matches_key(seq, "enter"))
                             {
                                 if let Some(panel) = layout.btw_panel.take() {
+                                    // Save to session if the call completed.
+                                    if panel.done && !panel.response().is_empty() {
+                                        if let Some(model) = interactive.current_model() {
+                                            let _ = interactive.cmd_tx().try_send(
+                                                nerv::core::SessionCommand::RecordBtw {
+                                                    note: panel.note.clone(),
+                                                    response: panel.response().to_string(),
+                                                    model_id: model.id.clone(),
+                                                },
+                                            );
+                                        }
+                                    }
                                     panel.cancel();
                                 }
                                 tui.request_render(false); render_frame!(tui, layout);
                                 continue;
+                            }
+                            // Copy btw response to clipboard.
+                            if layout.btw_panel.is_some() && seq == b"c" {
+                                if let Some(panel) = &layout.btw_panel {
+                                    if panel.done {
+                                        let text = panel.response().to_string();
+                                        match nerv::interactive::event_loop::copy_to_clipboard(&text) {
+                                            Ok(()) => push_status(&mut layout, "Copied btw response.", false),
+                                            Err(e) => push_status(&mut layout, &format!("Copy failed: {e}"), true),
+                                        }
+                                        tui.request_render(false); render_frame!(tui, layout);
+                                        continue;
+                                    }
+                                }
+                            }
+                            // Scroll the btw panel.
+                            if let Some(panel) = &mut layout.btw_panel {
+                                let cols = tui.width();
+                                let up = keys::matches_key(seq, "up") || seq == b"k";
+                                let down = keys::matches_key(seq, "down") || seq == b"j";
+                                if up { panel.scroll_up(3, cols as usize); tui.request_render(false); render_frame!(tui, layout); continue; }
+                                if down { panel.scroll_down(3); tui.request_render(false); render_frame!(tui, layout); continue; }
                             }
                             if keys::matches_key(seq, "escape") || keys::matches_key(seq, "ctrl+d") {
                                 cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
