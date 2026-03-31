@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::time::Instant;
 
 use crate::interactive::display::{format_tool_call, render_tool_result_line, truncate_str};
 use crate::interactive::theme;
@@ -40,6 +41,7 @@ struct StreamingState {
     thinking: String,
     text: String,
     thinking_committed: bool,
+    start: Instant,
 }
 
 impl Default for ChatWriter {
@@ -115,6 +117,7 @@ impl ChatWriter {
             thinking: String::new(),
             text: String::new(),
             thinking_committed: false,
+            start: Instant::now(),
         });
     }
 
@@ -242,16 +245,30 @@ impl Component for ChatWriter {
 
         // Live streaming content (never cached — changes every frame)
         if let Some(ref s) = self.streaming {
-            if !s.thinking.is_empty() && !s.thinking_committed {
-                for line in s.thinking.lines().rev().take(3).collect::<Vec<_>>().into_iter().rev() {
-                    out.extend(wrap_text_with_ansi(
-                        &format!("{}│ {}{}", theme::THINKING, line, theme::RESET),
-                        width,
-                    ));
+            if s.text.is_empty() && s.thinking.is_empty() {
+                // No content yet — show animated "awaiting response" dots
+                let step = (s.start.elapsed().as_millis() / 400) as usize % 4;
+                let dots = ["..", "...", "..", "."][step];
+                out.push(format!(
+                    "{}awaiting response{}{}",
+                    theme::DIM,
+                    dots,
+                    theme::RESET,
+                ));
+            } else {
+                if !s.thinking.is_empty() && !s.thinking_committed {
+                    for line in
+                        s.thinking.lines().rev().take(3).collect::<Vec<_>>().into_iter().rev()
+                    {
+                        out.extend(wrap_text_with_ansi(
+                            &format!("{}│ {}{}", theme::THINKING, line, theme::RESET),
+                            width,
+                        ));
+                    }
                 }
-            }
-            if !s.text.is_empty() {
-                out.extend(Markdown::new(&s.text).render(width));
+                if !s.text.is_empty() {
+                    out.extend(Markdown::new(&s.text).render(width));
+                }
             }
         }
 
