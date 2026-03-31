@@ -575,6 +575,18 @@ function toggleTool(header) {
                                 _ => {}
                             }
                         }
+                        if let Some(ref u) = a.usage {
+                            let context_used = u.input + u.output;
+                            let mut meta = format!("↑{} ↓{}", u.input, u.output);
+                            if u.cache_read > 0 {
+                                meta.push_str(&format!(" Rc{}", u.cache_read));
+                            }
+                            if u.cache_write > 0 {
+                                meta.push_str(&format!(" Wc{}", u.cache_write));
+                            }
+                            meta.push_str(&format!(" · {} context", context_used));
+                            html.push_str(&format!("<div class='meta'>{}</div>", meta));
+                        }
                         html.push_str("</div>\n");
                     }
                     _ => {}
@@ -895,6 +907,16 @@ mod tests {
         })
     }
 
+    fn archived_assistant_with_usage(text: &str) -> AgentMessage {
+        use crate::agent::types::Usage;
+        AgentMessage::Assistant(AssistantMessage {
+            content: vec![ContentBlock::Text { text: text.to_string() }],
+            stop_reason: StopReason::EndTurn,
+            usage: Some(Usage { input: 1000, output: 200, cache_read: 500, cache_write: 50 }),
+            timestamp: 0,
+        })
+    }
+
     fn compaction_entry_with_archived(archived: Vec<AgentMessage>) -> SessionEntry {
         SessionEntry::Compaction(CompactionEntry {
             id: "c1".to_string(),
@@ -1009,6 +1031,27 @@ mod tests {
             surviving_pos < banner_pos,
             "surviving message must appear before the compaction banner (it precedes it in history)"
         );
+    }
+
+    #[test]
+    fn html_archived_assistant_messages_show_token_metadata() {
+        let entries = vec![
+            user_entry("post question"),
+            compaction_entry_with_archived(vec![
+                archived_user("old question"),
+                archived_assistant_with_usage("old answer"),
+            ]),
+        ];
+        let html = render_to_string(&entries);
+
+        // The meta div must appear and contain the usage fields.
+        // context_used = input + output = 1000 + 200 = 1200
+        assert!(html.contains("↑1000"), "input tokens missing: {html}");
+        assert!(html.contains("↓200"), "output tokens missing: {html}");
+        assert!(html.contains("Rc500"), "cache_read missing: {html}");
+        assert!(html.contains("Wc50"), "cache_write missing: {html}");
+        assert!(html.contains("1200 context"), "context_used missing: {html}");
+        assert!(html.contains("class='meta'"), "meta div missing: {html}");
     }
 
     #[test]
