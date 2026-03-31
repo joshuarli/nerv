@@ -1204,7 +1204,10 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
                     });
                 },
                 &|msg| {
-                    let _ = tx.send(AgentSessionEvent::Status { message: msg.to_string(), is_error: false });
+                    let _ = tx.send(AgentSessionEvent::Status {
+                        message: msg.to_string(),
+                        is_error: false,
+                    });
                 },
             );
             match result {
@@ -1214,17 +1217,14 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
                     let api_key = creds.access.clone();
                     auth.set("codex", super::auth::Credential::OAuth(creds));
 
-                    // Register the provider (OAuth uses Bearer auth)
                     let nerv_config = super::config::NervConfig::load(nerv_dir);
-                    let extra_headers: Vec<(String, String)> =
-                        nerv_config.effective_headers("codex");
                     let provider = std::sync::Arc::new(
-                        crate::agent::CodexProvider::new(
+                        crate::agent::OpenAICompatProvider::new(
                             "codex".to_string(),
-                            "https://api.openai.com/v1".to_string(),
+                            "https://api.openai.com".to_string(),
                             Some(api_key),
                         )
-                        .with_headers(extra_headers),
+                        .with_headers(nerv_config.effective_headers("codex")),
                     );
                     session
                         .agent
@@ -1233,29 +1233,19 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
                         .unwrap()
                         .register("codex", provider);
 
-                    // Set default model
-                    if session.agent.state.model.is_none() {
-                        let model = crate::agent::types::Model {
-                            id: "gpt-4o".into(),
-                            name: "GPT-4o".into(),
-                            provider_name: "codex".into(),
-                            context_window: 128_000,
-                            max_output_tokens: 16_384,
-                            reasoning: false,
-                            supports_adaptive_thinking: false,
-                            supports_xhigh: false,
-                            pricing: crate::agent::types::ModelPricing {
-                                input: 5.0,
-                                output: 15.0,
-                                cache_read: 0.0,
-                                cache_write: 0.0,
-                            },
-                        };
+                    // Default to the first available codex model if none is set.
+                    if session.agent.state.model.is_none()
+                        && let Some(model) = session
+                            .model_registry
+                            .all_models()
+                            .into_iter()
+                            .find(|m| m.provider_name == "codex")
+                            .cloned()
+                    {
                         session.agent.state.model = Some(model.clone());
                         let _ = event_tx.send(AgentSessionEvent::ModelChanged { model });
                     }
 
-                    // Show available models from this provider
                     let mut msg = String::from("Logged in to Codex.\n\nAvailable models:");
                     let current_id =
                         session.agent.state.model.as_ref().map(|m| m.id.as_str()).unwrap_or("");
@@ -1265,7 +1255,7 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
                             msg.push_str(&format!("\n  {} ({}){}", m.name, m.id, marker));
                         }
                     }
-                    msg.push_str("\n\n/model <name> — switch model (e.g. /model gpt-4o)");
+                    msg.push_str("\n\n/model <name> — switch model");
                     let _ =
                         event_tx.send(AgentSessionEvent::Status { message: msg, is_error: false });
                 }

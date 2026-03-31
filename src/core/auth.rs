@@ -163,7 +163,6 @@ const CALLBACK_PORT: u16 = 53692;
 const CALLBACK_PATH: &str = "/callback";
 const SCOPES: &str = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 
-// OpenAI Codex OAuth constants
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const CODEX_AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
 const CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
@@ -429,51 +428,19 @@ fn hex_val(c: u8) -> Option<u8> {
     }
 }
 
-// ============================================================================
-// OpenAI Codex OAuth
-// ============================================================================
-
 fn refresh_codex_token(refresh_token: &str) -> Result<OAuthCredentials, String> {
     let body = serde_json::json!({
         "grant_type": "refresh_token",
         "client_id": CODEX_CLIENT_ID,
         "refresh_token": refresh_token,
     });
-
     let response = crate::http::agent()
         .post(CODEX_TOKEN_URL)
         .header("content-type", "application/json")
         .header("accept", "application/json")
         .send_json(&body)
         .map_err(|e| format!("Token refresh failed: {}", e))?;
-
-    parse_codex_token_response(response, "Token refresh")
-}
-
-fn parse_codex_token_response(
-    response: ureq::http::Response<ureq::Body>,
-    context: &str,
-) -> Result<OAuthCredentials, String> {
-    let status = response.status();
-    if status != 200 {
-        let err_body = response.into_body().read_to_string().unwrap_or_default();
-        return Err(format!("{} failed: HTTP {} - {}", context, status, err_body));
-    }
-
-    let data: serde_json::Value = response
-        .into_body()
-        .read_json()
-        .map_err(|e| format!("{} returned invalid JSON: {}", context, e))?;
-
-    let access = data["access_token"].as_str().ok_or("Missing access_token")?.to_string();
-    let refresh = data["refresh_token"].as_str().ok_or("Missing refresh_token")?.to_string();
-    let expires_in = data["expires_in"].as_u64().unwrap_or(3600);
-
-    Ok(OAuthCredentials {
-        refresh,
-        access,
-        expires: epoch_millis() + expires_in * 1000 - 5 * 60 * 1000,
-    })
+    parse_token_response(response, "Token refresh")
 }
 
 /// Run the OpenAI Codex OAuth login flow. Blocks until complete.
@@ -481,7 +448,7 @@ pub fn login_codex(
     on_url: &dyn Fn(&str),
     on_status: &dyn Fn(&str),
 ) -> Result<OAuthCredentials, String> {
-    let (verifier, challenge) = generate_codex_pkce();
+    let (verifier, challenge) = generate_pkce();
 
     let auth_url = format!(
         "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}&codex_cli_simplified_flow=true&originator=nerv",
@@ -498,55 +465,14 @@ pub fn login_codex(
 
     on_url(&auth_url);
 
-    let (code, state) = wait_for_codex_callback(&listener)?;
+    let (code, state) = wait_for_callback(&listener)?;
 
     if state != verifier {
         return Err("OAuth state mismatch".into());
     }
 
     on_status("Exchanging authorization code for tokens...");
-    exchange_codex_code(&code, &verifier)
-}
 
-fn wait_for_codex_callback(listener: &std::net::TcpListener) -> Result<(String, String), String> {
-    let (mut stream, _addr) =
-        listener.accept().map_err(|e| format!("Failed to accept callback connection: {}", e))?;
-
-    let mut reader = std::io::BufReader::new(&stream);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line).map_err(|e| format!("Failed to read request: {}", e))?;
-
-    let path = request_line.split_whitespace().nth(1).ok_or("Invalid HTTP request")?;
-
-    let query = path.split('?').nth(1).ok_or("No query string in callback")?;
-
-    let mut code = None;
-    let mut state = None;
-    for param in query.split('&') {
-        let mut kv = param.splitn(2, '=');
-        match (kv.next(), kv.next()) {
-            (Some("code"), Some(v)) => code = Some(urldecoded(v)),
-            (Some("state"), Some(v)) => state = Some(urldecoded(v)),
-            _ => {}
-        }
-    }
-
-    let body = "<!DOCTYPE html><html><body><h2>Authentication successful!</h2><p>You can close this window and return to nerv.</p></body></html>";
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    let _ = stream.write_all(response.as_bytes());
-    let _ = stream.flush();
-
-    match (code, state) {
-        (Some(c), Some(s)) => Ok((c, s)),
-        _ => Err("Missing code or state in callback".into()),
-    }
-}
-
-fn exchange_codex_code(code: &str, verifier: &str) -> Result<OAuthCredentials, String> {
     let body = serde_json::json!({
         "grant_type": "authorization_code",
         "client_id": CODEX_CLIENT_ID,
@@ -554,28 +480,11 @@ fn exchange_codex_code(code: &str, verifier: &str) -> Result<OAuthCredentials, S
         "redirect_uri": CODEX_REDIRECT_URI,
         "code_verifier": verifier,
     });
-
     let response = crate::http::agent()
         .post(CODEX_TOKEN_URL)
         .header("content-type", "application/json")
         .header("accept", "application/json")
         .send_json(&body)
         .map_err(|e| format!("Token exchange failed: {}", e))?;
-
-    parse_codex_token_response(response, "Token exchange")
-}
-
-fn generate_codex_pkce() -> (String, String) {
-    use sha2::{Digest, Sha256};
-
-    let mut verifier_bytes = [0u8; 32];
-    getrandom(&mut verifier_bytes);
-    let verifier = base64url_encode(&verifier_bytes);
-
-    let mut hasher = Sha256::new();
-    hasher.update(verifier.as_bytes());
-    let hash = hasher.finalize();
-    let challenge = base64url_encode(&hash);
-
-    (verifier, challenge)
+    parse_token_response(response, "Token exchange")
 }

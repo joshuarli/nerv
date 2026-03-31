@@ -5,7 +5,7 @@ use super::config::{CustomProviderConfig, NervConfig};
 use super::local_models::load_models;
 use crate::agent::provider::ProviderRegistry;
 use crate::agent::types::{Model, ModelPricing};
-use crate::agent::{AnthropicProvider, CodexProvider, OpenAICompatProvider};
+use crate::agent::{AnthropicProvider, OpenAICompatProvider};
 
 pub struct ModelRegistry {
     built_in: Vec<Model>,
@@ -27,12 +27,9 @@ impl ModelRegistry {
     pub fn new(config: &NervConfig, auth: &mut AuthStorage, nerv_dir: &std::path::Path) -> Self {
         let mut registry = ProviderRegistry::new();
 
-        // Always include built-in models; available_models() filters by registered
-        // providers
-        let built_in = builtin_anthropic_models();
-        let codex_models = builtin_codex_models();
-        let mut built_in = built_in;
-        built_in.extend(codex_models);
+        // Always include built-in models; available_models() filters by registered providers.
+        let mut built_in = builtin_anthropic_models();
+        built_in.extend(builtin_codex_models());
 
         // Register Anthropic provider if auth is available
         let is_oauth = auth.is_oauth("anthropic");
@@ -47,13 +44,13 @@ impl ModelRegistry {
             registry.register("anthropic", Arc::new(provider));
         }
 
-        // Register Codex provider if auth is available
-        let is_oauth = auth.is_oauth("codex");
-        let extra_headers: Vec<(String, String)> = config.effective_headers("codex");
+        // Register Codex (OpenAI) provider if auth is available.
+        // Codex uses the standard OpenAI chat completions API.
         if let Some(api_key) = auth.api_key("codex") {
-            let provider = CodexProvider::new(
+            let extra_headers = config.effective_headers("codex");
+            let provider = OpenAICompatProvider::new(
                 "codex".to_string(),
-                "https://api.openai.com/v1".to_string(),
+                "https://api.openai.com".to_string(),
                 Some(api_key),
             )
             .with_headers(extra_headers);
