@@ -1143,7 +1143,39 @@ impl SessionManager {
         lines.push(serde_json::to_string(&header).ok()?);
 
         // Serialize each entry in branch order (root → leaf).
+        // Compaction entries: emit archived messages inline first so the
+        // reader sees a flat timeline, then emit the compaction marker
+        // without the (now-redundant) archived_messages blob.
         for entry in &branch {
+            if let SessionEntry::Compaction(ce) = entry {
+                for msg in &ce.archived_messages {
+                    let line = serde_json::json!({
+                        "type": "message",
+                        "archived": true,
+                        "message": msg,
+                    });
+                    if let Ok(data) = serde_json::to_string(&line) {
+                        lines.push(data);
+                    }
+                }
+                // Emit a lean compaction marker: no archived_messages blob.
+                let marker = serde_json::json!({
+                    "type": "compaction",
+                    "id": ce.id,
+                    "parent_id": ce.parent_id,
+                    "timestamp": ce.timestamp,
+                    "summary": ce.summary,
+                    "first_kept_entry_id": ce.first_kept_entry_id,
+                    "tokens_before": ce.tokens_before,
+                    "tokens_after": ce.tokens_after,
+                    "model_id": ce.model_id,
+                    "cost_usd_before": ce.cost_usd_before,
+                });
+                if let Ok(data) = serde_json::to_string(&marker) {
+                    lines.push(data);
+                }
+                continue;
+            }
             if let Ok(data) = serde_json::to_string(entry) {
                 lines.push(data);
             }

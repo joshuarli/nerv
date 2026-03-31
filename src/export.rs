@@ -27,6 +27,7 @@ impl SessionStats {
             context_window: 0,
         };
         for entry in entries {
+            // Count tokens from live message entries.
             if let SessionEntry::Message(me) = entry
                 && matches!(me.message, AgentMessage::Assistant(_))
                 && let Some(ref tok) = me.tokens
@@ -41,6 +42,15 @@ impl SessionStats {
                 }
                 if tok.context_window > 0 {
                     s.context_window = tok.context_window;
+                }
+            }
+            // Also count the pre-compaction messages that were archived.
+            // They don't carry TokenInfo so we can only count them as calls.
+            if let SessionEntry::Compaction(ce) = entry {
+                for msg in &ce.archived_messages {
+                    if matches!(msg, AgentMessage::Assistant(_)) {
+                        s.api_calls += 1;
+                    }
                 }
             }
         }
@@ -460,60 +470,76 @@ function toggleTool(header) {
     let mut tool_idx = 0;
     for entry in entries {
         if let SessionEntry::Compaction(ce) = entry {
+            // Render archived messages as regular inline turns so the reader
+            // sees a flat, continuous timeline rather than a buried transcript.
+            for msg in &ce.archived_messages {
+                match msg {
+                    AgentMessage::User { content, .. } => {
+                        html.push_str("<div class='user'>");
+                        for item in content {
+                            if let ContentItem::Text { text } = item {
+                                html.push_str(&html_escape(text));
+                            }
+                        }
+                        html.push_str("</div>\n");
+                    }
+                    AgentMessage::Assistant(a) => {
+                        html.push_str("<div class='assistant'>");
+                        for block in &a.content {
+                            match block {
+                                ContentBlock::Text { text } if !text.is_empty() => {
+                                    html.push_str(&markdown_to_html(text));
+                                }
+                                ContentBlock::ToolCall { id, name, arguments } => {
+                                    let args_str = serde_json::to_string(arguments)
+                                        .unwrap_or_else(|_| arguments.to_string());
+                                    let preview =
+                                        args_preview_for(name, arguments, &args_str);
+                                    let output_html =
+                                        if let Some((disp, content_text, is_err)) =
+                                            call_result.get(id)
+                                        {
+                                            let txt = disp.as_deref().unwrap_or(content_text);
+                                            let style = if *is_err {
+                                                "color:#f87171"
+                                            } else {
+                                                ""
+                                            };
+                                            format!(
+                                                "<div class='tool-output' style='{style}'>{}</div>",
+                                                html_escape(txt)
+                                            )
+                                        } else {
+                                            String::new()
+                                        };
+                                    html.push_str(&format!(
+                                        "<div class='tool-wrapper'>\
+                                        <div class='tool-header' onclick='toggleTool(this)'>\
+                                        <span class='tool-name'>{}</span>\
+                                        <span class='tool-args'>{}</span>\
+                                        </div>{}</div>\n",
+                                        html_escape_no_br(name),
+                                        html_escape_no_br(&preview),
+                                        output_html,
+                                    ));
+                                    tool_idx += 1;
+                                }
+                                _ => {}
+                            }
+                        }
+                        html.push_str("</div>\n");
+                    }
+                    _ => {}
+                }
+            }
+
+            // Compaction banner after the archived turns.
             let before = fmt_tokens(ce.tokens_before as u64);
             let after = fmt_tokens(ce.tokens_after as u64);
             let model_label = if ce.model_id.is_empty() {
                 String::new()
             } else {
                 format!(" · {}", html_escape_no_br(&ce.model_id))
-            };
-            // Archived messages section (collapsible)
-            let archived_html = if ce.archived_messages.is_empty() {
-                String::new()
-            } else {
-                let mut ah = String::from(
-                    "<details style='margin-top:0.75rem'>\
-                    <summary style='cursor:pointer;color:#94a3b8;font-size:0.75rem'>archived transcript</summary>\
-                    <div style='margin-top:0.5rem;border-left:2px solid #374151;padding-left:0.75rem'>",
-                );
-                for msg in &ce.archived_messages {
-                    match msg {
-                        crate::agent::types::AgentMessage::User { content, .. } => {
-                            ah.push_str("<div style='background:#fef3c7;border-radius:4px;padding:0.4rem 0.6rem;margin:0.4rem 0;font-size:0.8rem'>");
-                            for item in content {
-                                if let crate::agent::types::ContentItem::Text { text } = item {
-                                    ah.push_str(&html_escape(text));
-                                }
-                            }
-                            ah.push_str("</div>");
-                        }
-                        crate::agent::types::AgentMessage::Assistant(a) => {
-                            ah.push_str("<div style='margin:0.4rem 0;font-size:0.8rem'>");
-                            for block in &a.content {
-                                match block {
-                                    crate::agent::types::ContentBlock::Text { text }
-                                        if !text.is_empty() =>
-                                    {
-                                        ah.push_str(&markdown_to_html(text));
-                                    }
-                                    crate::agent::types::ContentBlock::ToolCall {
-                                        name, ..
-                                    } => {
-                                        ah.push_str(&format!(
-                                            "<span style='color:#60a5fa;font-family:monospace'>[tool: {}]</span> ",
-                                            html_escape_no_br(name)
-                                        ));
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            ah.push_str("</div>");
-                        }
-                        _ => {}
-                    }
-                }
-                ah.push_str("</div></details>");
-                ah
             };
             html.push_str(&format!(
                 "<div style='margin:1.5rem 0;padding:0.75rem 1rem;\
@@ -524,9 +550,8 @@ function toggleTool(header) {
                 <details style='margin-top:0.5rem'>\
                 <summary style='cursor:pointer;color:#64748b'>summary</summary>\
                 <div style='margin-top:0.4rem;color:#cbd5e1;white-space:pre-wrap'>{summary}</div>\
-                </details>{archived}</div>\n",
+                </details></div>\n",
                 summary = html_escape_no_br(&ce.summary),
-                archived = archived_html,
             ));
             continue;
         }
