@@ -1165,11 +1165,28 @@ impl SessionManager {
 
         let mut emit_archived = |ce: &CompactionEntry, lines: &mut Vec<String>| {
             for msg in &ce.archived_messages {
-                let line = serde_json::json!({
+                // Reconstruct TokenInfo from the usage stored on the AgentMessage
+                // itself so archived assistant messages carry per-call token data.
+                let tokens = match msg {
+                    AgentMessage::Assistant(am) => am.usage.as_ref().map(|u| {
+                        serde_json::json!({
+                            "input": u.input,
+                            "output": u.output,
+                            "cache_read": u.cache_read,
+                            "cache_write": u.cache_write,
+                            "context_used": u.input + u.output,
+                        })
+                    }),
+                    _ => None,
+                };
+                let mut line = serde_json::json!({
                     "type": "message",
                     "archived": true,
                     "message": msg,
                 });
+                if let Some(tok) = tokens {
+                    line["tokens"] = tok;
+                }
                 if let Ok(data) = serde_json::to_string(&line) {
                     lines.push(data);
                 }
@@ -1728,9 +1745,15 @@ mod tests {
     // ── export_jsonl: compaction flattening ───────────────────────────────────
 
     fn make_archived_messages() -> Vec<AgentMessage> {
+        use crate::agent::types::Usage;
         vec![
             user_msg("archived user turn"),
-            assistant_msg("archived assistant reply"),
+            AgentMessage::Assistant(AssistantMessage {
+                content: vec![ContentBlock::Text { text: "archived assistant reply".to_string() }],
+                stop_reason: StopReason::EndTurn,
+                usage: Some(Usage { input: 1000, output: 200, cache_read: 800, cache_write: 50 }),
+                timestamp: 0,
+            }),
         ]
     }
 
@@ -1849,6 +1872,68 @@ mod tests {
             archived_pos < marker_pos,
             "archived messages (pos {archived_pos}) must come before the compaction marker (pos {marker_pos})"
         );
+    }
+
+    #[test]
+    fn export_jsonl_archived_assistant_messages_carry_token_data() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+        mgr.append_message(&user_msg("q"), None).unwrap();
+        let kept_id = mgr.leaf_id().unwrap().to_string();
+
+        let record = make_compaction_record(&mgr, &kept_id, make_archived_messages());
+        mgr.append_compaction(record).unwrap();
+
+        let jsonl = mgr.export_jsonl().unwrap();
+        let lines: Vec<serde_json::Value> = jsonl
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+
+        // Every archived assistant message must have a tokens object with the
+        // expected fields reconstructed from usage.
+        let archived_assistants: Vec<_> = lines
+            .iter()
+            .filter(|l| {
+                l["archived"] == true && l["message"]["role"] == "assistant"
+            })
+            .collect();
+
+        assert!(
+            !archived_assistants.is_empty(),
+            "make_archived_messages must include at least one assistant message"
+        );
+        for line in &archived_assistants {
+            let tok = line.get("tokens").expect("archived assistant must have tokens field");
+            assert!(tok["input"].is_number(), "tokens.input must be present");
+            assert!(tok["output"].is_number(), "tokens.output must be present");
+            assert!(tok["cache_read"].is_number(), "tokens.cache_read must be present");
+            assert!(tok["cache_write"].is_number(), "tokens.cache_write must be present");
+            assert!(tok["context_used"].is_number(), "tokens.context_used must be present");
+            // context_used is derived as input + output
+            let input = tok["input"].as_u64().unwrap();
+            let output = tok["output"].as_u64().unwrap();
+            assert_eq!(
+                tok["context_used"].as_u64().unwrap(),
+                input + output,
+                "context_used must equal input + output"
+            );
+        }
+
+        // User/toolResult archived messages must NOT have a tokens field.
+        let archived_non_assistant: Vec<_> = lines
+            .iter()
+            .filter(|l| {
+                l["archived"] == true && l["message"]["role"] != "assistant"
+            })
+            .collect();
+        for line in &archived_non_assistant {
+            assert!(
+                line.get("tokens").is_none(),
+                "non-assistant archived messages must not have tokens"
+            );
+        }
     }
 
     #[test]
