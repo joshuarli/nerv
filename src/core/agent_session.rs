@@ -1293,23 +1293,20 @@ impl AgentSession {
             })
             .collect();
 
-        // Extract prior compaction summary so the summarizer can update it
-        // rather than starting from scratch.
-        let previous_summary: Option<String> = to_summarize.iter().find_map(|m| {
-            if let AgentMessage::CompactionSummary { summary, .. } = m {
-                Some(summary.clone())
-            } else {
-                None
-            }
-        });
+        // Extract verbatim user messages from the summarized region to preserve
+        // exact details (file paths, edge cases, preferences) alongside the summary.
+        let preserved_user_messages = compaction::extract_user_messages(
+            &to_summarize,
+            self.compaction.settings.preserved_user_tokens,
+        );
 
-        match generate_summary(&to_summarize, previous_summary.as_deref(), provider, &model_id, summarizer_context_window) {
+        match generate_summary(&to_summarize, provider, &model_id, summarizer_context_window) {
             Ok(generated) => {
                 let summary = generated.to_markdown();
                 let structured = generated.structured().cloned();
-                // Estimated context size after compaction: summary + verbatim window.
                 let tokens_after = compaction::tokens_after_compaction(
                     &summary,
+                    &preserved_user_messages,
                     &branch[cut.verbatim_start_index..],
                 );
                 let _ = self.session_manager.append_compaction(
@@ -1321,6 +1318,7 @@ impl AgentSession {
                         model_id: model_id.clone(),
                         cost_usd_before: self.session_cost.total,
                         archived_messages,
+                        preserved_user_messages,
                     },
                 );
                 // Fire onCompactionDone hooks (fire-and-forget).

@@ -175,6 +175,11 @@ pub struct CompactionEntry {
     /// Not sent to any LLM — display only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archived_messages: Vec<crate::agent::types::AgentMessage>,
+    /// Verbatim user message texts extracted from the summarized region.
+    /// Injected alongside the summary to preserve exact details (file paths,
+    /// edge cases, preferences) that the summary may have compressed away.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preserved_user_messages: Vec<String>,
 }
 
 fn default_compaction_type() -> String {
@@ -269,6 +274,8 @@ pub struct CompactionRecord {
     pub model_id: String,
     pub cost_usd_before: f64,
     pub archived_messages: Vec<crate::agent::types::AgentMessage>,
+    /// Verbatim user message texts extracted from the summarized region.
+    pub preserved_user_messages: Vec<String>,
 }
 
 /// Per-session config overrides. Stored as a JSON blob in the sessions table.

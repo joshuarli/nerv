@@ -35,7 +35,7 @@ fn trunc(s: &str, cap: usize) -> Cow<'_, str> {
 }
 
 /// Structured output from the LLM summarizer. Every field is bounded by the
-/// prompt (200 chars per string, 10 items per array) so the formatted markdown
+/// prompt (500 chars per string, 20 items per array) so the formatted markdown
 /// is predictably sized for context injection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StructuredSummary {
@@ -176,8 +176,10 @@ pub fn serialize_conversation(messages: &[AgentMessage]) -> String {
                 out.push_str(&trunc(output, FIELD_CAP_TOOL_OUTPUT));
                 out.push('\n');
             }
-            AgentMessage::CompactionSummary { summary, .. } => {
-                out.push_str(&format!("[Previous summary: {}]\n", summary));
+            AgentMessage::CompactionSummary { .. } => {
+                // Skip prior compaction summaries — the summarizer works from
+                // primary-source messages only to prevent fidelity degradation
+                // across multiple compaction rounds.
             }
             AgentMessage::BranchSummary { summary, .. } => {
                 out.push_str(&format!("[Branch summary: {}]\n", summary));
@@ -213,12 +215,11 @@ Summarize the conversation above. Output ONLY valid JSON matching this exact sch
   \"open_questions\": [\"unresolved questions or blockers\"],
   \"critical_context\": \"string — any other essential context\"
 }
-Constraints: each string value max 200 chars; arrays max 10 items.
+Constraints: each string value max 500 chars; arrays max 20 items. Be concise but complete.
 Output only the JSON object, no prose before or after.";
 
 pub fn generate_summary(
     messages: &[AgentMessage],
-    previous_summary: Option<&str>,
     provider: Arc<dyn Provider>,
     model_id: &str,
     summarizer_context_window: u32,
@@ -242,16 +243,7 @@ pub fn generate_summary(
         / 100;
     let conversation = clamp_conversation(conversation, char_cap);
 
-    let prompt = if let Some(prev) = previous_summary {
-        format!(
-            "<previous_summary>\n{prev}\n</previous_summary>\n\n\
-             <conversation>\n{conversation}\n</conversation>\n\n\
-             Update the previous summary with information from the new conversation.\n\n\
-             {SUMMARIZATION_PROMPT}"
-        )
-    } else {
-        format!("<conversation>\n{conversation}\n</conversation>\n\n{SUMMARIZATION_PROMPT}")
-    };
+    let prompt = format!("<conversation>\n{conversation}\n</conversation>\n\n{SUMMARIZATION_PROMPT}");
 
     let request = CompletionRequest {
         model_id: model_id.to_string(),
@@ -423,14 +415,14 @@ mod tests {
     }
 
     #[test]
-    fn serialize_compaction_summary() {
+    fn serialize_compaction_summary_skipped() {
         let msg = AgentMessage::CompactionSummary {
             summary: "prior work".to_string(),
             tokens_before: 0,
             timestamp: 0,
         };
         let out = serialize_conversation(&[msg]);
-        assert_eq!(out, "[Previous summary: prior work]\n");
+        assert!(out.is_empty(), "CompactionSummary should be skipped during serialization");
     }
 
     #[test]

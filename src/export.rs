@@ -951,6 +951,7 @@ mod tests {
             compaction_type: "full".to_string(),
             lite_compact_zeroed: 0,
             archived_messages: archived,
+            preserved_user_messages: vec![],
         })
     }
 

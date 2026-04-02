@@ -28,6 +28,11 @@ pub struct CompactionSettings {
     /// pre-compaction, form a stable suffix that helps the prefix match
     /// on subsequent calls. Set to 0 to summarize the entire kept range.
     pub verbatim_window_tokens: usize,
+    /// Token budget for extracting verbatim user messages from the summarized
+    /// region. These are injected alongside the summary to preserve exact
+    /// details (file paths, edge cases, preferences) that the LLM summary may
+    /// have compressed away. Set to 0 to disable.
+    pub preserved_user_tokens: usize,
 }
 
 impl Default for CompactionSettings {
@@ -37,6 +42,7 @@ impl Default for CompactionSettings {
             threshold_pct: 0.80,
             keep_recent_tokens: 20_000,
             verbatim_window_tokens: 5_000,
+            preserved_user_tokens: 8_000,
         }
     }
 }
@@ -87,6 +93,61 @@ fn content_tokens(content: &[ContentItem]) -> usize {
         .sum()
 }
 
+/// Extract verbatim user message texts from a slice of messages, selecting
+/// most-recent-first up to `token_budget` tokens. Returns messages in
+/// chronological order. Skips CompactionSummary messages (prior summaries)
+/// and image-only user messages.
+pub fn extract_user_messages(messages: &[AgentMessage], token_budget: usize) -> Vec<String> {
+    if token_budget == 0 {
+        return Vec::new();
+    }
+    let mut selected: Vec<String> = Vec::new();
+    let mut remaining = token_budget;
+    for msg in messages.iter().rev() {
+        if remaining == 0 {
+            break;
+        }
+        let text = match msg {
+            AgentMessage::User { content, .. } => {
+                let parts: Vec<&str> = content
+                    .iter()
+                    .filter_map(|item| match item {
+                        ContentItem::Text { text } if !text.is_empty() => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                if parts.is_empty() {
+                    continue;
+                }
+                parts.join("\n")
+            }
+            _ => continue,
+        };
+        let tokens = count_tokens(&text);
+        if tokens <= remaining {
+            selected.push(text);
+            remaining = remaining.saturating_sub(tokens);
+        } else {
+            // Truncate to fit the remaining budget (chars ≈ tokens * 4).
+            let char_budget = remaining * 4;
+            if char_budget > 0 && !text.is_empty() {
+                let end = text
+                    .char_indices()
+                    .nth(char_budget)
+                    .map(|(i, _)| i)
+                    .unwrap_or(text.len());
+                let truncated = &text[..end];
+                if !truncated.is_empty() {
+                    selected.push(truncated.to_string());
+                }
+            }
+            break;
+        }
+    }
+    selected.reverse();
+    selected
+}
+
 /// Calculate context tokens from the last API usage response.
 pub fn calculate_context_tokens(usage: &Usage) -> u32 {
     usage.input + usage.output + usage.cache_read + usage.cache_write
@@ -124,11 +185,17 @@ pub fn tokens_before_compaction(branch: &[SessionEntry]) -> u32 {
         })
 }
 
-/// Estimated context size after compaction: summary tokens + verbatim window tokens.
+/// Estimated context size after compaction: summary tokens + preserved user
+/// messages + verbatim window tokens.
 ///
 /// This represents what will actually be sent on the next API call — the
-/// replacement summary plus the unmodified verbatim window entries.
-pub fn tokens_after_compaction(summary: &str, verbatim_window: &[SessionEntry]) -> u32 {
+/// replacement summary, preserved user messages, plus the unmodified verbatim
+/// window entries.
+pub fn tokens_after_compaction(
+    summary: &str,
+    preserved_user_messages: &[String],
+    verbatim_window: &[SessionEntry],
+) -> u32 {
     let verbatim_tokens: u32 = verbatim_window
         .iter()
         .filter_map(|e| {
@@ -139,7 +206,11 @@ pub fn tokens_after_compaction(summary: &str, verbatim_window: &[SessionEntry]) 
             }
         })
         .sum();
-    count_tokens(summary) as u32 + verbatim_tokens
+    let preserved_tokens: u32 = preserved_user_messages
+        .iter()
+        .map(|m| count_tokens(m) as u32)
+        .sum();
+    count_tokens(summary) as u32 + preserved_tokens + verbatim_tokens
 }
 
 pub fn should_compact(tokens: usize, context_window: u32, settings: &CompactionSettings) -> bool {
@@ -315,7 +386,7 @@ mod tests {
             user_entry("recent user message", 0),   // ~4 chars/4 + 4 overhead = ~5
             assistant_entry("recent reply", 0),     // ~12 chars/4 + 4 overhead = ~7
         ];
-        let result = tokens_after_compaction(&summary, &verbatim);
+        let result = tokens_after_compaction(&summary, &[], &verbatim);
         let summary_toks = count_tokens(&summary) as u32;
         let verbatim_toks: u32 = verbatim
             .iter()
@@ -347,7 +418,7 @@ mod tests {
             }),
             tokens: None,
         })];
-        let result = tokens_after_compaction(&summary, &aborted_verbatim);
+        let result = tokens_after_compaction(&summary, &[], &aborted_verbatim);
         // Must be much more than 4 — summary alone is ~640 tokens
         assert!(result > 100, "tokens_after was {result}, expected > 100 (summary not counted)");
     }
@@ -355,8 +426,88 @@ mod tests {
     #[test]
     fn tokens_after_empty_verbatim_is_just_summary() {
         let summary = "a".repeat(800); // 200 tokens
-        let result = tokens_after_compaction(&summary, &[]);
+        let result = tokens_after_compaction(&summary, &[], &[]);
         assert_eq!(result, count_tokens(&summary) as u32);
+    }
+
+    #[test]
+    fn tokens_after_includes_preserved_user_messages() {
+        let summary = "a".repeat(400); // 100 tokens
+        let preserved = vec!["hello world".to_string(), "another message".to_string()];
+        let result_with = tokens_after_compaction(&summary, &preserved, &[]);
+        let result_without = tokens_after_compaction(&summary, &[], &[]);
+        assert!(result_with > result_without, "preserved messages should add tokens");
+    }
+
+    // extract_user_messages
+
+    fn make_user_msg(text: &str) -> AgentMessage {
+        AgentMessage::User {
+            content: vec![ContentItem::Text { text: text.to_string() }],
+            timestamp: 0,
+        }
+    }
+
+    fn make_assistant_msg(text: &str) -> AgentMessage {
+        AgentMessage::Assistant(AssistantMessage {
+            content: vec![ContentBlock::Text { text: text.to_string() }],
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+            timestamp: 0,
+        })
+    }
+
+    #[test]
+    fn extract_user_messages_basic() {
+        let msgs = vec![
+            make_user_msg("first"),
+            make_assistant_msg("reply"),
+            make_user_msg("second"),
+            make_assistant_msg("reply2"),
+            make_user_msg("third"),
+        ];
+        let result = extract_user_messages(&msgs, 10_000);
+        assert_eq!(result, vec!["first", "second", "third"]);
+    }
+
+    #[test]
+    fn extract_user_messages_respects_budget() {
+        // Each "x".repeat(400) is ~100 tokens. Budget of 150 should get 1 full + partial.
+        let msgs = vec![
+            make_user_msg(&"a".repeat(400)),
+            make_user_msg(&"b".repeat(400)),
+        ];
+        let result = extract_user_messages(&msgs, 150);
+        // Most recent first: "b" fits (100 tokens), "a" gets truncated
+        assert_eq!(result.len(), 2);
+        assert!(result[1].starts_with("bbb"));
+    }
+
+    #[test]
+    fn extract_user_messages_skips_compaction_summary() {
+        let msgs = vec![
+            AgentMessage::CompactionSummary {
+                summary: "prior".to_string(),
+                tokens_before: 0,
+                timestamp: 0,
+            },
+            make_user_msg("real message"),
+        ];
+        let result = extract_user_messages(&msgs, 10_000);
+        assert_eq!(result, vec!["real message"]);
+    }
+
+    #[test]
+    fn extract_user_messages_empty_budget() {
+        let msgs = vec![make_user_msg("hello")];
+        let result = extract_user_messages(&msgs, 0);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn extract_user_messages_empty_input() {
+        let result = extract_user_messages(&[], 10_000);
+        assert!(result.is_empty());
     }
 
     // count_tokens / estimate_tokens sanity

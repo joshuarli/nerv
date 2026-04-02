@@ -310,6 +310,7 @@ impl SessionManager {
             model_id,
             cost_usd_before,
             archived_messages,
+            preserved_user_messages,
         } = record;
 
         // Collect the IDs of branch ancestors that fall before the cut point.
@@ -361,6 +362,7 @@ impl SessionManager {
             compaction_type: "full".to_string(),
             lite_compact_zeroed: 0,
             archived_messages,
+            preserved_user_messages,
         });
         self.append_entry(entry)?;
 
@@ -391,6 +393,7 @@ impl SessionManager {
             compaction_type: "lite".to_string(),
             lite_compact_zeroed: zeroed,
             archived_messages: vec![],
+            preserved_user_messages: vec![],
         });
         self.append_entry(entry)
     }
@@ -524,6 +527,21 @@ impl SessionManager {
                 tokens_before: ce.tokens_before,
                 timestamp: crate::agent::types::now_millis(),
             });
+            // Inject preserved user messages from the summarized region so the
+            // model sees exact user words alongside the compressed summary.
+            if !ce.preserved_user_messages.is_empty() {
+                messages.push(AgentMessage::Custom {
+                    custom_type: "preserved_user_context".into(),
+                    content: vec![ContentItem::Text {
+                        text: format!(
+                            "[Preserved user messages from previous conversation:]\n{}",
+                            ce.preserved_user_messages.join("\n---\n")
+                        ),
+                    }],
+                    display: false,
+                    timestamp: crate::agent::types::now_millis(),
+                });
+            }
             branch.iter().position(|e| e.id() == ce.first_kept_entry_id).unwrap_or(compact_idx + 1)
         } else {
             0
@@ -1832,6 +1850,7 @@ mod tests {
             model_id: "claude-haiku".to_string(),
             cost_usd_before: 1.23,
             archived_messages: archived,
+            preserved_user_messages: vec![],
         }
     }
 
@@ -2075,6 +2094,7 @@ mod tests {
             model_id: String::new(),
             cost_usd_before: 0.0,
             archived_messages: vec![],
+            preserved_user_messages: vec![],
         };
         mgr.append_compaction(record).unwrap();
 
@@ -2084,5 +2104,85 @@ mod tests {
             .filter(|l| l.contains("\"archived\":true"))
             .count();
         assert_eq!(archived_count, 0);
+    }
+
+    #[test]
+    fn build_session_context_injects_preserved_user_messages() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+        // Create some messages, then compact with preserved_user_messages
+        mgr.append_message(&user_msg("first request"), None).unwrap();
+        mgr.append_message(&assistant_msg("reply"), None).unwrap();
+        mgr.append_message(&user_msg("kept message"), None).unwrap();
+        let kept_id = mgr.leaf_id().unwrap().to_string();
+
+        let record = CompactionRecord {
+            summary: "**Goal:** test preserved messages".to_string(),
+            first_kept_entry_id: kept_id,
+            tokens_before: 50_000,
+            tokens_after: 2_000,
+            model_id: "haiku".to_string(),
+            cost_usd_before: 0.0,
+            archived_messages: vec![],
+            preserved_user_messages: vec![
+                "first request".to_string(),
+                "some older message".to_string(),
+            ],
+        };
+        mgr.append_compaction(record).unwrap();
+
+        let ctx = mgr.build_session_context();
+
+        // Messages should be: CompactionSummary, Custom(preserved), kept message
+        assert!(ctx.messages.len() >= 3, "expected at least 3 messages, got {}", ctx.messages.len());
+
+        // First message: CompactionSummary
+        assert!(
+            matches!(&ctx.messages[0], AgentMessage::CompactionSummary { .. }),
+            "first message should be CompactionSummary"
+        );
+
+        // Second message: Custom with preserved user messages
+        match &ctx.messages[1] {
+            AgentMessage::Custom { custom_type, content, display, .. } => {
+                assert_eq!(custom_type, "preserved_user_context");
+                assert!(!display);
+                let text = match &content[0] {
+                    ContentItem::Text { text } => text,
+                    _ => panic!("expected text content"),
+                };
+                assert!(text.contains("first request"), "should contain preserved message");
+                assert!(text.contains("some older message"), "should contain preserved message");
+            }
+            other => panic!("expected Custom message, got {:?}", std::mem::discriminant(other)),
+        }
+    }
+
+    #[test]
+    fn build_session_context_no_preserved_messages_when_empty() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+        mgr.append_message(&user_msg("hello"), None).unwrap();
+        let kept_id = mgr.leaf_id().unwrap().to_string();
+
+        let record = CompactionRecord {
+            summary: "summary".to_string(),
+            first_kept_entry_id: kept_id,
+            tokens_before: 50_000,
+            tokens_after: 2_000,
+            model_id: "haiku".to_string(),
+            cost_usd_before: 0.0,
+            archived_messages: vec![],
+            preserved_user_messages: vec![],
+        };
+        mgr.append_compaction(record).unwrap();
+
+        let ctx = mgr.build_session_context();
+
+        // No Custom message should be injected when preserved_user_messages is empty
+        let has_custom = ctx.messages.iter().any(|m| matches!(m, AgentMessage::Custom { .. }));
+        assert!(!has_custom, "should not inject Custom message when no preserved user messages");
     }
 }

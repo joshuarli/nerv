@@ -95,7 +95,10 @@ pub fn convert_to_llm(messages: &[AgentMessage]) -> Vec<LlmMessage> {
             }
             AgentMessage::CompactionSummary { summary, .. } => LlmMessage::User {
                 content: vec![LlmContent::Text(format!(
-                    "[Context compacted. Summary of previous conversation:]\n{}",
+                    "Another language model was given this task earlier and produced a summary of its work so far. \
+                     You have access to the current state of all files and tools. Use this summary to build on the \
+                     work already done, but verify claims against actual file contents rather than trusting the \
+                     summary blindly:\n{}",
                     summary
                 ))],
             },
@@ -182,6 +185,51 @@ mod tests {
         let llm = convert_to_llm(&msgs);
         // Both become User, so they merge
         assert_eq!(llm.len(), 1);
+    }
+
+    #[test]
+    fn compaction_summary_uses_handoff_framing() {
+        let msgs = vec![AgentMessage::CompactionSummary {
+            summary: "**Goal:** fix bug".into(),
+            tokens_before: 50_000,
+            timestamp: 0,
+        }];
+        let llm = convert_to_llm(&msgs);
+        assert_eq!(llm.len(), 1);
+        assert!(llm[0].is_user());
+        let LlmMessage::User { content } = &llm[0] else { panic!() };
+        let LlmContent::Text(text) = &content[0] else { panic!() };
+        assert!(
+            text.starts_with("Another language model"),
+            "expected handoff framing, got: {text}"
+        );
+        assert!(text.contains("verify claims"));
+        assert!(text.contains("**Goal:** fix bug"));
+    }
+
+    #[test]
+    fn compaction_summary_and_preserved_messages_merge() {
+        let msgs = vec![
+            AgentMessage::CompactionSummary {
+                summary: "summary text".into(),
+                tokens_before: 0,
+                timestamp: 0,
+            },
+            AgentMessage::Custom {
+                custom_type: "preserved_user_context".into(),
+                content: vec![ContentItem::Text {
+                    text: "[Preserved user messages:]\nhello".into(),
+                }],
+                display: false,
+                timestamp: 0,
+            },
+        ];
+        let llm = convert_to_llm(&msgs);
+        // Both are User role, so they merge into one message
+        assert_eq!(llm.len(), 1);
+        assert!(llm[0].is_user());
+        let LlmMessage::User { content } = &llm[0] else { panic!() };
+        assert_eq!(content.len(), 2, "should have 2 content blocks merged");
     }
 
     #[test]
