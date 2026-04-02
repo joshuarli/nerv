@@ -55,10 +55,10 @@ Before compaction — long session, high Rc on old turns:
   [system Rc] [tools Rc] [msg1 Rc] [msg2 Rc] ... [msgN Rc] [new-msg Wc]
 
 Immediately after compaction — conversation is cache-cold:
-  [system Rc] [tools Rc] [summary Wc] [verbatim-window Rc] [new-msg Wc]
+  [system Rc] [tools Rc] [summary+preserved Wc] [verbatim-window Rc] [new-msg Wc]
 
 Two turns later — warm again:
-  [system Rc] [tools Rc] [summary Rc] [verbatim-window Rc] [msg Rc] [new-msg Wc]
+  [system Rc] [tools Rc] [summary+preserved Rc] [verbatim-window Rc] [msg Rc] [new-msg Wc]
 ```
 
 The key observation: system prompt and tool definitions survive compaction as Rc because
@@ -119,6 +119,9 @@ The summarization prompt requests JSON output matching the `StructuredSummary` s
 }
 ```
 
+Field limits: each string value max 500 chars; arrays max 20 items. The 4096
+`max_tokens` on the summarizer API call provides a hard upper bound.
+
 `generate_summary` returns a `GeneratedSummary` enum — either `Structured(StructuredSummary)`
 if JSON parsing succeeds, or `Prose(String)` as a fallback. The prose fallback ensures
 compaction never fails due to JSON parse errors; the model's raw output is used as-is.
@@ -131,10 +134,37 @@ the conversation context, and the parsed `StructuredSummary` is threaded through
 each tool call in assistant messages, giving the summarizer the data it needs to populate
 `files_modified` accurately.
 
-**Chained summaries**: when a prior `CompactionSummary` exists in the messages being
-summarized, it is passed to `generate_summary` via the `previous_summary` parameter. The
-summarizer prompt uses a `<previous_summary>` slot to update rather than replace prior
-context.
+**Replace-not-nest**: each compaction produces a fresh summary from primary-source
+messages only. Prior `CompactionSummary` messages are skipped during conversation
+serialization so the summarizer never paraphrases an older summary. This prevents
+fidelity degradation across multiple compaction rounds — every summary is generated
+directly from real conversation history, not from a chain of increasingly lossy
+rewrites.
+
+#### Handoff framing
+
+The compaction summary is injected into the conversation with a handoff-style prefix:
+
+> Another language model was given this task earlier and produced a summary of
+> its work so far. You have access to the current state of all files and tools.
+> Use this summary to build on the work already done, but verify claims against
+> actual file contents rather than trusting the summary blindly:
+
+This is accurate (Haiku generates the summary, not the session model) and encourages
+the model to treat the summary as a trusted-but-external brief — building on it while
+verifying specific claims against actual file contents.
+
+#### Preserved user messages
+
+After summarization, `extract_user_messages` walks the summarized region in reverse
+(most-recent-first) and collects verbatim user message texts up to
+`preserved_user_tokens` (default: 8 000). These are stored in the `CompactionEntry`
+and injected into the conversation context between the summary and the verbatim window.
+
+This preserves exact details — file paths, edge cases, numerical values, user
+preferences stated in passing — that the LLM summary may have compressed away. The
+summary captures the model's understanding of intent; the preserved messages capture
+the user's exact words.
 
 #### The three-region split
 
@@ -151,7 +181,9 @@ session DB entirely.
 
 **Summarized region**: older history within the kept window. Sent to a utility model
 (default: Haiku) with a summarization prompt. The resulting summary is stored as a
-`CompactionSummary` session entry and prepended to the kept messages.
+`CompactionSummary` session entry and prepended to the kept messages. Additionally,
+verbatim user messages from this region are extracted (up to `preserved_user_tokens`)
+and stored alongside the summary to preserve exact details the summary may compress.
 
 **Verbatim window**: the newest `verbatim_window_tokens` (default: 5 000) worth of
 entries before the compaction boundary. These are left byte-for-byte in the DB. Because
@@ -196,6 +228,9 @@ All three paths go through `run_compaction`, so lite-compact always runs first.
   deleted region (summary + verbatim window + any kept messages)
 - `verbatim_window_tokens` (default: 5 000): carved out of `keep_recent_tokens` for the
   verbatim tail; the remaining ~15 000 tokens hold the summary and older kept messages
+- `preserved_user_tokens` (default: 8 000): token budget for verbatim user messages
+  extracted from the summarized region. These are injected alongside the summary and
+  are separate from `keep_recent_tokens`
 
 ---
 
@@ -219,7 +254,7 @@ model size.
 | Pre-compaction (typical) | last-user-msg only | everything else | High Rc, growing slowly |
 | Lite-compact only | — | — | No API call at all; free |
 | Compaction LLM call | full old context | system + tools | One-time summarization cost |
-| First post-compaction | summary | system + tools + verbatim window | Summary is new; verbatim window stays Rc |
+| First post-compaction | summary + preserved msgs | system + tools + verbatim window | Summary and preserved user messages are new; verbatim window stays Rc |
 | Second post-compaction | last-user-msg only | everything | Fully warm again |
 
 The verbatim window shortens the cold-start period from two turns to one for the
@@ -259,6 +294,7 @@ Compaction settings (threshold, token budgets) are in `CompactionSettings`:
 | `CompactionSettings`, `find_cut_point`, token estimation, `CompactionOutcome` | `src/compaction/mod.rs` |
 | `run_compaction`, trigger logic | `src/core/agent_session.rs` |
 | `StructuredSummary`, `GeneratedSummary`, summarization prompt | `src/compaction/summarize.rs` |
+| `extract_user_messages`, `CompactionSettings` | `src/compaction/mod.rs` |
 | `lite_compact` function | `src/agent/transform.rs` |
 | `lite_compactable_names` | `src/core/tool_registry.rs` |
 | Session DB: `append_compaction`, `append_lite_compaction`, branch walking | `src/session/manager.rs` |
