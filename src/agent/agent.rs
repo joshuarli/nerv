@@ -310,7 +310,14 @@ impl Agent {
                         f(&r);
                     }
                 }
-                // If the user interrupted while a tool was running, stop the loop now.
+                // Estimate context size after tool results so the caller can
+                // trigger compaction before the next API call overflows.
+                let estimated: usize = self.state.messages.iter()
+                    .map(crate::compaction::estimate_tokens)
+                    .sum::<usize>()
+                    + crate::compaction::count_tokens(&self.state.system_prompt);
+                on_event(AgentEvent::ContextEstimate { estimated_tokens: estimated });
+
                 if self.cancel.load(Ordering::Relaxed) {
                     on_event(AgentEvent::TurnEnd);
                     break;

@@ -1060,24 +1060,30 @@ impl AgentSession {
         let new_messages = agent.prompt(
             prompt_messages,
             &|event: AgentEvent| {
-                // Check for mid-stream auto-compaction on every UsageUpdate.
-                // UsageUpdate fires at message_start with the authoritative input
-                // token count — that's when we learn the context size for this call.
-                if auto_compact
-                    && compaction_enabled
-                    && context_window > 0
-                    && let AgentEvent::UsageUpdate { ref usage } = event
-                {
-                    // Re-read the shared atomic so `/compact at N` takes effect
-                    // even while a stream is in progress.
-                    let live_pct = compact_threshold_pct.load(Ordering::Relaxed);
-                    let pct = if live_pct > 0 { live_pct as f64 / 100.0 } else { threshold_pct };
-                    let context_tokens = (usage.input + usage.output + usage.cache_read) as usize;
-                    let threshold = (context_window as f64 * pct) as usize;
-                    if context_tokens > threshold {
-                        crate::log::info("mid-stream auto-compact triggered — cancelling stream");
-                        compaction_triggered.store(true, Ordering::Relaxed);
-                        cancel_flag.store(true, Ordering::Relaxed);
+                // Check for auto-compaction on UsageUpdate (API-reported, at
+                // response start) and ContextEstimate (heuristic, after tool
+                // results). Both paths use the same threshold logic.
+                if auto_compact && compaction_enabled && context_window > 0 {
+                    let context_tokens = match &event {
+                        AgentEvent::UsageUpdate { usage } => {
+                            Some((usage.input + usage.output + usage.cache_read) as usize)
+                        }
+                        AgentEvent::ContextEstimate { estimated_tokens } => {
+                            Some(*estimated_tokens)
+                        }
+                        _ => None,
+                    };
+                    if let Some(context_tokens) = context_tokens {
+                        let live_pct = compact_threshold_pct.load(Ordering::Relaxed);
+                        let pct = if live_pct > 0 { live_pct as f64 / 100.0 } else { threshold_pct };
+                        let threshold = (context_window as f64 * pct) as usize;
+                        if context_tokens > threshold {
+                            crate::log::info(&format!(
+                                "auto-compact triggered ({context_tokens} tokens > {threshold} threshold)"
+                            ));
+                            compaction_triggered.store(true, Ordering::Relaxed);
+                            cancel_flag.store(true, Ordering::Relaxed);
+                        }
                     }
                 }
                 let _ = tx.send(AgentSessionEvent::Agent(event));

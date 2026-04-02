@@ -787,6 +787,9 @@ impl InteractiveMode {
                     layout.statusbar.set_queue(&self.pending_messages, self.editing_queue_idx);
                 }
             }
+            AgentEvent::ContextEstimate { .. } => {
+                // Handled by the compaction callback in agent_session; nothing to render.
+            }
             AgentEvent::Retrying { attempt, wait_secs, reason: _ } => {
                 self.status_message = Some(format!(
                     "Overloaded — retrying in {}s (attempt {}/3)…",
