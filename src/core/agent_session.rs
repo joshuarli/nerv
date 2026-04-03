@@ -157,6 +157,10 @@ pub enum AgentSessionEvent {
         provider: String,
         online: bool,
     },
+    /// Emitted after an assistant turn is fully persisted to the session DB.
+    ResponseSaved {
+        node_id: String,
+    },
     PlanModeChanged {
         enabled: bool,
     },
@@ -1102,6 +1106,11 @@ impl AgentSession {
         {
             let _ = event_tx
                 .send(AgentSessionEvent::Status { message: message.clone(), is_error: true });
+        }
+
+        // Notify the UI that the assistant turn has been persisted so /copy knows the node ID.
+        if let Some(node_id) = self.session_manager.leaf_id() {
+            let _ = event_tx.send(AgentSessionEvent::ResponseSaved { node_id: node_id.to_string() });
         }
 
         // Fire onResponseComplete for successful, non-error turns.

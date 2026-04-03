@@ -75,6 +75,8 @@ pub struct InteractiveMode {
     pub quit_requested: bool,
     /// The plain text of the last completed assistant response (for /copy).
     last_response: Option<String>,
+    /// The session node ID of the last completed assistant response (for /copy).
+    last_node_id: Option<String>,
     /// Pending messages queued while streaming.
     pub pending_messages: Vec<String>,
     /// If editing a queued message, which index.
@@ -154,6 +156,7 @@ impl InteractiveMode {
             status_is_error: false,
             quit_requested: false,
             last_response: None,
+            last_node_id: None,
             pending_messages: Vec::new(),
             editing_queue_idx: None,
             message_history: Vec::new(),
@@ -632,6 +635,9 @@ impl InteractiveMode {
             }
             AgentSessionEvent::ProviderHealth { provider, online } => {
                 layout.footer.set_provider_online(&provider, online);
+            }
+            AgentSessionEvent::ResponseSaved { node_id } => {
+                self.last_node_id = Some(node_id);
             }
             _ => {}
         }
@@ -1120,9 +1126,24 @@ impl InteractiveMode {
             }
             "/copy" => {
                 if let Some(ref text) = self.last_response.clone() {
+                    let file_path = self.session_id.as_deref().zip(self.last_node_id.as_deref())
+                        .map(|(sid, nid)| {
+                            let path = std::path::PathBuf::from(format!("/tmp/{}/{}", sid, nid));
+                            let _ = std::fs::create_dir_all(&path);
+                            path.join("response.md")
+                        });
+
+                    let wrote = file_path.as_ref().and_then(|p| {
+                        std::fs::write(p, text.as_bytes()).ok().map(|_| p.clone())
+                    });
+
                     match copy_to_clipboard(text) {
                         Ok(()) => {
-                            self.status_message = Some("Copied to clipboard.".into());
+                            let mut msg = "Copied last response to clipboard.".to_string();
+                            if let Some(p) = wrote {
+                                msg.push_str(&format!("\nAlso written to {}", p.display()));
+                            }
+                            self.status_message = Some(msg);
                         }
                         Err(e) => {
                             self.status_message = Some(format!("Copy failed: {}", e));
