@@ -13,7 +13,7 @@ use crate::core::tool_registry::ToolRegistry;
 use crate::index::SOURCE_EXTENSIONS;
 use crate::session::SessionManager;
 use crate::tools::{
-    BashTool, CodemapTool, EditTool, FileMutationQueue, FindTool, GrepTool, LsTool, MemoryTool,
+    CodemapTool, EditTool, EpshTool, FileMutationQueue, FindTool, GrepTool, LsTool, MemoryTool,
     ReadTool, SymbolsTool, WriteTool,
 };
 
@@ -142,7 +142,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
         let tools: Vec<Arc<dyn crate::agent::agent::AgentTool>> = {
             let mut t: Vec<Arc<dyn crate::agent::agent::AgentTool>> = vec![
                 Arc::new(ReadTool::new(cwd.to_path_buf())),
-                Arc::new(BashTool::new(cwd.to_path_buf())),
+                Arc::new(EpshTool::new(cwd.to_path_buf())),
                 Arc::new(EditTool::new(cwd.to_path_buf(), mutation_queue.clone())),
                 Arc::new(WriteTool::new(cwd.to_path_buf())),
                 Arc::new(GrepTool::new(cwd.to_path_buf())),

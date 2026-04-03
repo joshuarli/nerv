@@ -1,5 +1,5 @@
-pub mod bash;
 pub mod codemap;
+pub mod epsh;
 pub mod diff;
 pub mod edit;
 pub mod file_mutation_queue;
@@ -13,8 +13,8 @@ pub mod symbols;
 pub mod truncate;
 pub mod write;
 
-pub use bash::BashTool;
 pub use codemap::CodemapTool;
+pub use epsh::EpshTool;
 pub use edit::EditTool;
 pub use file_mutation_queue::FileMutationQueue;
 pub use find::FindTool;

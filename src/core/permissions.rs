@@ -59,11 +59,12 @@ pub fn path_for_args(tool: &str, args: &serde_json::Value) -> Option<String> {
         "read" | "edit" | "write" | "grep" | "find" | "ls" | "symbols" | "codemap" => {
             args["path"].as_str().map(|s| s.to_string())
         }
-        // For bash, extract the first path token so "allow dir" can find the git root.
+        // For bash, extract the first path-like token from the parsed AST.
         "bash" => {
             let cmd = args["command"].as_str()?;
-            let tokens = extract_path_tokens(cmd);
-            tokens.into_iter().next()
+            let mut parser = epsh::parser::Parser::new(cmd);
+            let program = parser.parse().ok()?;
+            extract_first_path_from_ast(&program)
         }
         _ => None,
     }
@@ -136,70 +137,302 @@ fn check_bash(args: &serde_json::Value, repo_root: Option<&Path>) -> Permission 
         return Permission::Allow;
     };
 
-    // Dangerous commands that always need approval
-    let dangerous = [
-        "sudo ",
-        "rm -rf /",
-        "rm -rf ~",
-        "mkfs",
-        "dd if=",
-        "> /dev/sd",
-        "> /dev/disk",
-        "chmod -R",
-        "chown -R",
-        "curl|sh",
-        "curl|bash",
-        "wget|sh",
-        "wget|bash",
-    ];
-    for d in &dangerous {
-        if cmd.contains(d) {
-            return Permission::Ask(format!("dangerous command: {}", cmd));
+    // Try AST-based analysis first; fall back to string-based on parse failure.
+    let mut parser = epsh::parser::Parser::new(cmd);
+    match parser.parse() {
+        Ok(program) => check_bash_ast(&program, repo_root),
+        Err(_) => Permission::Ask(format!("unparseable command: {}", cmd)),
+    }
+}
+
+/// Dangerous command names that always need user approval.
+const DANGEROUS_COMMANDS: &[&str] = &[
+    "sudo", "mkfs", "dd",
+];
+
+/// Commands that execute arbitrary constructed strings.
+const EVAL_COMMANDS: &[&str] = &["eval"];
+
+/// Shell names -- flagged when receiving piped input.
+const SHELL_NAMES: &[&str] = &["sh", "bash", "zsh"];
+
+/// Walk the AST to check for dangerous commands and paths outside the repo.
+fn check_bash_ast(program: &epsh::ast::Program, repo_root: Option<&Path>) -> Permission {
+    for cmd in &program.commands {
+        if let p @ Permission::Ask(_) = visit_command(cmd, repo_root, false) {
+            return p;
+        }
+    }
+    Permission::Allow
+}
+
+fn visit_command(
+    cmd: &epsh::ast::Command,
+    repo_root: Option<&Path>,
+    in_pipeline: bool,
+) -> Permission {
+    use epsh::ast::Command;
+    match cmd {
+        Command::Simple { args, redirs, .. } => {
+            visit_simple(args, redirs, repo_root, in_pipeline)
+        }
+        Command::Pipeline { commands, .. } => {
+            for c in commands {
+                if let p @ Permission::Ask(_) = visit_command(c, repo_root, true) {
+                    return p;
+                }
+            }
+            Permission::Allow
+        }
+        Command::And(l, r) | Command::Or(l, r) | Command::Sequence(l, r) => {
+            if let p @ Permission::Ask(_) = visit_command(l, repo_root, false) {
+                return p;
+            }
+            visit_command(r, repo_root, false)
+        }
+        Command::Subshell { body, redirs, .. } | Command::BraceGroup { body, redirs, .. } => {
+            if let p @ Permission::Ask(_) = check_redirs(redirs, repo_root) {
+                return p;
+            }
+            visit_command(body, repo_root, false)
+        }
+        Command::If { cond, then_part, else_part, .. } => {
+            if let p @ Permission::Ask(_) = visit_command(cond, repo_root, false) {
+                return p;
+            }
+            if let p @ Permission::Ask(_) = visit_command(then_part, repo_root, false) {
+                return p;
+            }
+            if let Some(e) = else_part {
+                visit_command(e, repo_root, false)
+            } else {
+                Permission::Allow
+            }
+        }
+        Command::While { cond, body, .. } | Command::Until { cond, body, .. } => {
+            if let p @ Permission::Ask(_) = visit_command(cond, repo_root, false) {
+                return p;
+            }
+            visit_command(body, repo_root, false)
+        }
+        Command::For { body, words, .. } => {
+            if let Some(words) = words {
+                for w in words {
+                    if let p @ Permission::Ask(_) = check_word_paths(w, repo_root) {
+                        return p;
+                    }
+                }
+            }
+            visit_command(body, repo_root, false)
+        }
+        Command::Case { word, arms, .. } => {
+            if let p @ Permission::Ask(_) = check_word_paths(word, repo_root) {
+                return p;
+            }
+            for arm in arms {
+                if let Some(ref body) = arm.body {
+                    if let p @ Permission::Ask(_) = visit_command(body, repo_root, false) {
+                        return p;
+                    }
+                }
+            }
+            Permission::Allow
+        }
+        Command::FuncDef { body, .. } => visit_command(body, repo_root, false),
+        Command::Not(inner) => visit_command(inner, repo_root, false),
+        Command::Background { cmd, redirs } => {
+            if let p @ Permission::Ask(_) = check_redirs(redirs, repo_root) {
+                return p;
+            }
+            visit_command(cmd, repo_root, false)
+        }
+    }
+}
+
+fn visit_simple(
+    args: &[epsh::ast::Word],
+    redirs: &[epsh::ast::Redir],
+    repo_root: Option<&Path>,
+    in_pipeline: bool,
+) -> Permission {
+    // Extract the command name if it's a static literal.
+    let cmd_name = args.first().and_then(|w| word_to_static_str(w));
+
+    if let Some(name) = cmd_name {
+        let base = name.rsplit('/').next().unwrap_or(&name);
+
+        // Dangerous commands
+        if DANGEROUS_COMMANDS.contains(&base) {
+            return Permission::Ask(format!("dangerous command: {}", name));
+        }
+
+        // eval -- can execute arbitrary strings
+        if EVAL_COMMANDS.contains(&base) {
+            return Permission::Ask(format!("command uses eval"));
+        }
+
+        // Pipe to shell (curl | sh, wget | bash, etc.)
+        if in_pipeline && SHELL_NAMES.contains(&base) {
+            return Permission::Ask(format!("pipe to shell: {}", name));
         }
     }
 
-    // eval — can execute arbitrary constructed strings
-    if cmd.contains("eval ") {
-        return Permission::Ask(format!("bash uses eval: {}", cmd));
+    // Check all argument words for paths and embedded command substitutions.
+    for word in args.iter().skip(1) {
+        if let p @ Permission::Ask(_) = check_word_paths(word, repo_root) {
+            return p;
+        }
     }
 
-    // Check for paths outside repo in the command (including after redirects)
-    if let Some(root) = repo_root {
-        // Extract all tokens, including redirect targets
-        let tokens = extract_path_tokens(cmd);
-        let root_str = root.to_string_lossy();
+    // Check redirects.
+    if let p @ Permission::Ask(_) = check_redirs(redirs, repo_root) {
+        return p;
+    }
 
-        for token in &tokens {
-            if token.starts_with('/') && !token.starts_with(root_str.as_ref()) {
-                if is_safe_system_path(token) {
-                    continue;
-                }
-                return Permission::Ask(format!("path outside repo: {}", token));
-            }
-            if token.starts_with("~/") {
-                // Expand ~/... to an absolute path for comparison.
-                let expanded = if let Some(rest) = token.strip_prefix("~/") {
-                    crate::home_dir().map(|h| h.join(rest))
-                } else {
-                    None
-                };
-                let within_repo = expanded.as_ref().map(|abs| {
-                    let abs = normalize_path(abs);
-                    let root = normalize_path(root);
-                    abs.starts_with(&root)
-                }).unwrap_or(false);
-                if within_repo {
-                    continue;
-                }
-                if is_safe_home_dir_token(token) {
-                    continue;
-                }
-                return Permission::Ask(format!("home path: {}", token));
-            }
+    // Recurse into command substitutions in all words (including cmd name).
+    for word in args {
+        if let p @ Permission::Ask(_) = check_word_substs(word, repo_root) {
+            return p;
         }
     }
 
     Permission::Allow
+}
+
+/// Check redirect targets for paths outside the repo.
+fn check_redirs(redirs: &[epsh::ast::Redir], repo_root: Option<&Path>) -> Permission {
+    use epsh::ast::RedirKind;
+    for redir in redirs {
+        let target = match &redir.kind {
+            RedirKind::Input(w)
+            | RedirKind::Output(w)
+            | RedirKind::Clobber(w)
+            | RedirKind::Append(w)
+            | RedirKind::ReadWrite(w) => Some(w),
+            // DupInput/DupOutput are fd numbers, not paths.
+            // HereDocs don't reference filesystem paths.
+            _ => None,
+        };
+        if let Some(word) = target {
+            if let p @ Permission::Ask(_) = check_word_paths(word, repo_root) {
+                return p;
+            }
+            if let p @ Permission::Ask(_) = check_word_substs(word, repo_root) {
+                return p;
+            }
+        }
+    }
+    Permission::Allow
+}
+
+/// If a word resolves to a single static string, check it as a potential path.
+fn check_word_paths(word: &epsh::ast::Word, repo_root: Option<&Path>) -> Permission {
+    if let Some(literal) = word_to_static_str(word) {
+        return check_path_token(&literal, repo_root);
+    }
+    Permission::Allow
+}
+
+/// Recurse into command substitutions embedded in word parts.
+fn check_word_substs(word: &epsh::ast::Word, repo_root: Option<&Path>) -> Permission {
+    for part in &word.parts {
+        if let p @ Permission::Ask(_) = check_part_substs(part, repo_root) {
+            return p;
+        }
+    }
+    Permission::Allow
+}
+
+fn check_part_substs(part: &epsh::ast::WordPart, repo_root: Option<&Path>) -> Permission {
+    use epsh::ast::WordPart;
+    match part {
+        WordPart::CmdSubst(cmd) | WordPart::Backtick(cmd) => {
+            visit_command(cmd, repo_root, false)
+        }
+        WordPart::DoubleQuoted(parts) => {
+            for p in parts {
+                if let perm @ Permission::Ask(_) = check_part_substs(p, repo_root) {
+                    return perm;
+                }
+            }
+            Permission::Allow
+        }
+        _ => Permission::Allow,
+    }
+}
+
+/// Check a literal string as a potential path against the repo root.
+fn check_path_token(token: &str, repo_root: Option<&Path>) -> Permission {
+    let Some(root) = repo_root else {
+        return Permission::Allow;
+    };
+
+    if token.starts_with('/') {
+        // Only flag tokens that actually exist on disk -- avoids false positives
+        // on regex patterns like `//.*Value` or URL paths.
+        if !PathBuf::from(token).exists() {
+            return Permission::Allow;
+        }
+        let root_str = root.to_string_lossy();
+        if token.starts_with(root_str.as_ref()) {
+            return Permission::Allow;
+        }
+        if is_safe_system_path(token) {
+            return Permission::Allow;
+        }
+        return Permission::Ask(format!("path outside repo: {}", token));
+    }
+    if token.starts_with("~/") {
+        let expanded = token.strip_prefix("~/").and_then(|rest| {
+            crate::home_dir().map(|h| h.join(rest))
+        });
+        // Must exist on disk.
+        if !expanded.as_ref().is_some_and(|p| p.exists()) {
+            return Permission::Allow;
+        }
+        let within_repo = expanded.as_ref().map(|abs| {
+            let abs = normalize_path(abs);
+            let root = normalize_path(root);
+            abs.starts_with(&root)
+        }).unwrap_or(false);
+        if within_repo {
+            return Permission::Allow;
+        }
+        if is_safe_home_dir_token(token) {
+            return Permission::Allow;
+        }
+        return Permission::Ask(format!("home path: {}", token));
+    }
+    Permission::Allow
+}
+
+/// Try to resolve a word to a single static string (all literal / single-quoted
+/// / tilde parts, no expansions).
+fn word_to_static_str(word: &epsh::ast::Word) -> Option<String> {
+    use epsh::ast::WordPart;
+    let mut out = String::new();
+    for part in &word.parts {
+        match part {
+            WordPart::Literal(s) | WordPart::SingleQuoted(s) => out.push_str(s),
+            WordPart::Tilde(user) => {
+                out.push('~');
+                out.push_str(user);
+            }
+            WordPart::DoubleQuoted(inner) => {
+                // A double-quoted region is static only if all parts inside are literals.
+                for p in inner {
+                    match p {
+                        WordPart::Literal(s) => out.push_str(s),
+                        _ => return None,
+                    }
+                }
+            }
+            // Any dynamic part (variable, command subst, arithmetic) means
+            // we can't statically determine the value.
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 /// Normalize a path by resolving `.` and `..` without touching the filesystem.
@@ -247,54 +480,83 @@ fn is_safe_home_path(path: &str) -> bool {
     SAFE_HOME_DIRS.iter().any(|d| path.starts_with(&format!("{}/{}", home, d)))
 }
 
-/// Extract tokens that might be paths, including redirect targets.
-fn extract_path_tokens(cmd: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    // Strip heredoc body — everything after a `<< EOF` or `<< 'EOF'` marker is
-    // literal content and must not be scanned for path tokens.
-    let cmd = if let Some(pos) = cmd.find("<<") {
-        // Find end of the `<<` line; heredoc body starts after the first newline.
-        if let Some(nl) = cmd[pos..].find('\n') { &cmd[..pos + nl] } else { &cmd[..pos] }
-    } else {
-        cmd
-    };
-    // Strip double-quoted and single-quoted strings before tokenizing — their
-    // contents are argument values (commit messages, regex patterns, etc.) and
-    // should never be interpreted as path tokens.
-    let mut stripped = String::with_capacity(cmd.len());
-    let mut chars = cmd.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '"' || c == '\'' {
-            // Consume until matching closing quote (no escape handling needed)
-            for inner in chars.by_ref() {
-                if inner == c {
-                    break;
+/// Walk the AST looking for the first literal path-like argument. Used by
+/// `path_for_args` to find a directory for "allow directory" prompts.
+fn extract_first_path_from_ast(program: &epsh::ast::Program) -> Option<String> {
+    for cmd in &program.commands {
+        if let Some(p) = first_path_in_command(cmd) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn first_path_in_command(cmd: &epsh::ast::Command) -> Option<String> {
+    use epsh::ast::Command;
+    match cmd {
+        Command::Simple { args, redirs, .. } => {
+            for word in args.iter().skip(1) {
+                if let Some(s) = word_to_static_str(word) {
+                    if (s.starts_with('/') || s.starts_with("~/")) && path_exists(&s) {
+                        return Some(s);
+                    }
                 }
             }
-            stripped.push(' '); // preserve token boundary
-        } else {
-            stripped.push(c);
-        }
-    }
-
-    // Split on whitespace but also catch tokens after redirect operators
-    let cleaned = stripped.replace(">>", " >> ").replace(">", " > ").replace("<", " < ");
-    for token in cleaned.split_whitespace() {
-        if token.starts_with('/') || token.starts_with("~/") {
-            // Only treat a token as a path if it actually exists on the
-            // filesystem. This rejects non-existent paths, regex patterns,
-            // and other strings that happen to start with `/` or `~/`.
-            let resolved = if let Some(rest) = token.strip_prefix("~/") {
-                crate::home_dir().map(|h| h.join(rest))
-            } else {
-                Some(PathBuf::from(token))
-            };
-            if resolved.map(|p| p.exists()).unwrap_or(false) {
-                tokens.push(token.to_string());
+            for redir in redirs {
+                if let Some(word) = redir_target_word(redir) {
+                    if let Some(s) = word_to_static_str(word) {
+                        if (s.starts_with('/') || s.starts_with("~/")) && path_exists(&s) {
+                            return Some(s);
+                        }
+                    }
+                }
             }
+            None
         }
+        Command::Pipeline { commands, .. } => {
+            commands.iter().find_map(first_path_in_command)
+        }
+        Command::And(l, r) | Command::Or(l, r) | Command::Sequence(l, r) => {
+            first_path_in_command(l).or_else(|| first_path_in_command(r))
+        }
+        Command::Subshell { body, .. }
+        | Command::BraceGroup { body, .. }
+        | Command::While { body, .. }
+        | Command::Until { body, .. }
+        | Command::For { body, .. }
+        | Command::FuncDef { body, .. }
+        | Command::Not(body) => first_path_in_command(body),
+        Command::If { cond, then_part, else_part, .. } => {
+            first_path_in_command(cond)
+                .or_else(|| first_path_in_command(then_part))
+                .or_else(|| else_part.as_ref().and_then(|e| first_path_in_command(e)))
+        }
+        Command::Case { arms, .. } => {
+            arms.iter().find_map(|arm| arm.body.as_ref().and_then(first_path_in_command))
+        }
+        Command::Background { cmd, .. } => first_path_in_command(cmd),
     }
-    tokens
+}
+
+fn redir_target_word(redir: &epsh::ast::Redir) -> Option<&epsh::ast::Word> {
+    use epsh::ast::RedirKind;
+    match &redir.kind {
+        RedirKind::Input(w)
+        | RedirKind::Output(w)
+        | RedirKind::Clobber(w)
+        | RedirKind::Append(w)
+        | RedirKind::ReadWrite(w) => Some(w),
+        _ => None,
+    }
+}
+
+fn path_exists(token: &str) -> bool {
+    let resolved = if let Some(rest) = token.strip_prefix("~/") {
+        crate::home_dir().map(|h| h.join(rest))
+    } else {
+        Some(PathBuf::from(token))
+    };
+    resolved.is_some_and(|p| p.exists())
 }
 
 fn is_within_repo(path: &str, repo_root: Option<&Path>) -> bool {
@@ -479,21 +741,23 @@ mod tests {
     #[test]
     fn bash_git_commit_with_cd_prefix_allowed() {
         // `cd /repo && git add -A && git commit -m "..."` must be allowed when
-        // the cd target is the repo root.  Also covers the case where the
-        // commit message has a stray trailing `"` (double-quote at end of the
-        // outer shell string), which confuses the quote-stripper.
+        // the cd target is the repo root.
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        // Normal form
         let cmd =
             format!("cd {} && git add -A && git commit -m \"fix: some message\"", root.display());
         let args = serde_json::json!({"command": cmd});
         assert_eq!(check("bash", &args, Some(&root)), Permission::Allow);
+    }
 
-        // Stray trailing `"` — the raw string the /commit skill sometimes emits
-        let cmd2 =
+    #[test]
+    fn bash_stray_trailing_quote_asks() {
+        // A stray trailing `"` is a syntax error. The AST-based permission
+        // checker correctly rejects unparseable commands.
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let cmd =
             format!("cd {} && git add -A && git commit -m \"fix: some message\"\"", root.display());
-        let args2 = serde_json::json!({"command": cmd2});
-        assert_eq!(check("bash", &args2, Some(&root)), Permission::Allow);
+        let args = serde_json::json!({"command": cmd});
+        assert!(matches!(check("bash", &args, Some(&root)), Permission::Ask(_)));
     }
 
     #[test]
