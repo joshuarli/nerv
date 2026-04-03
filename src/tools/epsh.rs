@@ -63,6 +63,9 @@ pub struct EpshTool {
 
 impl EpshTool {
     pub fn new(cwd: PathBuf) -> Self {
+        // Anchor the shell to the git root so the model's relative paths always
+        // resolve correctly regardless of which subdirectory nerv was launched from.
+        let cwd = crate::find_repo_root(&cwd).unwrap_or(cwd);
         Self { cwd }
     }
 }
@@ -94,6 +97,12 @@ impl AgentTool for EpshTool {
     fn prompt_guidelines(&self) -> Vec<String> {
         vec![
             "Commands run in a POSIX shell. Bash extensions are not available: no [[ ]], no arrays, no process substitution <(), no brace expansion {a,b}, no <<<.".into(),
+            // The shell is always spawned with cwd set to the project git root — never use `cd`.
+            // `cd` to the project root or any absolute path is wrong and wastes a round-trip.
+            format!(
+                "`epsh` always starts in the project root (`{}`). Never `cd` — use relative paths.",
+                self.cwd.display()
+            ),
         ]
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {

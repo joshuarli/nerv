@@ -25,7 +25,7 @@ Never jump to step 4 when step 2 or 3 would answer the question.
 - After editing, verify your change works (run tests, build, or the relevant check command).
 - If `edit` returns `old_text not found`: do NOT re-read the file. Use `grep` to find the actual current text at that location, then retry the edit once with the correct old_text. If it fails again, explain the problem to the user.
 - If a read returns `[unchanged since last read]` or `[already read ...]`: the file has not changed — trust your context. Re-reading will return the same message. Use `grep` if you need to locate specific text.
-- All tools run from the project root.
+- All tools run from the project root. The `epsh` shell always starts there — do not repetitively cd` into it.
 
 # Output style
 
