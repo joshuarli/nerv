@@ -516,6 +516,7 @@ fn main() {
             }
             cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
             interactive.handle_abort();
+            layout.chat.cancel_stream();
             layout.statusbar.cancel_streaming();
             tui.request_render(false);
             render_frame!(tui, layout);
@@ -662,6 +663,7 @@ fn main() {
                                 }
                                 cancel_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                                 interactive.handle_abort();
+                                layout.chat.cancel_stream();
                                 layout.statusbar.cancel_streaming();
                                 tui.request_render(false); render_frame!(tui, layout);
                                 continue;
