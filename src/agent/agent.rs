@@ -673,7 +673,7 @@ impl Agent {
         // Output gate: fires after bash executes (bash.rs has already applied
         // output_filter and stripped truncate_tail). The gate sees the final
         // byte count that will actually enter context.
-        if name == "bash"
+        if name == "epsh"
             && !result.is_error
             && let Some(ref gate_fn) = self.state.output_gate_fn
             && result.content.len() > OUTPUT_GATE_THRESHOLD_BYTES

@@ -46,7 +46,7 @@ pub fn check_with_allowed_dirs(
     match tool {
         "read" | "grep" | "find" | "ls" | "symbols" | "codemap" => check_read_tool(args, repo_root),
         "edit" | "write" => check_write_tool(tool, args, repo_root),
-        "bash" => check_bash(args, repo_root),
+        "epsh" => check_bash(args, repo_root),
         "memory" => Permission::Allow,
         _ => Permission::Ask(format!("unknown tool: {}", tool)),
     }
@@ -60,7 +60,7 @@ pub fn path_for_args(tool: &str, args: &serde_json::Value) -> Option<String> {
             args["path"].as_str().map(|s| s.to_string())
         }
         // For bash, extract the first path-like token from the parsed AST.
-        "bash" => {
+        "epsh" => {
             let cmd = args["command"].as_str()?;
             let mut parser = epsh::parser::Parser::new(cmd);
             let program = parser.parse().ok()?;
@@ -150,8 +150,8 @@ const DANGEROUS_COMMANDS: &[&str] = &[
     "sudo", "mkfs", "dd",
 ];
 
-/// Commands that execute arbitrary constructed strings.
-const EVAL_COMMANDS: &[&str] = &["eval"];
+/// Builtins that execute arbitrary strings or replace the process.
+const DANGEROUS_BUILTINS: &[&str] = &["eval", "exec", "trap"];
 
 /// Shell names -- flagged when receiving piped input.
 const SHELL_NAMES: &[&str] = &["sh", "bash", "zsh"];
@@ -266,9 +266,10 @@ fn visit_simple(
             return Permission::Ask(format!("dangerous command: {}", name));
         }
 
-        // eval -- can execute arbitrary strings
-        if EVAL_COMMANDS.contains(&base) {
-            return Permission::Ask(format!("command uses eval"));
+        // Builtins that execute arbitrary strings, replace the process, or
+        // install signal handlers.
+        if DANGEROUS_BUILTINS.contains(&base) {
+            return Permission::Ask(format!("dangerous builtin: {}", base));
         }
 
         // Pipe to shell (curl | sh, wget | bash, etc.)
@@ -632,31 +633,31 @@ mod tests {
     #[test]
     fn bash_simple_command_allowed() {
         let args = serde_json::json!({"command": "cargo test"});
-        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
     fn bash_dangerous_command_asks() {
         let args = serde_json::json!({"command": "sudo rm -rf /"});
-        assert!(matches!(check("bash", &args, Some(&repo())), Permission::Ask(_)));
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
     fn bash_outside_path_asks() {
         let args = serde_json::json!({"command": "cat /etc/passwd"});
-        assert!(matches!(check("bash", &args, Some(&repo())), Permission::Ask(_)));
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
     fn bash_system_paths_allowed() {
         let args = serde_json::json!({"command": "ls /usr/bin/git"});
-        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
     fn bash_dev_null_allowed() {
         let args = serde_json::json!({"command": "echo test > /dev/null"});
-        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
@@ -686,33 +687,45 @@ mod tests {
     #[test]
     fn bash_eval_asks() {
         let args = serde_json::json!({"command": "eval \"$HOSTILE\""});
-        assert!(matches!(check("bash", &args, Some(&repo())), Permission::Ask(_)));
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    #[test]
+    fn exec_asks() {
+        let args = serde_json::json!({"command": "exec /bin/sh"});
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    #[test]
+    fn trap_asks() {
+        let args = serde_json::json!({"command": "trap 'rm -rf /' EXIT"});
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
     fn bash_for_loop_allowed() {
         let cmd = "for t in agent btw session integration; do\n  result=$(cargo test --test $t 2>&1 | tail -1)\n  echo \"$t: $result\"\ndone";
         let args = serde_json::json!({"command": cmd});
-        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
     fn bash_backtick_command_allowed() {
         // Backticks are common in scripts; path checks still apply.
         let args = serde_json::json!({"command": "echo `date`"});
-        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
     fn bash_redirect_outside_repo_asks() {
         let args = serde_json::json!({"command": "echo evil > /etc/passwd"});
-        assert!(matches!(check("bash", &args, Some(&repo())), Permission::Ask(_)));
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
     fn bash_pipe_to_tee_outside_asks() {
         let args = serde_json::json!({"command": "echo hi | tee /etc/passwd"});
-        assert!(matches!(check("bash", &args, Some(&repo())), Permission::Ask(_)));
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
@@ -721,13 +734,13 @@ mod tests {
         // It must not trigger a permission prompt.
         let args =
             serde_json::json!({"command": r#"rg --color=never --no-heading -n "//.*Value" src/"#});
-        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
     fn bash_rg_search_in_src_allowed() {
         let args = serde_json::json!({"command": r#"rg --color=never --no-heading -n "serde_json" src/ --type rust | sort | head -12"#});
-        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
@@ -735,7 +748,7 @@ mod tests {
         // `//` appearing in a -m commit message must not be treated as an outside-repo
         // path.
         let args = serde_json::json!({"command": r#"git commit -m "fix prompt for // patterns""#});
-        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
@@ -746,7 +759,7 @@ mod tests {
         let cmd =
             format!("cd {} && git add -A && git commit -m \"fix: some message\"", root.display());
         let args = serde_json::json!({"command": cmd});
-        assert_eq!(check("bash", &args, Some(&root)), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&root)), Permission::Allow);
     }
 
     #[test]
@@ -757,7 +770,7 @@ mod tests {
         let cmd =
             format!("cd {} && git add -A && git commit -m \"fix: some message\"\"", root.display());
         let args = serde_json::json!({"command": cmd});
-        assert!(matches!(check("bash", &args, Some(&root)), Permission::Ask(_)));
+        assert!(matches!(check("epsh", &args, Some(&root)), Permission::Ask(_)));
     }
 
     #[test]
@@ -766,7 +779,7 @@ mod tests {
         // pressing 'a' on a bash permission prompt doesn't push the entire
         // command string into allowed_dirs (which caused repeat prompts).
         let args = serde_json::json!({"command": "git add -A && git commit -m \"msg\""});
-        assert_eq!(super::path_for_args("bash", &args), None);
+        assert_eq!(super::path_for_args("epsh", &args), None);
     }
 
     #[test]
@@ -775,7 +788,7 @@ mod tests {
         // path on macOS but must not be scanned — only the redirect target matters.
         let cmd = "cat > /tmp/test.rs << 'EOF'\n// a rust comment\nfn main() {}\nEOF";
         let args = serde_json::json!({"command": cmd});
-        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
@@ -785,7 +798,7 @@ mod tests {
         let home = crate::home_dir().unwrap();
         let db = format!("sqlite3 {}/.nerv/sessions.db '.tables'", home.display());
         let args = serde_json::json!({"command": db});
-        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
@@ -793,7 +806,7 @@ mod tests {
         let home = crate::home_dir().unwrap();
         let cmd = format!("cat {}/.cargo/config.toml", home.display());
         let args = serde_json::json!({"command": cmd});
-        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
@@ -801,7 +814,7 @@ mod tests {
         let home = crate::home_dir().unwrap();
         let cmd = format!("cat {}/.config/some-tool/config.yml", home.display());
         let args = serde_json::json!({"command": cmd});
-        assert_eq!(check("bash", &args, Some(&repo())), Permission::Allow);
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
@@ -844,7 +857,7 @@ mod tests {
         std::fs::write(&tmp_file, "").unwrap();
         let cmd = format!("cat {}", tmp_file.display());
         let args = serde_json::json!({"command": cmd});
-        let result = check("bash", &args, Some(&repo()));
+        let result = check("epsh", &args, Some(&repo()));
         let _ = std::fs::remove_file(&tmp_file);
         assert!(matches!(result, Permission::Ask(_)));
     }

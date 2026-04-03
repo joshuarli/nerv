@@ -52,7 +52,7 @@ impl ToolRegistry {
     pub fn lite_compactable_names(&self) -> std::collections::HashSet<String> {
         self.all
             .iter()
-            .filter(|t| t.is_readonly() || t.name() == "bash")
+            .filter(|t| t.is_readonly() || t.name() == "epsh")
             .map(|t| t.name().to_string())
             .collect()
     }

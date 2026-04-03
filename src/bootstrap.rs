@@ -179,7 +179,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
                     }
                 }
             }
-            "bash" => {
+            "epsh" => {
                 if let Ok(mut index) = symbol_index.write() {
                     index.mark_dirty();
                 }

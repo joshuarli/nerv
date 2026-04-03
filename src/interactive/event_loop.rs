@@ -271,7 +271,7 @@ impl InteractiveMode {
             AgentSessionEvent::PermissionRequest { tool, args, reason, response_tx, .. } => {
                 // Show the full command/path so the user can make an informed decision.
                 // For bash, pull out the command string directly; for others show the reason.
-                let detail = if tool == "bash" {
+                let detail = if tool == "epsh" {
                     args["command"].as_str().unwrap_or(&reason).to_string()
                 } else {
                     reason.clone()

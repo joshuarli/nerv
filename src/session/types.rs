@@ -255,7 +255,7 @@ pub struct PermissionAcceptEntry {
     pub id: String,
     pub parent_id: Option<String>,
     pub timestamp: String,
-    /// Tool name (e.g. `"bash"`, `"write"`).
+    /// Tool name (e.g. `"epsh"`, `"write"`).
     pub tool: String,
     /// Tool arguments serialized as a JSON string. Used as a cache key — the
     /// exact bytes must match the serialization produced at permission-check

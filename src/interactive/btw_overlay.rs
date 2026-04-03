@@ -189,7 +189,7 @@ fn tool_call_summary(name: &str, args: &serde_json::Value) -> String {
     // Show the most useful argument for each tool so the model understands what
     // happened.
     let detail = match name {
-        "bash" => args
+        "epsh" => args
             .get("command")
             .and_then(|v| v.as_str())
             .map(|s| s.truncate_chars(120).to_string()),

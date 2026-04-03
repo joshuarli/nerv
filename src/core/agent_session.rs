@@ -377,7 +377,7 @@ impl AgentSession {
             // Read-only tools + write + edit (write/edit are gated to plan_path only
             // via permissions).
             self.tool_registry.set_active(&[
-                "read", "bash", "grep", "find", "ls", "symbols", "codemap", "memory",
+                "read", "epsh", "grep", "find", "ls", "symbols", "codemap", "memory",
                 "write", "edit",
             ]);
         } else {

@@ -675,7 +675,7 @@ mod tests {
         // Block 1: tool_use
         p(
             "content_block_start",
-            serde_json::json!({"index": 1, "content_block": {"type": "tool_use", "id": "toolu_xyz", "name": "bash"}}),
+            serde_json::json!({"index": 1, "content_block": {"type": "tool_use", "id": "toolu_xyz", "name": "epsh"}}),
             &mut state,
         );
         // Block 2: thinking

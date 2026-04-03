@@ -43,9 +43,9 @@ pub fn format_tool_call(name: &str, args: &serde_json::Value) -> String {
         }
         "edit" => format!("{}edit{} {}{}{}", tn, r, tp, args["path"].as_str().unwrap_or("?"), r),
         "write" => format!("{}write{} {}{}{}", tn, r, tp, args["path"].as_str().unwrap_or("?"), r),
-        "bash" => {
+        "epsh" => {
             let cmd = args["command"].as_str().unwrap_or("?");
-            format!("{}bash{} {}$ {}{}", tn, r, d, cmd, r)
+            format!("{}${} {}{}", tn, r, cmd, r)
         }
         "grep" => {
             let pattern = args["pattern"].as_str().unwrap_or("?");

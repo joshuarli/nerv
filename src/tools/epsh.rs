@@ -25,10 +25,10 @@ impl EpshTool {
 
 impl AgentTool for EpshTool {
     fn name(&self) -> &str {
-        "bash"
+        "epsh"
     }
     fn description(&self) -> &str {
-        "Execute a shell command and return its output."
+        "Execute a POSIX shell command and return its output."
     }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({

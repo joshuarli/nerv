@@ -164,7 +164,7 @@ impl MessageMeta {
                 for block in &a.content {
                     if let ContentBlock::ToolCall { id, name, arguments } = block {
                         tool_names.insert(id.clone(), name.clone());
-                        if name == "bash"
+                        if name == "epsh"
                             && let Some(cmd) = arguments.get("command").and_then(|v| v.as_str())
                         {
                             bash_commands.insert(id.clone(), cmd.to_string());
@@ -315,7 +315,7 @@ fn transform_tool_result(
     // bash.rs already ran the pipeline eagerly at execution time so the output
     // gate could see the final byte count.
     let already_filtered = meta.already_filtered_ids.contains(&tool_call_id);
-    if tool_name == Some("bash") && !is_error && !already_filtered {
+    if tool_name == Some("epsh") && !is_error && !already_filtered {
         // Borrow the text directly from a single Text item to avoid an allocation;
         // fall back to a joined String only for the (practically impossible) multi-item
         // case.
@@ -1055,7 +1055,7 @@ mod tests {
             assistant_thinking_tool_call(
                 &big_thinking,
                 "t3",
-                "bash",
+                "epsh",
                 serde_json::json!({"command": "cargo test"}),
             ),
             tool_result("t3", &format!("test result: ok. 50 passed\n{}", "output ".repeat(500))),
@@ -1314,7 +1314,7 @@ mod tests {
             ),
             tool_result("t3", "Applied edit"),
             // Turn 4: model runs tests — they fail
-            assistant_tool_call("t4", "bash", serde_json::json!({"command": "cargo test"})),
+            assistant_tool_call("t4", "epsh", serde_json::json!({"command": "cargo test"})),
             tool_error("t4", &format!("FAILED\n{}", "error output\n".repeat(200))),
             // Turn 5: model fixes and retries
             assistant_thinking_tool_call(
@@ -1328,7 +1328,7 @@ mod tests {
                 }),
             ),
             tool_result("t5", "Applied edit"),
-            assistant_tool_call("t6", "bash", serde_json::json!({"command": "cargo test"})),
+            assistant_tool_call("t6", "epsh", serde_json::json!({"command": "cargo test"})),
             tool_result("t6", "test result: ok. 50 passed"),
             // Final response
             assistant_thinking_text(&thinking, "The endpoint is set up and tests pass."),
@@ -2065,7 +2065,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
             let id = format!("pad_{}", i);
             msgs.push(assistant_tool_call(
                 &id,
-                "bash",
+                "epsh",
                 serde_json::json!({"command": format!("echo {}", i)}),
             ));
             msgs.push(tool_result(&id, &format!("{}", i)));
@@ -2112,7 +2112,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
             let id = format!("pad_{}", i);
             msgs.push(assistant_tool_call(
                 &id,
-                "bash",
+                "epsh",
                 serde_json::json!({"command": format!("echo {}", i)}),
             ));
             msgs.push(tool_result(&id, &format!("{}", i)));
@@ -2156,7 +2156,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
             let id = format!("pad_{}", i);
             msgs.push(assistant_tool_call(
                 &id,
-                "bash",
+                "epsh",
                 serde_json::json!({"command": format!("echo {}", i)}),
             ));
             msgs.push(tool_result(&id, &format!("{}", i)));
@@ -2196,7 +2196,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
             let id = format!("pad_{}", i);
             msgs.push(assistant_tool_call(
                 &id,
-                "bash",
+                "epsh",
                 serde_json::json!({"command": format!("echo {}", i)}),
             ));
             msgs.push(tool_result(&id, &format!("{}", i)));
@@ -2243,7 +2243,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         // Duplicate lines — the dedup stage of filter_bash_output would collapse these.
         let content = "line\nline\nline\nline\nline\n";
         let msgs = vec![
-            assistant_tool_call("c1", "bash", serde_json::json!({"command": "echo line"})),
+            assistant_tool_call("c1", "epsh", serde_json::json!({"command": "echo line"})),
             tool_result_with_details("c1", content, ToolDetails { filtered: true, ..Default::default() }),
             // A response to terminate the sequence
             AgentMessage::Assistant(AssistantMessage {
@@ -2271,7 +2271,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
     fn unfiltered_bash_result_is_filtered_by_transform_context() {
         let content = "line\nline\nline\nline\nline\n";
         let msgs = vec![
-            assistant_tool_call("c1", "bash", serde_json::json!({"command": "echo line"})),
+            assistant_tool_call("c1", "epsh", serde_json::json!({"command": "echo line"})),
             tool_result("c1", content), // no details → not pre-filtered
             AgentMessage::Assistant(AssistantMessage {
                 content: vec![ContentBlock::Text { text: "done".into() }],
@@ -2300,7 +2300,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
     fn filter_in_transform_preserves_display_and_sets_filtered_flag() {
         let content = "line\nline\nline\nline\nline\n";
         let msgs = vec![
-            assistant_tool_call("c1", "bash", serde_json::json!({"command": "echo line"})),
+            assistant_tool_call("c1", "epsh", serde_json::json!({"command": "echo line"})),
             AgentMessage::ToolResult {
                 tool_call_id: "c1".into(),
                 content: vec![ContentItem::Text { text: content.into() }],
@@ -2333,7 +2333,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
     }
 
     fn default_compactable() -> HashSet<String> {
-        ["bash", "read", "grep", "find", "ls", "symbols", "codemap"]
+        ["epsh", "read", "grep", "find", "ls", "symbols", "codemap"]
             .iter()
             .map(|s| s.to_string())
             .collect()
@@ -2344,7 +2344,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         let mut msgs = vec![
             // Turn 1 (old)
             user("first prompt"),
-            assistant_tool_call("t1", "bash", serde_json::json!({"command": "ls"})),
+            assistant_tool_call("t1", "epsh", serde_json::json!({"command": "ls"})),
             tool_result("t1", &big_output(1000)),
         ];
         // Add enough recent turns to push turn 1 past the threshold
@@ -2367,7 +2367,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
     fn lite_compact_preserves_recent_results() {
         let mut msgs = vec![
             user("prompt"),
-            assistant_tool_call("t1", "bash", serde_json::json!({"command": "ls"})),
+            assistant_tool_call("t1", "epsh", serde_json::json!({"command": "ls"})),
             tool_result("t1", &big_output(1000)),
         ];
         // Within the threshold — should not be zeroed
@@ -2379,7 +2379,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
     fn lite_compact_preserves_errors() {
         let mut msgs = vec![
             user("old prompt"),
-            assistant_tool_call("t1", "bash", serde_json::json!({"command": "bad"})),
+            assistant_tool_call("t1", "epsh", serde_json::json!({"command": "bad"})),
             tool_error("t1", &big_output(1000)),
         ];
         for i in 0..10 {
@@ -2421,7 +2421,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
     fn lite_compact_returns_count() {
         let mut msgs = vec![
             user("turn 1"),
-            assistant_tool_call("t1", "bash", serde_json::json!({"command": "a"})),
+            assistant_tool_call("t1", "epsh", serde_json::json!({"command": "a"})),
             tool_result("t1", &big_output(600)),
             assistant_tool_call("t2", "read", serde_json::json!({"path": "/b"})),
             tool_result("t2", &big_output(600)),
@@ -2441,7 +2441,7 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
     fn lite_compact_idempotent() {
         let mut msgs = vec![
             user("old prompt"),
-            assistant_tool_call("t1", "bash", serde_json::json!({"command": "ls -la"})),
+            assistant_tool_call("t1", "epsh", serde_json::json!({"command": "ls -la"})),
             tool_result("t1", &big_output(1000)),
         ];
         for i in 0..10 {
