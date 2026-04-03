@@ -343,22 +343,31 @@ fn check_chmod(args: &[epsh::ast::Word], repo_root: Option<&Path>) -> Permission
 }
 
 /// Check redirect targets for paths outside the repo.
+/// Write redirects (>, >>, >|) use strict path checking that doesn't require
+/// the target to exist -- you can `> /etc/cron.d/backdoor` to a new file.
 fn check_redirs(redirs: &[epsh::ast::Redir], repo_root: Option<&Path>) -> Permission {
     use epsh::ast::RedirKind;
     for redir in redirs {
-        let target = match &redir.kind {
-            RedirKind::Input(w)
-            | RedirKind::Output(w)
-            | RedirKind::Clobber(w)
-            | RedirKind::Append(w)
-            | RedirKind::ReadWrite(w) => Some(w),
-            // DupInput/DupOutput are fd numbers, not paths.
-            // HereDocs don't reference filesystem paths.
-            _ => None,
+        let (target, is_write) = match &redir.kind {
+            RedirKind::Output(w) | RedirKind::Clobber(w) | RedirKind::Append(w) => {
+                (Some(w), true)
+            }
+            RedirKind::Input(w) | RedirKind::ReadWrite(w) => (Some(w), false),
+            _ => (None, false),
         };
         if let Some(word) = target {
-            if let p @ Permission::Ask(_) = check_word_paths(word, repo_root) {
-                return p;
+            if is_write {
+                if let Some(root) = repo_root {
+                    if let Some(lit) = word_to_static_str(word) {
+                        if let p @ Permission::Ask(_) = check_path_strict(&lit, root) {
+                            return p;
+                        }
+                    }
+                }
+            } else {
+                if let p @ Permission::Ask(_) = check_word_paths(word, repo_root) {
+                    return p;
+                }
             }
             if let p @ Permission::Ask(_) = check_word_substs(word, repo_root) {
                 return p;
@@ -740,6 +749,18 @@ mod tests {
     fn memory_always_allowed() {
         let args = serde_json::json!({"action": "list"});
         assert_eq!(check("memory", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn write_redirect_nonexistent_outside_repo_asks() {
+        let args = serde_json::json!({"command": "echo evil > /etc/cron.d/backdoor"});
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    #[test]
+    fn append_redirect_nonexistent_outside_repo_asks() {
+        let args = serde_json::json!({"command": "echo evil >> /var/log/something_new"});
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
