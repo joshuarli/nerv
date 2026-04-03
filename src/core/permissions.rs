@@ -485,48 +485,35 @@ fn check_path_strict(token: &str, root: &Path) -> Permission {
 }
 
 /// Check a literal string as a potential path against the repo root.
+/// Flags any absolute path outside the repo without requiring it to exist on
+/// disk. Filters out tokens that are clearly not paths (regex patterns, URLs,
+/// glob metacharacters).
 fn check_path_token(token: &str, repo_root: Option<&Path>) -> Permission {
     let Some(root) = repo_root else {
         return Permission::Allow;
     };
+    // Skip tokens that look like regex/glob patterns, not paths.
+    if !looks_like_path(token) {
+        return Permission::Allow;
+    }
+    check_path_strict(token, root)
+}
 
-    if token.starts_with('/') {
-        // Only flag tokens that actually exist on disk -- avoids false positives
-        // on regex patterns like `//.*Value` or URL paths.
-        if !PathBuf::from(token).exists() {
-            return Permission::Allow;
-        }
-        let root_str = root.to_string_lossy();
-        if token.starts_with(root_str.as_ref()) {
-            return Permission::Allow;
-        }
-        if is_safe_system_path(token) {
-            return Permission::Allow;
-        }
-        return Permission::Ask(format!("path outside repo: {}", token));
+/// Heuristic: does this token look like a filesystem path rather than a regex
+/// pattern, URL, or glob?
+fn looks_like_path(token: &str) -> bool {
+    if !token.starts_with('/') && !token.starts_with("~/") {
+        return false;
     }
-    if token.starts_with("~/") {
-        let expanded = token.strip_prefix("~/").and_then(|rest| {
-            crate::home_dir().map(|h| h.join(rest))
-        });
-        // Must exist on disk.
-        if !expanded.as_ref().is_some_and(|p| p.exists()) {
-            return Permission::Allow;
-        }
-        let within_repo = expanded.as_ref().map(|abs| {
-            let abs = normalize_path(abs);
-            let root = normalize_path(root);
-            abs.starts_with(&root)
-        }).unwrap_or(false);
-        if within_repo {
-            return Permission::Allow;
-        }
-        if is_safe_home_dir_token(token) {
-            return Permission::Allow;
-        }
-        return Permission::Ask(format!("home path: {}", token));
+    // `//` prefix is not a valid path root — likely a regex or URL.
+    if token.starts_with("//") {
+        return false;
     }
-    Permission::Allow
+    // Glob/regex metacharacters suggest this isn't a literal path.
+    if token.contains('*') || token.contains('?') || token.contains('{') {
+        return false;
+    }
+    true
 }
 
 /// Try to resolve a word to a single static string (all literal / single-quoted
@@ -1027,17 +1014,102 @@ mod tests {
 
     #[test]
     fn bash_absolute_other_home_dir_asks() {
-        // Arbitrary home subdirs (not in the safe list) should still prompt.
-        // We create a real temp file under $HOME so that extract_path_tokens
-        // can verify the path exists on disk (it skips non-existent paths to
-        // avoid treating non-path strings as paths).
+        // Arbitrary home subdirs (not in the safe list) should prompt.
         let home = crate::home_dir().unwrap();
-        let tmp_file = home.join(".zsh_nerv_perm_test");
-        std::fs::write(&tmp_file, "").unwrap();
-        let cmd = format!("cat {}", tmp_file.display());
+        let cmd = format!("cat {}/.zshrc", home.display());
         let args = serde_json::json!({"command": cmd});
-        let result = check("epsh", &args, Some(&repo()));
-        let _ = std::fs::remove_file(&tmp_file);
-        assert!(matches!(result, Permission::Ask(_)));
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    // -- Path strictness: all absolute paths outside repo are flagged, even
+    // non-existent ones. This prevents `cp secret /outside/new_file` from
+    // slipping through.
+
+    #[test]
+    fn nonexistent_absolute_path_outside_repo_asks() {
+        let args = serde_json::json!({"command": "cp secret.txt /var/spool/evil"});
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    #[test]
+    fn nonexistent_home_path_outside_repo_asks() {
+        let args = serde_json::json!({"command": "cp secret.txt ~/.evil_dir/out"});
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    #[test]
+    fn tmp_path_always_allowed() {
+        let args = serde_json::json!({"command": "cp data.json /tmp/data.json"});
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn tmp_redirect_allowed() {
+        let args = serde_json::json!({"command": "echo hello > /tmp/out.txt"});
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn repo_internal_path_allowed() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let cmd = format!("cat {}/Cargo.toml", root.display());
+        let args = serde_json::json!({"command": cmd});
+        assert_eq!(check("epsh", &args, Some(&root)), Permission::Allow);
+    }
+
+    #[test]
+    fn relative_path_allowed() {
+        // Relative paths are fine — they resolve within the repo.
+        let args = serde_json::json!({"command": "cat src/main.rs"});
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn double_slash_regex_not_treated_as_path() {
+        // `//` prefix is a regex, not a path — must not trigger.
+        let args = serde_json::json!({"command": r#"rg "//TODO" src/"#});
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn glob_pattern_not_treated_as_path() {
+        let args = serde_json::json!({"command": r#"rg "pattern" /usr/local/share/*.conf"#});
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn safe_system_paths_always_allowed() {
+        for path in &["/dev/null", "/usr/bin/env", "/usr/local/bin/python3", "/bin/sh", "/opt/homebrew/bin/node"] {
+            let cmd = format!("ls {}", path);
+            let args = serde_json::json!({"command": cmd});
+            assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow, "should allow: {}", path);
+        }
+    }
+
+    #[test]
+    fn unsafe_system_paths_ask() {
+        for path in &["/etc/shadow", "/var/run/secrets", "/root/.ssh/id_rsa"] {
+            let cmd = format!("cat {}", path);
+            let args = serde_json::json!({"command": cmd});
+            assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)), "should ask: {}", path);
+        }
+    }
+
+    #[test]
+    fn write_to_nonexistent_outside_via_tee_asks() {
+        let args = serde_json::json!({"command": "echo data | tee /var/log/evil.log"});
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    #[test]
+    fn mkdir_outside_repo_asks() {
+        let args = serde_json::json!({"command": "mkdir -p /var/evil"});
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    #[test]
+    fn touch_outside_repo_asks() {
+        let args = serde_json::json!({"command": "touch /etc/cron.d/backdoor"});
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
     }
 }
