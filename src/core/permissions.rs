@@ -14,20 +14,40 @@ pub enum Permission {
     Ask(String),
 }
 
+/// Extra paths allowed by configuration, beyond the repo root and hardcoded
+/// safe paths.
+#[derive(Debug, Clone, Default)]
+pub struct PathPolicy {
+    /// Paths the shell may read without prompting.
+    pub allowed_read: Vec<PathBuf>,
+    /// Paths the shell may write without prompting.
+    pub allowed_write: Vec<PathBuf>,
+}
+
+impl PathPolicy {
+    pub fn from_config(config: &super::config::NervConfig) -> Self {
+        Self {
+            allowed_read: config.allowed_read_paths.iter().map(|s| expand_path(s, None)).collect(),
+            allowed_write: config.allowed_write_paths.iter().map(|s| expand_path(s, None)).collect(),
+        }
+    }
+}
+
 /// Check whether a tool call should be auto-approved or needs user
 /// confirmation.
 pub fn check(tool: &str, args: &serde_json::Value, repo_root: Option<&Path>) -> Permission {
-    check_with_allowed_dirs(tool, args, repo_root, &[])
+    check_with_policy(tool, args, repo_root, &[], &PathPolicy::default())
 }
 
 /// Like [`check`], but also auto-approves any path that falls within one of
 /// the user-granted `allowed_dirs` (populated by the "allow directory" prompt
-/// response).
-pub fn check_with_allowed_dirs(
+/// response) or config-based `PathPolicy`.
+pub fn check_with_policy(
     tool: &str,
     args: &serde_json::Value,
     repo_root: Option<&Path>,
     allowed_dirs: &[PathBuf],
+    policy: &PathPolicy,
 ) -> Permission {
     // If the user has granted a directory, auto-approve paths inside it.
     if !allowed_dirs.is_empty()
@@ -46,7 +66,7 @@ pub fn check_with_allowed_dirs(
     match tool {
         "read" | "grep" | "find" | "ls" | "symbols" | "codemap" => check_read_tool(args, repo_root),
         "edit" | "write" => check_write_tool(tool, args, repo_root),
-        "epsh" => check_bash(args, repo_root),
+        "epsh" => check_epsh(args, repo_root, policy),
         "memory" => Permission::Allow,
         _ => Permission::Ask(format!("unknown tool: {}", tool)),
     }
@@ -132,15 +152,14 @@ fn check_write_tool(tool: &str, args: &serde_json::Value, repo_root: Option<&Pat
     }
 }
 
-fn check_bash(args: &serde_json::Value, repo_root: Option<&Path>) -> Permission {
+fn check_epsh(args: &serde_json::Value, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
     let Some(cmd) = args["command"].as_str() else {
         return Permission::Allow;
     };
 
-    // Try AST-based analysis first; fall back to string-based on parse failure.
     let mut parser = epsh::parser::Parser::new(cmd);
     match parser.parse() {
-        Ok(program) => check_bash_ast(&program, repo_root),
+        Ok(program) => check_epsh_ast(&program, repo_root, policy),
         Err(_) => Permission::Ask(format!("unparseable command: {}", cmd)),
     }
 }
@@ -175,9 +194,9 @@ fn is_known_builtin(name: &str) -> bool {
 }
 
 /// Walk the AST to check for dangerous commands and paths outside the repo.
-fn check_bash_ast(program: &epsh::ast::Program, repo_root: Option<&Path>) -> Permission {
+fn check_epsh_ast(program: &epsh::ast::Program, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
     for cmd in &program.commands {
-        if let p @ Permission::Ask(_) = visit_command(cmd, repo_root, false) {
+        if let p @ Permission::Ask(_) = visit_command(cmd, repo_root, false, policy) {
             return p;
         }
     }
@@ -188,11 +207,12 @@ fn visit_command(
     cmd: &epsh::ast::Command,
     repo_root: Option<&Path>,
     in_pipeline: bool,
+    policy: &PathPolicy,
 ) -> Permission {
     use epsh::ast::Command;
     match cmd {
         Command::Simple { args, redirs, .. } => {
-            visit_simple(args, redirs, repo_root, in_pipeline)
+            visit_simple(args, redirs, repo_root, in_pipeline, policy)
         }
         Command::Pipeline { commands, .. } => {
             // Block curl/wget piped to anything -- the output could be fed
@@ -208,73 +228,73 @@ fn visit_command(
                 }
             }
             for c in commands {
-                if let p @ Permission::Ask(_) = visit_command(c, repo_root, true) {
+                if let p @ Permission::Ask(_) = visit_command(c, repo_root, true, policy) {
                     return p;
                 }
             }
             Permission::Allow
         }
         Command::And(l, r) | Command::Or(l, r) | Command::Sequence(l, r) => {
-            if let p @ Permission::Ask(_) = visit_command(l, repo_root, false) {
+            if let p @ Permission::Ask(_) = visit_command(l, repo_root, false, policy) {
                 return p;
             }
-            visit_command(r, repo_root, false)
+            visit_command(r, repo_root, false, policy)
         }
         Command::Subshell { body, redirs, .. } | Command::BraceGroup { body, redirs, .. } => {
-            if let p @ Permission::Ask(_) = check_redirs(redirs, repo_root) {
+            if let p @ Permission::Ask(_) = check_redirs(redirs, repo_root, policy) {
                 return p;
             }
-            visit_command(body, repo_root, false)
+            visit_command(body, repo_root, false, policy)
         }
         Command::If { cond, then_part, else_part, .. } => {
-            if let p @ Permission::Ask(_) = visit_command(cond, repo_root, false) {
+            if let p @ Permission::Ask(_) = visit_command(cond, repo_root, false, policy) {
                 return p;
             }
-            if let p @ Permission::Ask(_) = visit_command(then_part, repo_root, false) {
+            if let p @ Permission::Ask(_) = visit_command(then_part, repo_root, false, policy) {
                 return p;
             }
             if let Some(e) = else_part {
-                visit_command(e, repo_root, false)
+                visit_command(e, repo_root, false, policy)
             } else {
                 Permission::Allow
             }
         }
         Command::While { cond, body, .. } | Command::Until { cond, body, .. } => {
-            if let p @ Permission::Ask(_) = visit_command(cond, repo_root, false) {
+            if let p @ Permission::Ask(_) = visit_command(cond, repo_root, false, policy) {
                 return p;
             }
-            visit_command(body, repo_root, false)
+            visit_command(body, repo_root, false, policy)
         }
         Command::For { body, words, .. } => {
             if let Some(words) = words {
                 for w in words {
-                    if let p @ Permission::Ask(_) = check_word_paths(w, repo_root) {
+                    if let p @ Permission::Ask(_) = check_word_paths(w, repo_root, policy) {
                         return p;
                     }
                 }
             }
-            visit_command(body, repo_root, false)
+            visit_command(body, repo_root, false, policy)
         }
         Command::Case { word, arms, .. } => {
-            if let p @ Permission::Ask(_) = check_word_paths(word, repo_root) {
+            if let p @ Permission::Ask(_) = check_word_paths(word, repo_root, policy) {
                 return p;
             }
             for arm in arms {
                 if let Some(ref body) = arm.body {
-                    if let p @ Permission::Ask(_) = visit_command(body, repo_root, false) {
+                    if let p @ Permission::Ask(_) = visit_command(body, repo_root, false, policy) {
                         return p;
                     }
                 }
             }
             Permission::Allow
         }
-        Command::FuncDef { body, .. } => visit_command(body, repo_root, false),
-        Command::Not(inner) => visit_command(inner, repo_root, false),
+        Command::FuncDef { body, .. } => visit_command(body, repo_root, false, policy),
+        Command::Not(inner) => visit_command(inner, repo_root, false, policy),
         Command::Background { cmd, redirs } => {
-            if let p @ Permission::Ask(_) = check_redirs(redirs, repo_root) {
+            if let p @ Permission::Ask(_) = check_redirs(redirs, repo_root, policy) {
                 return p;
             }
-            visit_command(cmd, repo_root, false)
+            visit_command(cmd, repo_root, false, policy)
         }
     }
 }
@@ -284,6 +304,7 @@ fn visit_simple(
     redirs: &[epsh::ast::Redir],
     repo_root: Option<&Path>,
     in_pipeline: bool,
+    policy: &PathPolicy,
 ) -> Permission {
     // Extract the command name if it's a static literal.
     let cmd_name = args.first().and_then(|w| word_to_static_str(w));
@@ -316,7 +337,7 @@ fn visit_simple(
 
         // chmod +x outside repo -- block making files executable elsewhere.
         if base == "chmod" {
-            if let p @ Permission::Ask(_) = check_chmod(args, repo_root) {
+            if let p @ Permission::Ask(_) = check_chmod(args, repo_root, policy) {
                 return p;
             }
         }
@@ -324,19 +345,19 @@ fn visit_simple(
 
     // Check all argument words for paths and embedded command substitutions.
     for word in args.iter().skip(1) {
-        if let p @ Permission::Ask(_) = check_word_paths(word, repo_root) {
+        if let p @ Permission::Ask(_) = check_word_paths(word, repo_root, policy) {
             return p;
         }
     }
 
     // Check redirects.
-    if let p @ Permission::Ask(_) = check_redirs(redirs, repo_root) {
+    if let p @ Permission::Ask(_) = check_redirs(redirs, repo_root, policy) {
         return p;
     }
 
     // Recurse into command substitutions in all words (including cmd name).
     for word in args {
-        if let p @ Permission::Ask(_) = check_word_substs(word, repo_root) {
+        if let p @ Permission::Ask(_) = check_word_substs(word, repo_root, policy) {
             return p;
         }
     }
@@ -345,7 +366,7 @@ fn visit_simple(
 }
 
 /// Check chmod for execute-bit changes targeting paths outside the repo.
-fn check_chmod(args: &[epsh::ast::Word], repo_root: Option<&Path>) -> Permission {
+fn check_chmod(args: &[epsh::ast::Word], repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
     let Some(root) = repo_root else { return Permission::Allow };
     let literals: Vec<Option<String>> = args.iter().skip(1).map(|w| word_to_static_str(w)).collect();
     let has_exec_mode = literals.iter().any(|l| {
@@ -372,7 +393,7 @@ fn check_chmod(args: &[epsh::ast::Word], repo_root: Option<&Path>) -> Permission
         if s.starts_with('-') || s.contains('+') || s.chars().all(|c| c.is_ascii_digit()) {
             continue; // mode arg, not a path
         }
-        if let p @ Permission::Ask(_) = check_path_strict(s, root) {
+        if let p @ Permission::Ask(_) = check_path_strict(s, root, policy) {
             return p;
         }
     }
@@ -382,7 +403,7 @@ fn check_chmod(args: &[epsh::ast::Word], repo_root: Option<&Path>) -> Permission
 /// Check redirect targets for paths outside the repo.
 /// Write redirects (>, >>, >|) use strict path checking that doesn't require
 /// the target to exist -- you can `> /etc/cron.d/backdoor` to a new file.
-fn check_redirs(redirs: &[epsh::ast::Redir], repo_root: Option<&Path>) -> Permission {
+fn check_redirs(redirs: &[epsh::ast::Redir], repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
     use epsh::ast::RedirKind;
     for redir in redirs {
         let (target, is_write) = match &redir.kind {
@@ -396,17 +417,17 @@ fn check_redirs(redirs: &[epsh::ast::Redir], repo_root: Option<&Path>) -> Permis
             if is_write {
                 if let Some(root) = repo_root {
                     if let Some(lit) = word_to_static_str(word) {
-                        if let p @ Permission::Ask(_) = check_path_strict(&lit, root) {
+                        if let p @ Permission::Ask(_) = check_path_strict(&lit, root, policy) {
                             return p;
                         }
                     }
                 }
             } else {
-                if let p @ Permission::Ask(_) = check_word_paths(word, repo_root) {
+                if let p @ Permission::Ask(_) = check_word_paths(word, repo_root, policy) {
                     return p;
                 }
             }
-            if let p @ Permission::Ask(_) = check_word_substs(word, repo_root) {
+            if let p @ Permission::Ask(_) = check_word_substs(word, repo_root, policy) {
                 return p;
             }
         }
@@ -415,32 +436,32 @@ fn check_redirs(redirs: &[epsh::ast::Redir], repo_root: Option<&Path>) -> Permis
 }
 
 /// If a word resolves to a single static string, check it as a potential path.
-fn check_word_paths(word: &epsh::ast::Word, repo_root: Option<&Path>) -> Permission {
+fn check_word_paths(word: &epsh::ast::Word, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
     if let Some(literal) = word_to_static_str(word) {
-        return check_path_token(&literal, repo_root);
+        return check_path_token(&literal, repo_root, policy);
     }
     Permission::Allow
 }
 
 /// Recurse into command substitutions embedded in word parts.
-fn check_word_substs(word: &epsh::ast::Word, repo_root: Option<&Path>) -> Permission {
+fn check_word_substs(word: &epsh::ast::Word, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
     for part in &word.parts {
-        if let p @ Permission::Ask(_) = check_part_substs(part, repo_root) {
+        if let p @ Permission::Ask(_) = check_part_substs(part, repo_root, policy) {
             return p;
         }
     }
     Permission::Allow
 }
 
-fn check_part_substs(part: &epsh::ast::WordPart, repo_root: Option<&Path>) -> Permission {
+fn check_part_substs(part: &epsh::ast::WordPart, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
     use epsh::ast::WordPart;
     match part {
         WordPart::CmdSubst(cmd) | WordPart::Backtick(cmd) => {
-            visit_command(cmd, repo_root, false)
+            visit_command(cmd, repo_root, false, policy)
         }
         WordPart::DoubleQuoted(parts) => {
             for p in parts {
-                if let perm @ Permission::Ask(_) = check_part_substs(p, repo_root) {
+                if let perm @ Permission::Ask(_) = check_part_substs(p, repo_root, policy) {
                     return perm;
                 }
             }
@@ -453,50 +474,52 @@ fn check_part_substs(part: &epsh::ast::WordPart, repo_root: Option<&Path>) -> Pe
 /// Like `check_path_token` but does not require the path to exist on disk.
 /// Used for write-oriented checks (chmod, redirects) where the target may not
 /// exist yet.
-fn check_path_strict(token: &str, root: &Path) -> Permission {
-    if token.starts_with('/') {
-        let root_str = root.to_string_lossy();
-        if token.starts_with(root_str.as_ref()) {
-            return Permission::Allow;
-        }
-        if is_safe_system_path(token) {
-            return Permission::Allow;
-        }
-        return Permission::Ask(format!("path outside repo: {}", token));
+fn check_path_strict(token: &str, root: &Path, policy: &PathPolicy) -> Permission {
+    let abs = if token.starts_with('/') {
+        PathBuf::from(token)
+    } else if let Some(rest) = token.strip_prefix("~/") {
+        if let Some(home) = crate::home_dir() { home.join(rest) } else { return Permission::Allow }
+    } else {
+        return Permission::Allow;
+    };
+    let abs = normalize_path(&abs);
+    let root_n = normalize_path(root);
+
+    // Within repo root — always allowed.
+    if abs.starts_with(&root_n) {
+        return Permission::Allow;
     }
-    if token.starts_with("~/") {
-        let expanded = token.strip_prefix("~/").and_then(|rest| {
-            crate::home_dir().map(|h| h.join(rest))
-        });
-        let within_repo = expanded.as_ref().map(|abs| {
-            let abs = normalize_path(abs);
-            let root = normalize_path(root);
-            abs.starts_with(&root)
-        }).unwrap_or(false);
-        if within_repo {
-            return Permission::Allow;
-        }
-        if is_safe_home_dir_token(token) {
-            return Permission::Allow;
-        }
-        return Permission::Ask(format!("home path: {}", token));
+    // Hardcoded safe paths (/dev/null, /tmp, ~/.nerv).
+    if is_safe_system_path(token) {
+        return Permission::Allow;
     }
-    Permission::Allow
+    // Config-based allowed read paths.
+    for p in &policy.allowed_read {
+        if abs.starts_with(&normalize_path(p)) {
+            return Permission::Allow;
+        }
+    }
+    // Config-based allowed write paths.
+    for p in &policy.allowed_write {
+        if abs.starts_with(&normalize_path(p)) {
+            return Permission::Allow;
+        }
+    }
+    Permission::Ask(format!("path outside repo: {}", token))
 }
 
 /// Check a literal string as a potential path against the repo root.
 /// Flags any absolute path outside the repo without requiring it to exist on
 /// disk. Filters out tokens that are clearly not paths (regex patterns, URLs,
 /// glob metacharacters).
-fn check_path_token(token: &str, repo_root: Option<&Path>) -> Permission {
+fn check_path_token(token: &str, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
     let Some(root) = repo_root else {
         return Permission::Allow;
     };
-    // Skip tokens that look like regex/glob patterns, not paths.
     if !looks_like_path(token) {
         return Permission::Allow;
     }
-    check_path_strict(token, root)
+    check_path_strict(token, root, policy)
 }
 
 /// Heuristic: does this token look like a filesystem path rather than a regex
@@ -560,27 +583,19 @@ fn normalize_path(path: &Path) -> PathBuf {
     out.iter().collect()
 }
 
+/// Hardcoded safe system paths — the absolute minimum needed for shell
+/// operation. Everything else requires explicit config or user approval.
 fn is_safe_system_path(path: &str) -> bool {
     path.starts_with("/dev/null")
         || path.starts_with("/dev/stderr")
         || path.starts_with("/dev/stdout")
         || path.starts_with("/tmp")
-        || path.starts_with("/usr/bin")
-        || path.starts_with("/usr/local")
-        || path.starts_with("/bin")
-        || path.starts_with("/opt")
-        || path.starts_with("/proc/self")
-        || path.starts_with("/etc/hosts")
         || is_safe_home_path(path)
 }
 
 /// Home subdirectories that are always safe to access without a permission
-/// prompt (the app's own data dir, common toolchain dirs).
-const SAFE_HOME_DIRS: &[&str] = &[".nerv", ".config", ".cargo"];
-
-fn is_safe_home_dir_token(token: &str) -> bool {
-    SAFE_HOME_DIRS.iter().any(|d| token.starts_with(&format!("~/{}", d)))
-}
+/// prompt (the app's own data dir only).
+const SAFE_HOME_DIRS: &[&str] = &[".nerv"];
 
 fn is_safe_home_path(path: &str) -> bool {
     let Some(home) = crate::home_dir() else {
@@ -758,9 +773,10 @@ mod tests {
     }
 
     #[test]
-    fn bash_system_paths_allowed() {
+    fn bash_system_paths_asks() {
+        // /usr/bin is no longer in the hardcoded safe list.
         let args = serde_json::json!({"command": "ls /usr/bin/git"});
-        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
@@ -968,19 +984,63 @@ mod tests {
     }
 
     #[test]
-    fn bash_absolute_cargo_dir_allowed() {
+    fn bash_absolute_cargo_dir_asks() {
+        // ~/.cargo is no longer in the hardcoded safe list.
         let home = crate::home_dir().unwrap();
         let cmd = format!("cat {}/.cargo/config.toml", home.display());
         let args = serde_json::json!({"command": cmd});
-        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
     }
 
     #[test]
-    fn bash_absolute_config_dir_allowed() {
+    fn bash_absolute_config_dir_asks() {
+        // ~/.config is no longer in the hardcoded safe list.
         let home = crate::home_dir().unwrap();
         let cmd = format!("cat {}/.config/some-tool/config.yml", home.display());
         let args = serde_json::json!({"command": cmd});
-        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    #[test]
+    fn config_allowed_read_path_passes() {
+        let home = crate::home_dir().unwrap();
+        let cargo_dir = home.join(".cargo");
+        let policy = PathPolicy {
+            allowed_read: vec![cargo_dir],
+            allowed_write: vec![],
+        };
+        let cmd = format!("cat {}/.cargo/config.toml", home.display());
+        let args = serde_json::json!({"command": cmd});
+        assert_eq!(
+            check_with_policy("epsh", &args, Some(&repo()), &[], &policy),
+            Permission::Allow
+        );
+    }
+
+    #[test]
+    fn config_allowed_write_path_passes() {
+        let policy = PathPolicy {
+            allowed_read: vec![],
+            allowed_write: vec![PathBuf::from("/var/log/myapp")],
+        };
+        let args = serde_json::json!({"command": "echo hello > /var/log/myapp/out.log"});
+        assert_eq!(
+            check_with_policy("epsh", &args, Some(&repo()), &[], &policy),
+            Permission::Allow
+        );
+    }
+
+    #[test]
+    fn config_allowed_path_does_not_grant_parent() {
+        let policy = PathPolicy {
+            allowed_read: vec![PathBuf::from("/var/log/myapp")],
+            allowed_write: vec![],
+        };
+        let args = serde_json::json!({"command": "cat /var/log/other.log"});
+        assert!(matches!(
+            check_with_policy("epsh", &args, Some(&repo()), &[], &policy),
+            Permission::Ask(_)
+        ));
     }
 
     #[test]
@@ -988,7 +1048,7 @@ mod tests {
         let allowed = PathBuf::from("/Users/josh/external");
         let args = serde_json::json!({"path": "/Users/josh/external/foo.rs"});
         assert_eq!(
-            check_with_allowed_dirs("read", &args, Some(&repo()), &[allowed]),
+            check_with_policy("read", &args, Some(&repo()), &[allowed], &PathPolicy::default()),
             Permission::Allow
         );
     }
@@ -998,7 +1058,7 @@ mod tests {
         let allowed = PathBuf::from("/Users/josh/external");
         let args = serde_json::json!({"path": "/etc/passwd"});
         assert!(matches!(
-            check_with_allowed_dirs("read", &args, Some(&repo()), &[allowed]),
+            check_with_policy("read", &args, Some(&repo()), &[allowed], &PathPolicy::default()),
             Permission::Ask(_)
         ));
     }
@@ -1007,7 +1067,7 @@ mod tests {
     fn allowed_dir_empty_falls_back_to_normal_check() {
         let args = serde_json::json!({"path": "/etc/passwd"});
         assert!(matches!(
-            check_with_allowed_dirs("read", &args, Some(&repo()), &[]),
+            check_with_policy("read", &args, Some(&repo()), &[], &PathPolicy::default()),
             Permission::Ask(_)
         ));
     }
@@ -1079,10 +1139,21 @@ mod tests {
 
     #[test]
     fn safe_system_paths_always_allowed() {
-        for path in &["/dev/null", "/usr/bin/env", "/usr/local/bin/python3", "/bin/sh", "/opt/homebrew/bin/node"] {
+        // Only /dev/null, /dev/stderr, /dev/stdout, /tmp are hardcoded safe.
+        for path in &["/dev/null", "/dev/stderr", "/dev/stdout", "/tmp/scratch"] {
             let cmd = format!("ls {}", path);
             let args = serde_json::json!({"command": cmd});
             assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow, "should allow: {}", path);
+        }
+    }
+
+    #[test]
+    fn previously_safe_paths_now_ask() {
+        // These were previously hardcoded safe but are now removed.
+        for path in &["/usr/bin/env", "/usr/local/bin/python3", "/bin/sh", "/opt/homebrew/bin/node", "/proc/self/fd/0", "/etc/hosts"] {
+            let cmd = format!("ls {}", path);
+            let args = serde_json::json!({"command": cmd});
+            assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)), "should ask: {}", path);
         }
     }
 

@@ -635,6 +635,7 @@ impl AgentSession {
             let cache = self.permission_cache.clone();
             let allowed_dirs = self.allowed_dirs.clone();
             let notifications = self.config.notifications.clone();
+            let path_policy = super::permissions::PathPolicy::from_config(&self.config);
             // Write/edit to the plan file are always allowed without a gate.
             let plan_path = Some(self.resolve_plan_path());
 
@@ -664,11 +665,12 @@ impl AgentSession {
                     }
 
                     let dirs = allowed_dirs.snapshot();
-                    let perm = super::permissions::check_with_allowed_dirs(
+                    let perm = super::permissions::check_with_policy(
                         tool,
                         args,
                         repo_root.as_deref(),
                         &dirs,
+                        &path_policy,
                     );
                     match perm {
                         super::permissions::Permission::Allow => true,

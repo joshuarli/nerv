@@ -39,6 +39,16 @@ pub struct NervConfig {
     /// "onResponseComplete".
     #[serde(default)]
     pub notifications: Vec<super::notifications::NotificationRule>,
+    /// Additional paths the shell may read from without prompting (beyond the
+    /// repo root and /tmp). Supports absolute paths and `~/` prefix.
+    /// Example: ["/usr/local/include", "~/.cargo"]
+    #[serde(default)]
+    pub allowed_read_paths: Vec<String>,
+    /// Additional paths the shell may write to without prompting (beyond the
+    /// repo root and /tmp). Supports absolute paths and `~/` prefix.
+    /// Example: ["/tmp", "~/.nerv"]
+    #[serde(default)]
+    pub allowed_write_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +114,8 @@ impl Default for NervConfig {
             lite_compact_age: None,
             headers: builtin_default_headers(),
             notifications: Vec::new(),
+            allowed_read_paths: Vec::new(),
+            allowed_write_paths: Vec::new(),
         }
     }
 }
