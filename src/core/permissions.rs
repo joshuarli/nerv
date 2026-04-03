@@ -153,11 +153,26 @@ const DANGEROUS_COMMANDS: &[&str] = &[
 /// Builtins that execute arbitrary strings or replace the process.
 const DANGEROUS_BUILTINS: &[&str] = &["eval", "exec", "trap"];
 
+/// POSIX builtins the agent legitimately uses. Anything not on this list is
+/// either dangerous (caught by DANGEROUS_BUILTINS) or suspicious enough to
+/// warrant a permission prompt. External commands are unaffected by this list.
+const ALLOWED_BUILTINS: &[&str] = &[
+    ":", "true", "false", "echo", "printf", "cd", "pwd", "exit", "return",
+    "break", "continue", "test", "[", "set", "export", "readonly", "unset",
+    "local", "shift", "read", "command", "type", "wait", "getopts", "umask",
+    ".", "source",
+];
+
 /// Shell names -- flagged when receiving piped input.
 const SHELL_NAMES: &[&str] = &["sh", "bash", "zsh"];
 
 /// Network fetch commands -- flagged when piped to anything.
 const FETCH_COMMANDS: &[&str] = &["curl", "wget"];
+
+/// Check if a command name is a known shell builtin.
+fn is_known_builtin(name: &str) -> bool {
+    ALLOWED_BUILTINS.contains(&name) || DANGEROUS_BUILTINS.contains(&name)
+}
 
 /// Walk the AST to check for dangerous commands and paths outside the repo.
 fn check_bash_ast(program: &epsh::ast::Program, repo_root: Option<&Path>) -> Permission {
@@ -285,6 +300,13 @@ fn visit_simple(
         // install signal handlers.
         if DANGEROUS_BUILTINS.contains(&base) {
             return Permission::Ask(format!("dangerous builtin: {}", base));
+        }
+
+        // Builtin allowlist: if it's a known builtin but not on the allowed
+        // list, flag it. This catches new builtins added to epsh that we
+        // haven't vetted yet.
+        if is_known_builtin(base) && !ALLOWED_BUILTINS.contains(&base) {
+            return Permission::Ask(format!("disallowed builtin: {}", base));
         }
 
         // Pipe to shell (curl | sh, wget | bash, etc.)
@@ -764,6 +786,15 @@ mod tests {
     fn memory_always_allowed() {
         let args = serde_json::json!({"action": "list"});
         assert_eq!(check("memory", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn allowed_builtins_pass() {
+        // Common builtins the agent uses should be allowed.
+        for cmd in &["echo hello", "cd src", "pwd", "export FOO=bar", "test -f file", "[ -d dir ]", "set -e", "printf '%s' x"] {
+            let args = serde_json::json!({"command": cmd});
+            assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow, "should allow: {}", cmd);
+        }
     }
 
     #[test]
