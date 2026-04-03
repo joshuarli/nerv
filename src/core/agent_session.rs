@@ -1217,28 +1217,109 @@ impl AgentSession {
             self.agent.state.messages = snapshot;
         }
 
+        // Operate only on the current branch (root → leaf), not the whole tree.
+        // Using entries() would compact entries from sibling branches too.
+        let branch = self.session_manager.current_branch_entries();
+
+        if branch.is_empty() {
+            return Ok(compaction::CompactionOutcome::None);
+        }
+
+        // Summary-compact: if a prior non-lite compaction exists and fewer
+        // than N user turns have elapsed, reuse its summary instead of
+        // calling the LLM. This avoids paying for Haiku when the existing
+        // summary is still fresh.
+        let max_turns = self.compaction.settings.summary_compact_max_turns;
+        if max_turns > 0 {
+            let turns_since = compaction::count_user_turns_since_compaction(&branch);
+            let prior = branch.iter().rev().find_map(|e| match e {
+                crate::session::types::SessionEntry::Compaction(c)
+                    if c.compaction_type != "lite" =>
+                {
+                    Some(c)
+                }
+                _ => None,
+            });
+            if let Some(prior) = prior {
+                if turns_since < max_turns && !prior.summary.is_empty() {
+                    crate::log::info(&format!(
+                        "summary-compact: reusing prior summary ({turns_since} turns < {max_turns} max)"
+                    ));
+                    let cut = compaction::find_cut_point(
+                        &branch,
+                        0,
+                        branch.len(),
+                        self.compaction.settings.keep_recent_tokens,
+                        self.compaction.settings.verbatim_window_tokens,
+                    );
+                    let first_kept_id =
+                        branch[cut.first_kept_entry_index].id().to_string();
+                    let tokens_before = compaction::tokens_before_compaction(&branch);
+                    let to_summarize: Vec<AgentMessage> = branch
+                        [..cut.verbatim_start_index]
+                        .iter()
+                        .filter_map(|e| {
+                            if let crate::session::types::SessionEntry::Message(me) = e {
+                                Some(me.message.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    let archived_messages = to_summarize.clone();
+                    let preserved_user_messages = compaction::extract_user_messages(
+                        &to_summarize,
+                        self.compaction.settings.preserved_user_tokens,
+                    );
+                    let summary = prior.summary.clone();
+                    let tokens_after = compaction::tokens_after_compaction(
+                        &summary,
+                        &preserved_user_messages,
+                        &branch[cut.verbatim_start_index..],
+                    );
+                    let _ = self.session_manager.append_compaction(
+                        crate::session::types::CompactionRecord {
+                            summary: summary.clone(),
+                            first_kept_entry_id: first_kept_id.clone(),
+                            tokens_before,
+                            tokens_after,
+                            model_id: String::new(),
+                            cost_usd_before: self.session_cost.total,
+                            archived_messages,
+                            preserved_user_messages,
+                            compaction_type: "summary".to_string(),
+                        },
+                    );
+                    super::notifications::fire(
+                        super::notifications::NotificationMatcher::OnCompactionDone,
+                        &self.config.notifications,
+                    );
+                    return Ok(compaction::CompactionOutcome::Full(
+                        compaction::CompactionResult {
+                            summary,
+                            structured: None,
+                            first_kept_entry_id: first_kept_id,
+                            tokens_before,
+                            tokens_after,
+                            model_id: String::new(),
+                        },
+                    ));
+                }
+            }
+        }
+
+        // Full compact: resolve the summariser provider and model.
         let (provider, model_id) =
             self.resolve_utility_provider(self.config.compaction_model.as_deref()).ok_or_else(|| {
                 "No provider available for compaction. \
                      Set compaction_model in ~/.nerv/config.json or log in to Anthropic (/login)."
                     .to_string()
             })?;
-
-        // Operate only on the current branch (root → leaf), not the whole tree.
-        // Using entries() would compact entries from sibling branches too.
-        let branch = self.session_manager.current_branch_entries();
-
-        // Resolve the summariser model's context window so generate_summary can
-        // clamp the prompt. Fall back to Haiku's known 200k window if the model
-        // isn't in the registry (e.g. a custom/local model with no explicit entry).
         let summarizer_context_window: u32 = self
             .model_registry
             .find_model(&model_id)
             .map(|m| m.context_window)
             .unwrap_or(200_000);
-        if branch.is_empty() {
-            return Ok(compaction::CompactionOutcome::None);
-        }
 
         // The kept window is split into two parts for cache efficiency:
         //   [first_kept_entry_index .. verbatim_start_index)  → summarized by LLM
@@ -1325,6 +1406,7 @@ impl AgentSession {
                         cost_usd_before: self.session_cost.total,
                         archived_messages,
                         preserved_user_messages,
+                        compaction_type: "full".to_string(),
                     },
                 );
                 // Fire onCompactionDone hooks (fire-and-forget).

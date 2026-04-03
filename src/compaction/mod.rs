@@ -33,6 +33,10 @@ pub struct CompactionSettings {
     /// details (file paths, edge cases, preferences) that the LLM summary may
     /// have compressed away. Set to 0 to disable.
     pub preserved_user_tokens: usize,
+    /// Maximum user turns since last full/summary compaction before
+    /// summary-compact is considered too stale and a fresh LLM summary is
+    /// generated instead. Set to 0 to disable summary-compact entirely.
+    pub summary_compact_max_turns: usize,
 }
 
 impl Default for CompactionSettings {
@@ -43,6 +47,7 @@ impl Default for CompactionSettings {
             keep_recent_tokens: 20_000,
             verbatim_window_tokens: 5_000,
             preserved_user_tokens: 8_000,
+            summary_compact_max_turns: 6,
         }
     }
 }
@@ -219,6 +224,25 @@ pub fn should_compact(tokens: usize, context_window: u32, settings: &CompactionS
     }
     let threshold = (context_window as f64 * settings.threshold_pct) as usize;
     tokens > threshold
+}
+
+/// Count user turns (User messages) on the branch since the most recent
+/// non-lite compaction. Returns 0 if there are no user turns after the last
+/// compaction, or the total user turn count if no compaction exists.
+pub fn count_user_turns_since_compaction(branch: &[SessionEntry]) -> usize {
+    let mut count = 0;
+    for entry in branch.iter().rev() {
+        match entry {
+            SessionEntry::Compaction(c) if c.compaction_type != "lite" => {
+                return count;
+            }
+            SessionEntry::Message(me) if matches!(me.message, AgentMessage::User { .. }) => {
+                count += 1;
+            }
+            _ => {}
+        }
+    }
+    count
 }
 
 pub struct CompactionResult {
@@ -508,6 +532,78 @@ mod tests {
     fn extract_user_messages_empty_input() {
         let result = extract_user_messages(&[], 10_000);
         assert!(result.is_empty());
+    }
+
+    // count_user_turns_since_compaction
+
+    fn compaction_entry(compaction_type: &str) -> SessionEntry {
+        SessionEntry::Compaction(crate::session::types::CompactionEntry {
+            id: "c1".into(),
+            parent_id: None,
+            timestamp: String::new(),
+            summary: "summary".into(),
+            first_kept_entry_id: String::new(),
+            tokens_before: 0,
+            tokens_after: 0,
+            model_id: String::new(),
+            cost_usd_before: 0.0,
+            compaction_type: compaction_type.to_string(),
+            lite_compact_zeroed: 0,
+            archived_messages: vec![],
+            preserved_user_messages: vec![],
+        })
+    }
+
+    #[test]
+    fn count_turns_no_compaction() {
+        let branch = vec![
+            user_entry("a", 0),
+            assistant_entry("b", 0),
+            user_entry("c", 0),
+        ];
+        assert_eq!(count_user_turns_since_compaction(&branch), 2);
+    }
+
+    #[test]
+    fn count_turns_after_full_compaction() {
+        let branch = vec![
+            compaction_entry("full"),
+            user_entry("a", 0),
+            assistant_entry("b", 0),
+            user_entry("c", 0),
+        ];
+        assert_eq!(count_user_turns_since_compaction(&branch), 2);
+    }
+
+    #[test]
+    fn count_turns_after_summary_compaction() {
+        let branch = vec![
+            compaction_entry("summary"),
+            user_entry("a", 0),
+        ];
+        assert_eq!(count_user_turns_since_compaction(&branch), 1);
+    }
+
+    #[test]
+    fn count_turns_skips_lite_compaction() {
+        let branch = vec![
+            compaction_entry("full"),
+            user_entry("a", 0),
+            compaction_entry("lite"),
+            user_entry("b", 0),
+            user_entry("c", 0),
+        ];
+        // Lite compaction doesn't reset the counter — count back to the "full"
+        assert_eq!(count_user_turns_since_compaction(&branch), 3);
+    }
+
+    #[test]
+    fn count_turns_zero_after_compaction() {
+        let branch = vec![
+            compaction_entry("full"),
+            assistant_entry("reply", 0),
+        ];
+        assert_eq!(count_user_turns_since_compaction(&branch), 0);
     }
 
     // count_tokens / estimate_tokens sanity

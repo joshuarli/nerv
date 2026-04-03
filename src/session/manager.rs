@@ -311,6 +311,7 @@ impl SessionManager {
             cost_usd_before,
             archived_messages,
             preserved_user_messages,
+            compaction_type,
         } = record;
 
         // Collect the IDs of branch ancestors that fall before the cut point.
@@ -359,7 +360,7 @@ impl SessionManager {
             tokens_after,
             model_id,
             cost_usd_before,
-            compaction_type: "full".to_string(),
+            compaction_type,
             lite_compact_zeroed: 0,
             archived_messages,
             preserved_user_messages,
@@ -1851,6 +1852,7 @@ mod tests {
             cost_usd_before: 1.23,
             archived_messages: archived,
             preserved_user_messages: vec![],
+            compaction_type: "full".to_string(),
         }
     }
 
@@ -2095,6 +2097,7 @@ mod tests {
             cost_usd_before: 0.0,
             archived_messages: vec![],
             preserved_user_messages: vec![],
+            compaction_type: "full".to_string(),
         };
         mgr.append_compaction(record).unwrap();
 
@@ -2129,6 +2132,7 @@ mod tests {
                 "first request".to_string(),
                 "some older message".to_string(),
             ],
+            compaction_type: "full".to_string(),
         };
         mgr.append_compaction(record).unwrap();
 
@@ -2176,6 +2180,7 @@ mod tests {
             cost_usd_before: 0.0,
             archived_messages: vec![],
             preserved_user_messages: vec![],
+            compaction_type: "full".to_string(),
         };
         mgr.append_compaction(record).unwrap();
 
@@ -2184,5 +2189,95 @@ mod tests {
         // No Custom message should be injected when preserved_user_messages is empty
         let has_custom = ctx.messages.iter().any(|m| matches!(m, AgentMessage::Custom { .. }));
         assert!(!has_custom, "should not inject Custom message when no preserved user messages");
+    }
+
+    #[test]
+    fn summary_compact_reuses_prior_summary() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+        // Set up: messages, then a full compaction
+        mgr.append_message(&user_msg("old work"), None).unwrap();
+        mgr.append_message(&assistant_msg("old reply"), None).unwrap();
+        mgr.append_message(&user_msg("kept after first compact"), None).unwrap();
+        let kept_id = mgr.leaf_id().unwrap().to_string();
+
+        let record = CompactionRecord {
+            summary: "Original Haiku summary.".to_string(),
+            first_kept_entry_id: kept_id,
+            tokens_before: 80_000,
+            tokens_after: 5_000,
+            model_id: "claude-haiku".to_string(),
+            cost_usd_before: 0.5,
+            archived_messages: vec![],
+            preserved_user_messages: vec![],
+            compaction_type: "full".to_string(),
+        };
+        mgr.append_compaction(record).unwrap();
+
+        // Add a few more turns after compaction
+        mgr.append_message(&user_msg("new work"), None).unwrap();
+        mgr.append_message(&assistant_msg("new reply"), None).unwrap();
+        mgr.append_message(&user_msg("more work"), None).unwrap();
+        let kept_id_2 = mgr.leaf_id().unwrap().to_string();
+
+        // Now do a summary-compact: reuse the same summary with a new cut point
+        let record2 = CompactionRecord {
+            summary: "Original Haiku summary.".to_string(), // REUSED
+            first_kept_entry_id: kept_id_2,
+            tokens_before: 85_000,
+            tokens_after: 3_000,
+            model_id: String::new(), // no LLM call
+            cost_usd_before: 0.6,
+            archived_messages: vec![],
+            preserved_user_messages: vec!["new work".to_string()],
+            compaction_type: "summary".to_string(),
+        };
+        mgr.append_compaction(record2).unwrap();
+
+        // Verify: build_session_context uses the reused summary
+        let ctx = mgr.build_session_context();
+        match &ctx.messages[0] {
+            AgentMessage::CompactionSummary { summary, .. } => {
+                assert_eq!(summary, "Original Haiku summary.");
+            }
+            other => panic!("expected CompactionSummary, got {:?}", std::mem::discriminant(other)),
+        }
+
+        // Verify preserved user messages are injected
+        let has_preserved = ctx.messages.iter().any(|m| {
+            matches!(m, AgentMessage::Custom { custom_type, .. } if custom_type == "preserved_user_context")
+        });
+        assert!(has_preserved, "should inject preserved user messages from summary-compact");
+    }
+
+    #[test]
+    fn summary_compact_type_persisted_in_db() {
+        let mut mgr = make_manager();
+        mgr.new_session(std::path::Path::new("/tmp"), None).unwrap();
+
+        mgr.append_message(&user_msg("hello"), None).unwrap();
+        let kept_id = mgr.leaf_id().unwrap().to_string();
+
+        let record = CompactionRecord {
+            summary: "summary".to_string(),
+            first_kept_entry_id: kept_id,
+            tokens_before: 50_000,
+            tokens_after: 2_000,
+            model_id: String::new(),
+            cost_usd_before: 0.0,
+            archived_messages: vec![],
+            preserved_user_messages: vec![],
+            compaction_type: "summary".to_string(),
+        };
+        mgr.append_compaction(record).unwrap();
+
+        // Verify the compaction_type survives round-trip through DB
+        let branch = mgr.get_branch();
+        let compact = branch.iter().find_map(|e| match e {
+            SessionEntry::Compaction(c) => Some(c),
+            _ => None,
+        });
+        assert_eq!(compact.unwrap().compaction_type, "summary");
     }
 }

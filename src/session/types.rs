@@ -276,6 +276,8 @@ pub struct CompactionRecord {
     pub archived_messages: Vec<crate::agent::types::AgentMessage>,
     /// Verbatim user message texts extracted from the summarized region.
     pub preserved_user_messages: Vec<String>,
+    /// "full" (LLM summarization) or "summary" (reused prior summary).
+    pub compaction_type: String,
 }
 
 /// Per-session config overrides. Stored as a JSON blob in the sessions table.
