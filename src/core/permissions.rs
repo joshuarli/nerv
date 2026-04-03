@@ -276,6 +276,13 @@ fn visit_simple(
         if in_pipeline && SHELL_NAMES.contains(&base) {
             return Permission::Ask(format!("pipe to shell: {}", name));
         }
+
+        // chmod +x outside repo -- block making files executable elsewhere.
+        if base == "chmod" {
+            if let p @ Permission::Ask(_) = check_chmod(args, repo_root) {
+                return p;
+            }
+        }
     }
 
     // Check all argument words for paths and embedded command substitutions.
@@ -297,6 +304,41 @@ fn visit_simple(
         }
     }
 
+    Permission::Allow
+}
+
+/// Check chmod for execute-bit changes targeting paths outside the repo.
+fn check_chmod(args: &[epsh::ast::Word], repo_root: Option<&Path>) -> Permission {
+    let Some(root) = repo_root else { return Permission::Allow };
+    let literals: Vec<Option<String>> = args.iter().skip(1).map(|w| word_to_static_str(w)).collect();
+    let has_exec_mode = literals.iter().any(|l| {
+        let Some(s) = l else { return false };
+        // Symbolic: +x, a+x, u+x, g+x, o+x, ug+x, etc.
+        if s.contains("+x") || s.contains("+X") {
+            return true;
+        }
+        // Octal: any mode where execute bits are set (e.g. 755, 700, 111)
+        if s.len() == 3 || s.len() == 4 {
+            if let Ok(mode) = u32::from_str_radix(s, 8) {
+                // 0o111 = any execute bit
+                return mode & 0o111 != 0;
+            }
+        }
+        false
+    });
+    if !has_exec_mode {
+        return Permission::Allow;
+    }
+    // Check if any path argument is outside the repo.
+    for lit in &literals {
+        let Some(s) = lit else { continue };
+        if s.starts_with('-') || s.contains('+') || s.chars().all(|c| c.is_ascii_digit()) {
+            continue; // mode arg, not a path
+        }
+        if let p @ Permission::Ask(_) = check_path_strict(s, root) {
+            return p;
+        }
+    }
     Permission::Allow
 }
 
@@ -360,6 +402,40 @@ fn check_part_substs(part: &epsh::ast::WordPart, repo_root: Option<&Path>) -> Pe
         }
         _ => Permission::Allow,
     }
+}
+
+/// Like `check_path_token` but does not require the path to exist on disk.
+/// Used for write-oriented checks (chmod, redirects) where the target may not
+/// exist yet.
+fn check_path_strict(token: &str, root: &Path) -> Permission {
+    if token.starts_with('/') {
+        let root_str = root.to_string_lossy();
+        if token.starts_with(root_str.as_ref()) {
+            return Permission::Allow;
+        }
+        if is_safe_system_path(token) {
+            return Permission::Allow;
+        }
+        return Permission::Ask(format!("path outside repo: {}", token));
+    }
+    if token.starts_with("~/") {
+        let expanded = token.strip_prefix("~/").and_then(|rest| {
+            crate::home_dir().map(|h| h.join(rest))
+        });
+        let within_repo = expanded.as_ref().map(|abs| {
+            let abs = normalize_path(abs);
+            let root = normalize_path(root);
+            abs.starts_with(&root)
+        }).unwrap_or(false);
+        if within_repo {
+            return Permission::Allow;
+        }
+        if is_safe_home_dir_token(token) {
+            return Permission::Allow;
+        }
+        return Permission::Ask(format!("home path: {}", token));
+    }
+    Permission::Allow
 }
 
 /// Check a literal string as a potential path against the repo root.
@@ -664,6 +740,24 @@ mod tests {
     fn memory_always_allowed() {
         let args = serde_json::json!({"action": "list"});
         assert_eq!(check("memory", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn chmod_plus_x_outside_repo_asks() {
+        let args = serde_json::json!({"command": "chmod +x /etc/backdoor"});
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    #[test]
+    fn chmod_755_outside_repo_asks() {
+        let args = serde_json::json!({"command": "chmod 755 /etc/backdoor"});
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    #[test]
+    fn chmod_in_repo_allowed() {
+        let args = serde_json::json!({"command": "chmod +x script.sh"});
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
     }
 
     #[test]
