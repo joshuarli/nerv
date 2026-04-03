@@ -27,8 +27,8 @@ pub struct PathPolicy {
 impl PathPolicy {
     pub fn from_config(config: &super::config::NervConfig) -> Self {
         Self {
-            allowed_read: config.allowed_read_paths.iter().map(|s| expand_path(s, None)).collect(),
-            allowed_write: config.allowed_write_paths.iter().map(|s| expand_path(s, None)).collect(),
+            allowed_read: config.allowed_read_paths.iter().map(|s| crate::resolve_path(s, Path::new("."))).collect(),
+            allowed_write: config.allowed_write_paths.iter().map(|s| crate::resolve_path(s, Path::new("."))).collect(),
         }
     }
 }
@@ -53,7 +53,7 @@ pub fn check_with_policy(
     if !allowed_dirs.is_empty()
         && let Some(path) = path_for_args(tool, args)
     {
-        let resolved = resolve_path(&path, repo_root);
+        let resolved = crate::resolve_path(&path, repo_root.unwrap_or(Path::new(".")));
         let resolved = normalize_path(&resolved);
         for dir in allowed_dirs {
             let dir = normalize_path(dir);
@@ -90,23 +90,6 @@ pub fn path_for_args(tool: &str, args: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// Expand a path string to an absolute `PathBuf`, handling `~/` prefix.
-/// Relative paths are resolved against `repo_root` when provided.
-pub fn expand_path(path: &str, repo_root: Option<&Path>) -> PathBuf {
-    if path.starts_with('/') {
-        PathBuf::from(path)
-    } else if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = crate::home_dir() { home.join(rest) } else { PathBuf::from(path) }
-    } else {
-        // Relative — resolve against repo root if available.
-        if let Some(root) = repo_root { root.join(path) } else { PathBuf::from(path) }
-    }
-}
-
-fn resolve_path(path: &str, repo_root: Option<&Path>) -> PathBuf {
-    expand_path(path, repo_root)
-}
-
 /// Format an absolute path for display, replacing the home directory with `~/`.
 pub fn path_to_display(path: &Path) -> String {
     if let Some(home) = crate::home_dir() {
@@ -123,6 +106,10 @@ pub fn path_to_display(path: &Path) -> String {
 pub fn allow_dir_for_path(path_str: &str) -> PathBuf {
     let abs = crate::resolve_path(path_str, std::path::Path::new("."));
     let start = if abs.is_dir() {
+        abs.clone()
+    } else if path_str.ends_with('/') || path_str == "~" {
+        // Path was written as a directory (trailing slash or bare ~) but doesn't
+        // exist yet — use it directly rather than falling back to the parent.
         abs.clone()
     } else {
         abs.parent().map(|p| p.to_path_buf()).unwrap_or(abs)
@@ -461,13 +448,11 @@ fn check_part_substs(part: &epsh::ast::WordPart, repo_root: Option<&Path>, polic
 /// Used for write-oriented checks (chmod, redirects) where the target may not
 /// exist yet.
 fn check_path_strict(token: &str, root: &Path, policy: &PathPolicy) -> Permission {
-    let abs = if token.starts_with('/') {
-        PathBuf::from(token)
-    } else if let Some(rest) = token.strip_prefix("~/") {
-        if let Some(home) = crate::home_dir() { home.join(rest) } else { return Permission::Allow }
-    } else {
+    // Only handle absolute paths and tilde paths — relative tokens are not checked strictly.
+    if !token.starts_with('/') && !token.starts_with('~') {
         return Permission::Allow;
-    };
+    }
+    let abs = crate::resolve_path(token, root);
     let abs = normalize_path(&abs);
     let root_n = normalize_path(root);
 
@@ -511,6 +496,10 @@ fn check_path_token(token: &str, repo_root: Option<&Path>, policy: &PathPolicy) 
 /// Heuristic: does this token look like a filesystem path rather than a regex
 /// pattern, URL, or glob?
 fn looks_like_path(token: &str) -> bool {
+    // Bare `~` means the home directory.
+    if token == "~" {
+        return true;
+    }
     if !token.starts_with('/') && !token.starts_with("~/") {
         return false;
     }
@@ -608,7 +597,7 @@ fn first_path_in_command(cmd: &epsh::ast::Command) -> Option<String> {
         Command::Simple { args, redirs, .. } => {
             for word in args.iter().skip(1) {
                 if let Some(s) = word_to_static_str(word) {
-                    if (s.starts_with('/') || s.starts_with("~/")) && path_exists(&s) {
+                    if s == "~" || s.starts_with('/') || s.starts_with("~/") {
                         return Some(s);
                     }
                 }
@@ -616,7 +605,7 @@ fn first_path_in_command(cmd: &epsh::ast::Command) -> Option<String> {
             for redir in redirs {
                 if let Some(word) = redir_target_word(redir) {
                     if let Some(s) = word_to_static_str(word) {
-                        if (s.starts_with('/') || s.starts_with("~/")) && path_exists(&s) {
+                        if s == "~" || s.starts_with('/') || s.starts_with("~/") {
                             return Some(s);
                         }
                     }
@@ -659,15 +648,6 @@ fn redir_target_word(redir: &epsh::ast::Redir) -> Option<&epsh::ast::Word> {
         | RedirKind::ReadWrite(w) => Some(w),
         _ => None,
     }
-}
-
-fn path_exists(token: &str) -> bool {
-    let resolved = if let Some(rest) = token.strip_prefix("~/") {
-        crate::home_dir().map(|h| h.join(rest))
-    } else {
-        Some(PathBuf::from(token))
-    };
-    resolved.is_some_and(|p| p.exists())
 }
 
 fn is_within_repo(path: &str, repo_root: Option<&Path>) -> bool {
@@ -1168,5 +1148,35 @@ mod tests {
     fn touch_outside_repo_asks() {
         let args = serde_json::json!({"command": "touch /etc/cron.d/backdoor"});
         assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    #[test]
+    fn bare_tilde_in_find_asks() {
+        // `find ~` — bare tilde must be treated as the home directory path.
+        let args = serde_json::json!({"command": "find ~ -name '*.rs'"});
+        assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)));
+    }
+
+    #[test]
+    fn bare_tilde_is_a_path() {
+        // `~` alone must look like a path so it triggers the permission check.
+        assert!(looks_like_path("~"));
+    }
+
+    #[test]
+    fn path_for_args_nonexistent_tilde_path() {
+        // path_for_args must find the path even when the directory doesn't exist.
+        let args = serde_json::json!({"command": "ls ~/epsh/"});
+        let path = super::path_for_args("epsh", &args);
+        assert!(path.is_some(), "expected Some path, got None");
+        let p = path.unwrap();
+        assert!(p.starts_with("~/") || p.starts_with('/'), "unexpected path: {}", p);
+    }
+
+    #[test]
+    fn path_for_args_bare_tilde() {
+        // `find ~` — path_for_args must return Some("~").
+        let args = serde_json::json!({"command": "find ~ -maxdepth 3"});
+        assert_eq!(super::path_for_args("epsh", &args), Some("~".to_string()));
     }
 }

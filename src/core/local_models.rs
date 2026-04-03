@@ -37,12 +37,7 @@ fn default_port() -> u16 {
 impl LocalModel {
     /// Resolve ~ in path.
     pub fn resolved_path(&self) -> PathBuf {
-        if self.path.starts_with("~/")
-            && let Some(home) = crate::home_dir()
-        {
-            return home.join(&self.path[2..]);
-        }
-        PathBuf::from(&self.path)
+        crate::resolve_path(&self.path, std::path::Path::new("."))
     }
 
     /// Build llama-server command arguments.

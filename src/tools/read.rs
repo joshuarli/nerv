@@ -211,6 +211,7 @@ fn digit_width(line_count: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::path::Path;
 
     use super::*;
     use crate::agent::agent::AgentTool;

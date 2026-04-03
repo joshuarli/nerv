@@ -159,7 +159,7 @@ pub fn security() -> Option<&'static std::path::Path> { security_bin() }
 /// Resolve a path string to an absolute `PathBuf`.
 ///
 /// Handles three cases:
-/// - `~/…` — expands to `$HOME/…`
+/// - `~` or `~/…` — expands to `$HOME` or `$HOME/…`
 /// - absolute paths — returned as-is
 /// - relative paths — resolved against `cwd`
 pub fn resolve_path(path: &str, cwd: &std::path::Path) -> std::path::PathBuf {
@@ -170,4 +170,35 @@ pub fn resolve_path(path: &str, cwd: &std::path::Path) -> std::path::PathBuf {
     }
     let p = std::path::Path::new(path);
     if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn resolve_path_bare_tilde() {
+        if let Some(home) = home_dir() {
+            assert_eq!(resolve_path("~", Path::new(".")), home);
+        }
+    }
+
+    #[test]
+    fn resolve_path_tilde_slash_subdir() {
+        if let Some(home) = home_dir() {
+            assert_eq!(resolve_path("~/foo/bar", Path::new(".")), home.join("foo/bar"));
+        }
+    }
+
+    #[test]
+    fn resolve_path_absolute() {
+        assert_eq!(resolve_path("/etc/hosts", Path::new(".")), Path::new("/etc/hosts"));
+    }
+
+    #[test]
+    fn resolve_path_relative() {
+        let cwd = Path::new("/tmp/myproject");
+        assert_eq!(resolve_path("src/main.rs", cwd), cwd.join("src/main.rs"));
+    }
 }
