@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,6 +13,50 @@ use crate::tools::output_filter;
 /// Text-reading commands whose display output is suppressed to nudge the
 /// agent toward the dedicated read tool.
 const TEXT_READING_COMMANDS: &[&str] = &["sed", "head", "tail", "awk"];
+
+/// Hard cap on output bytes. When exceeded, the shell is cancelled to prevent
+/// runaway commands from bloating memory. Set above the output gate threshold
+/// (50KB) so the normal gate handles moderate cases; this catches extremes.
+const OUTPUT_CAP_BYTES: usize = 1_024 * 1_024; // 1 MB
+
+/// A Write adapter that stops accepting bytes after a limit and signals
+/// cancellation via an AtomicBool.
+struct CappedBuffer {
+    buf: Vec<u8>,
+    cap: usize,
+    cancel: Arc<AtomicBool>,
+    capped: bool,
+}
+
+impl CappedBuffer {
+    fn new(cap: usize, cancel: Arc<AtomicBool>) -> Self {
+        Self { buf: Vec::new(), cap, cancel, capped: false }
+    }
+}
+
+impl Write for CappedBuffer {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if self.capped {
+            return Ok(data.len()); // Silently discard.
+        }
+        let remaining = self.cap.saturating_sub(self.buf.len());
+        if remaining == 0 {
+            self.capped = true;
+            self.cancel.store(true, Ordering::Relaxed);
+            return Ok(data.len());
+        }
+        let take = data.len().min(remaining);
+        self.buf.extend_from_slice(&data[..take]);
+        if take < data.len() {
+            self.capped = true;
+            self.cancel.store(true, Ordering::Relaxed);
+        }
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 pub struct EpshTool {
     cwd: PathBuf,
@@ -92,9 +137,12 @@ impl AgentTool for EpshTool {
             shell.vars.export(&k);
         }
 
-        // Output capture via sinks.
-        let stdout_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-        let stderr_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        // Output capture via capped sinks. Cancels the shell if output exceeds
+        // OUTPUT_CAP_BYTES to prevent runaway commands from bloating memory.
+        let stdout_buf: Arc<Mutex<CappedBuffer>> =
+            Arc::new(Mutex::new(CappedBuffer::new(OUTPUT_CAP_BYTES, Arc::clone(cancel))));
+        let stderr_buf: Arc<Mutex<CappedBuffer>> =
+            Arc::new(Mutex::new(CappedBuffer::new(OUTPUT_CAP_BYTES, Arc::clone(cancel))));
         shell.set_stdout_sink(stdout_buf.clone());
         shell.set_stderr_sink(stderr_buf.clone());
 
@@ -140,18 +188,26 @@ impl AgentTool for EpshTool {
         if timed_out.load(Ordering::Relaxed) {
             return ToolResult::error(format!("timed out after {}s", timeout_secs));
         }
-        if cancel.load(Ordering::Relaxed) {
-            return ToolResult::error("Interrupted");
-        }
 
         // Collect captured output.
-        let mut output = stdout_buf.lock().unwrap().clone();
-        let stderr = stderr_buf.lock().unwrap();
-        if !stderr.is_empty() {
+        let stdout_lock = stdout_buf.lock().unwrap();
+        let output_capped = stdout_lock.capped;
+        let mut output = stdout_lock.buf.clone();
+        drop(stdout_lock);
+        let stderr_lock = stderr_buf.lock().unwrap();
+        if !stderr_lock.buf.is_empty() {
             output.extend_from_slice(b"\n[stderr]\n");
-            output.extend_from_slice(&stderr);
+            output.extend_from_slice(&stderr_lock.buf);
         }
-        drop(stderr);
+        drop(stderr_lock);
+        // If the cancel flag is set but not by the output cap or timeout, it
+        // was a user interrupt.
+        if cancel.load(Ordering::Relaxed) && !output_capped {
+            return ToolResult::error("Interrupted");
+        }
+        if output_capped {
+            output.extend_from_slice(b"\n[output truncated: exceeded 1MB cap]");
+        }
 
         let raw = String::from_utf8_lossy(&output);
 
