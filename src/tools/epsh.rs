@@ -2,7 +2,6 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use crate::agent::agent::{AgentTool, ToolResult};
 use crate::agent::provider::CancelFlag;
@@ -125,69 +124,26 @@ impl AgentTool for EpshTool {
 
         let is_text_reading = is_bare_text_reader(&program);
 
-        // Build a fresh shell per invocation.
-        let mut shell = epsh::eval::Shell::new();
-        shell.set_cwd(self.cwd.clone());
-        shell.opts.errexit = true;
-        shell.opts.nounset = true;
-
-        // Inherit environment so tools like git, cargo, rustc find their config.
-        for (k, v) in std::env::vars() {
-            shell.set_var(&k, &v);
-            shell.vars.export(&k);
-        }
-
         // Output capture via capped sinks. Cancels the shell if output exceeds
         // OUTPUT_CAP_BYTES to prevent runaway commands from bloating memory.
         let stdout_buf: Arc<Mutex<CappedBuffer>> =
             Arc::new(Mutex::new(CappedBuffer::new(OUTPUT_CAP_BYTES, Arc::clone(cancel))));
         let stderr_buf: Arc<Mutex<CappedBuffer>> =
             Arc::new(Mutex::new(CappedBuffer::new(OUTPUT_CAP_BYTES, Arc::clone(cancel))));
-        shell.set_stdout_sink(stdout_buf.clone());
-        shell.set_stderr_sink(stderr_buf.clone());
 
-        // Wire up cancellation.
-        shell.set_cancel_flag(Arc::clone(cancel));
-
-        // Timeout: a watchdog thread that waits on a condvar for the full
-        // duration. If the main thread finishes first it notifies the condvar
-        // and the watchdog exits immediately. If the deadline passes, the
-        // watchdog sets the cancel flag.
-        let timed_out = Arc::new(AtomicBool::new(false));
-        let done_pair = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
-        let cancel_for_timeout = Arc::clone(cancel);
-        let timed_out_flag = Arc::clone(&timed_out);
-        let done_for_watchdog = Arc::clone(&done_pair);
-        let watchdog = std::thread::Builder::new()
-            .name("epsh-timeout".into())
-            .stack_size(64 * 1024)
-            .spawn(move || {
-                let (lock, cvar) = &*done_for_watchdog;
-                let guard = lock.lock().unwrap();
-                let (guard, result) = cvar
-                    .wait_timeout_while(guard, Duration::from_secs(timeout_secs), |done| !*done)
-                    .unwrap();
-                if !*guard && result.timed_out() {
-                    timed_out_flag.store(true, Ordering::Relaxed);
-                    cancel_for_timeout.store(true, Ordering::Relaxed);
-                }
-            })
-            .expect("failed to spawn timeout watchdog");
+        // Fresh shell per invocation. Builder inherits process env by default.
+        let mut shell = epsh::eval::Shell::builder()
+            .cwd(self.cwd.clone())
+            .errexit(true)
+            .nounset(true)
+            .cancel_flag(Arc::clone(cancel))
+            .stdout_sink(stdout_buf.clone())
+            .stderr_sink(stderr_buf.clone())
+            .timeout(std::time::Duration::from_secs(timeout_secs))
+            .build();
 
         let status = shell.run_program(&program);
         let exit_code = status.code();
-
-        // Signal the watchdog to exit and wait for it.
-        {
-            let (lock, cvar) = &*done_pair;
-            *lock.lock().unwrap() = true;
-            cvar.notify_one();
-        }
-        let _ = watchdog.join();
-
-        if timed_out.load(Ordering::Relaxed) {
-            return ToolResult::error(format!("timed out after {}s", timeout_secs));
-        }
 
         // Collect captured output.
         let stdout_lock = stdout_buf.lock().unwrap();
@@ -200,8 +156,14 @@ impl AgentTool for EpshTool {
             output.extend_from_slice(&stderr_lock.buf);
         }
         drop(stderr_lock);
-        // If the cancel flag is set but not by the output cap or timeout, it
-        // was a user interrupt.
+
+        // Exit code 130 = killed by signal. Distinguish cause:
+        // - cancel flag not set → timeout (shell's internal deadline fired)
+        // - cancel flag set + output not capped → user interrupt
+        // - cancel flag set + output capped → output cap triggered cancel
+        if exit_code == 130 && !cancel.load(Ordering::Relaxed) {
+            return ToolResult::error(format!("timed out after {}s", timeout_secs));
+        }
         if cancel.load(Ordering::Relaxed) && !output_capped {
             return ToolResult::error("Interrupted");
         }

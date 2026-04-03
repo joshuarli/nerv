@@ -169,29 +169,15 @@ const DANGEROUS_COMMANDS: &[&str] = &[
     "sudo", "mkfs", "dd",
 ];
 
-/// Builtins that execute arbitrary strings or replace the process.
+/// Builtins that execute arbitrary strings, replace the process, or install
+/// signal handlers. These are a subset of epsh's builtins that need approval.
 const DANGEROUS_BUILTINS: &[&str] = &["eval", "exec", "trap"];
-
-/// POSIX builtins the agent legitimately uses. Anything not on this list is
-/// either dangerous (caught by DANGEROUS_BUILTINS) or suspicious enough to
-/// warrant a permission prompt. External commands are unaffected by this list.
-const ALLOWED_BUILTINS: &[&str] = &[
-    ":", "true", "false", "echo", "printf", "cd", "pwd", "exit", "return",
-    "break", "continue", "test", "[", "set", "export", "readonly", "unset",
-    "local", "shift", "read", "command", "type", "wait", "getopts", "umask",
-    ".", "source",
-];
 
 /// Shell names -- flagged when receiving piped input.
 const SHELL_NAMES: &[&str] = &["sh", "bash", "zsh"];
 
 /// Network fetch commands -- flagged when piped to anything.
 const FETCH_COMMANDS: &[&str] = &["curl", "wget"];
-
-/// Check if a command name is a known shell builtin.
-fn is_known_builtin(name: &str) -> bool {
-    ALLOWED_BUILTINS.contains(&name) || DANGEROUS_BUILTINS.contains(&name)
-}
 
 /// Walk the AST to check for dangerous commands and paths outside the repo.
 fn check_epsh_ast(program: &epsh::ast::Program, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
@@ -323,11 +309,11 @@ fn visit_simple(
             return Permission::Ask(format!("dangerous builtin: {}", base));
         }
 
-        // Builtin allowlist: if it's a known builtin but not on the allowed
-        // list, flag it. This catches new builtins added to epsh that we
-        // haven't vetted yet.
-        if is_known_builtin(base) && !ALLOWED_BUILTINS.contains(&base) {
-            return Permission::Ask(format!("disallowed builtin: {}", base));
+        // If it's a shell builtin, check it against the dangerous list.
+        // Uses epsh's own builtin registry so new builtins are caught
+        // automatically — they'll hit the DANGEROUS_BUILTINS check or pass.
+        if DANGEROUS_BUILTINS.contains(&base) {
+            return Permission::Ask(format!("dangerous builtin: {}", base));
         }
 
         // Pipe to shell (curl | sh, wget | bash, etc.)
