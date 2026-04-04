@@ -1,8 +1,8 @@
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 use crate::tui::highlight;
 use crate::tui::tui::Component;
-use crate::tui::utils::{char_wrap_with_ansi, wrap_text_with_ansi};
+use crate::tui::utils::{char_wrap_with_ansi, truncate_to_width, visible_width, wrap_text_with_ansi};
 
 /// Theme functions for markdown rendering. Each takes raw text and returns
 /// ANSI-styled output.
@@ -17,6 +17,8 @@ pub struct MarkdownTheme {
     pub strikethrough: fn(&str) -> String,
     pub list_bullet: fn(&str) -> String,
     pub hr: fn(&str) -> String,
+    pub table_header: fn(&str) -> String,
+    pub table_border: fn(&str) -> String,
     pub code_block_indent: &'static str,
 }
 
@@ -33,9 +35,25 @@ impl Default for MarkdownTheme {
             strikethrough: |s| format!("\x1b[9m{}\x1b[29m", s),
             list_bullet: |s| format!("\x1b[38;5;245m{}\x1b[0m", s),
             hr: |s| format!("\x1b[38;5;240m{}\x1b[0m", s),
+            table_header: |s| format!("\x1b[1;37m{}\x1b[0m", s),
+            table_border: |s| format!("\x1b[38;5;240m{}\x1b[0m", s),
             code_block_indent: "  ",
         }
     }
+}
+
+/// Transient state for building a table as we parse its events.
+struct TableState {
+    alignments: Vec<Alignment>,
+    rows: Vec<TableRow>,
+    current_row: Vec<String>,
+    current_row_is_header: bool,
+    in_header: bool,
+}
+
+struct TableRow {
+    cells: Vec<String>,
+    is_header: bool,
 }
 
 pub struct Markdown {
@@ -85,7 +103,9 @@ impl Markdown {
         }
 
         let padding = " ".repeat(self.padding_x as usize);
-        let parser = Parser::new(&self.text);
+        let mut opts = Options::empty();
+        opts.insert(Options::ENABLE_TABLES);
+        let parser = Parser::new_ext(&self.text, opts);
         let mut lines = Vec::new();
         let mut current_text = String::new();
         let mut in_code_block = false;
@@ -97,6 +117,7 @@ impl Markdown {
         let mut in_strikethrough = false;
         let mut list_depth: usize = 0;
         let mut ordered_index: Option<u64> = None;
+        let mut table_state: Option<TableState> = None;
 
         // Add top padding
         for _ in 0..self.padding_y {
@@ -261,6 +282,63 @@ impl Markdown {
                     lines.push(format!("{}{}", padding, hr));
                     lines.push(String::new());
                 }
+                Event::Start(Tag::Table(alignments)) => {
+                    flush_text(&mut current_text, &mut lines, content_width, &padding);
+                    table_state = Some(TableState {
+                        alignments: alignments.to_vec(),
+                        rows: Vec::new(),
+                        current_row: Vec::new(),
+                        current_row_is_header: false,
+                        in_header: false,
+                    });
+                }
+                Event::Start(Tag::TableHead) => {
+                    if let Some(ref mut ts) = table_state {
+                        ts.in_header = true;
+                    }
+                }
+                Event::End(TagEnd::TableHead) => {
+                    if let Some(ref mut ts) = table_state {
+                        if !ts.current_row.is_empty() {
+                            let cells = std::mem::take(&mut ts.current_row);
+                            ts.rows.push(TableRow {
+                                cells,
+                                is_header: true,
+                            });
+                        }
+                        ts.in_header = false;
+                    }
+                }
+                Event::Start(Tag::TableRow) => {
+                    if let Some(ref mut ts) = table_state {
+                        ts.current_row.clear();
+                        ts.current_row_is_header = ts.in_header;
+                    }
+                }
+                Event::End(TagEnd::TableRow) => {
+                    if let Some(ref mut ts) = table_state {
+                        if !ts.current_row.is_empty() {
+                            let cells = std::mem::take(&mut ts.current_row);
+                            ts.rows.push(TableRow {
+                                cells,
+                                is_header: ts.current_row_is_header,
+                            });
+                        }
+                    }
+                }
+                Event::Start(Tag::TableCell) => {}
+                Event::End(TagEnd::TableCell) => {
+                    if let Some(ref mut ts) = table_state {
+                        ts.current_row.push(std::mem::take(&mut current_text));
+                    }
+                }
+                Event::End(TagEnd::Table) => {
+                    if let Some(ts) = table_state.take() {
+                        let rendered = render_table(&ts, content_width, &padding, &self.theme);
+                        lines.extend(rendered);
+                        lines.push(String::new());
+                    }
+                }
                 _ => {}
             }
         }
@@ -279,6 +357,140 @@ impl Markdown {
 
         lines
     }
+}
+
+fn render_table(ts: &TableState, content_width: u16, padding: &str, theme: &MarkdownTheme) -> Vec<String> {
+    if ts.rows.is_empty() {
+        return vec![];
+    }
+
+    let ncols = ts.rows.iter().map(|r| r.cells.len()).max().unwrap_or(0);
+    if ncols == 0 {
+        return vec![];
+    }
+
+    // Compute natural column widths (visible chars only, no ANSI in cell text
+    // at this point since cells are collected from current_text which may have
+    // inline styling applied).
+    let mut col_widths: Vec<u16> = vec![0u16; ncols];
+    for row in &ts.rows {
+        for (ci, cell) in row.cells.iter().enumerate() {
+            let w = visible_width(cell) as u16;
+            if w > col_widths[ci] {
+                col_widths[ci] = w;
+            }
+        }
+    }
+
+    // Each column is padded 1 space on each side: " content "
+    // Border: │ col │ col │ ...  │
+    // Total width = 1 + sum(col_w + 2) + ncols * 1 = 1 + sum(col_w) + 3*ncols
+    // We must fit within content_width. If too wide, shrink the widest columns.
+    let border_overhead = 1 + 3 * ncols as u16; // left │, then (space + content + space + │) × N
+    let available_for_content = content_width.saturating_sub(border_overhead);
+
+    // Simple proportional shrink: if total natural width exceeds available,
+    // repeatedly trim the widest column until it fits.
+    let total_natural: u16 = col_widths.iter().sum();
+    if total_natural > available_for_content {
+        let mut widths = col_widths.clone();
+        let mut total: u16 = widths.iter().sum();
+        while total > available_for_content {
+            let max_w = *widths.iter().max().unwrap_or(&1);
+            if max_w == 0 {
+                break;
+            }
+            let second_max = widths.iter().filter(|&&w| w < max_w).copied().max().unwrap_or(0);
+            let target = second_max.max(1);
+            let excess = total.saturating_sub(available_for_content);
+            let reducible: u16 = widths.iter().filter(|&&w| w == max_w).count() as u16;
+            let new_max = max_w.saturating_sub((excess + reducible - 1) / reducible).max(target);
+            for w in widths.iter_mut() {
+                if *w > new_max {
+                    *w = new_max;
+                }
+            }
+            let new_total: u16 = widths.iter().sum();
+            if new_total >= total {
+                break; // Safety: no progress
+            }
+            total = new_total;
+        }
+        col_widths = widths;
+    }
+
+    let border = |s: &str| (theme.table_border)(s);
+
+    // Build a separator row: ├─────┼─────┤ or ╞═════╪═════╡
+    let make_sep = |left: &str, mid: &str, right: &str, fill: &str| -> String {
+        let mut s = border(left).to_string();
+        for (i, &w) in col_widths.iter().enumerate() {
+            s.push_str(&border(&fill.repeat((w + 2) as usize)));
+            if i + 1 < ncols {
+                s.push_str(&border(mid));
+            }
+        }
+        s.push_str(&border(right));
+        s
+    };
+
+    let top_border = make_sep("┌", "┬", "┐", "─");
+    let header_sep = make_sep("╞", "╪", "╡", "═");
+    let row_sep = make_sep("├", "┼", "┤", "─");
+    let bot_border = make_sep("└", "┴", "┘", "─");
+
+    let fmt_cell = |content: &str, col: usize, is_header: bool| -> String {
+        let w = col_widths[col];
+        let align = ts.alignments.get(col).copied().unwrap_or(Alignment::None);
+        // Truncate to column width, then pad.
+        let truncated = truncate_to_width(content, w);
+        let visible = visible_width(&truncated);
+        let pad_total = w.saturating_sub(visible);
+        let (pad_left, pad_right) = match align {
+            Alignment::Center => {
+                let l = pad_total / 2;
+                (l, pad_total - l)
+            }
+            Alignment::Right => (pad_total, 0),
+            _ => (0, pad_total),
+        };
+        let cell_str = format!(
+            " {}{}{} ",
+            " ".repeat(pad_left as usize),
+            truncated,
+            " ".repeat(pad_right as usize)
+        );
+        if is_header {
+            (theme.table_header)(&cell_str)
+        } else {
+            cell_str
+        }
+    };
+
+    let fmt_row = |row: &TableRow| -> String {
+        let mut s = border("│").to_string();
+        for ci in 0..ncols {
+            let cell = row.cells.get(ci).map(String::as_str).unwrap_or("");
+            s.push_str(&fmt_cell(cell, ci, row.is_header));
+            s.push_str(&border("│"));
+        }
+        s
+    };
+
+    let mut out: Vec<String> = Vec::new();
+    out.push(format!("{}{}", padding, top_border));
+
+    for (ri, row) in ts.rows.iter().enumerate() {
+        out.push(format!("{}{}", padding, fmt_row(row)));
+        if row.is_header {
+            out.push(format!("{}{}", padding, header_sep));
+        } else if ri + 1 < ts.rows.len() {
+            out.push(format!("{}{}", padding, row_sep));
+        }
+    }
+
+    out.push(format!("{}{}", padding, bot_border));
+    out
 }
 
 fn flush_text(text: &mut String, lines: &mut Vec<String>, width: u16, padding: &str) {
@@ -304,5 +516,66 @@ impl Component for Markdown {
 
     fn invalidate(&mut self) {
         self.cached = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::utils::visible_width;
+
+    fn md(text: &str) -> Markdown {
+        Markdown::new(text.to_string())
+    }
+
+    #[test]
+    fn table_basic() {
+        let text = "| A | B |\n|---|---|\n| 1 | 2 |\n";
+        let lines = md(text).render_markdown(80);
+        // Should have top border, header row, header-sep, data row, bot border
+        assert!(
+            lines.iter().any(|l| l.contains('┌')),
+            "missing top border: {:?}",
+            lines
+        );
+        assert!(
+            lines.iter().any(|l| l.contains('╞')),
+            "missing header sep: {:?}",
+            lines
+        );
+        assert!(
+            lines.iter().any(|l| l.contains('└')),
+            "missing bottom border: {:?}",
+            lines
+        );
+    }
+
+    #[test]
+    fn table_column_count() {
+        let text = "| Flag | Name | Description |\n|------|------|-------------|\n| -n | noexec | Parse but don't execute |\n";
+        let lines = md(text).render_markdown(120);
+        // Every non-empty table line should have 4 │ characters (3 columns = 4 pipes)
+        for line in &lines {
+            let stripped = line.trim();
+            if stripped.starts_with('│') || stripped.starts_with('├') || stripped.starts_with('╞') {
+                let pipe_count = stripped.chars().filter(|&c| c == '│').count();
+                assert_eq!(pipe_count, 4, "wrong pipe count in: {}", stripped);
+            }
+        }
+    }
+
+    #[test]
+    fn table_truncates_at_width() {
+        // Very narrow width — cells must be truncated, not overflow
+        let text = "| Very long column header | Another long header |\n|---|---|\n| long cell content here | more content |\n";
+        let lines = md(text).render_markdown(40);
+        for line in &lines {
+            assert!(
+                visible_width(line) <= 40,
+                "line too wide ({}): {:?}",
+                visible_width(line),
+                line
+            );
+        }
     }
 }
