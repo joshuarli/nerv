@@ -145,6 +145,7 @@ impl AgentTool for EpshTool {
             .cwd(self.cwd.clone())
             .errexit(true)
             .nounset(true)
+            .pipefail(true)
             .cancel_flag(Arc::clone(cancel))
             .stdout_sink(stdout_buf.clone())
             .stderr_sink(stderr_buf.clone())

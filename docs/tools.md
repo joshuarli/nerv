@@ -29,7 +29,7 @@ What the user sees vs what the LLM sees:
 | grep | All matching lines | `12 matches` |
 | find | All file paths | `8 files` |
 | ls | Full tree | `. (24 entries)` |
-| bash | Full stdout + stderr | First 3 lines + count |
+| epsh | Full stdout + stderr | First 3 lines + count |
 | write | `Wrote 1234 bytes to foo.rs` | same |
 
 ## read
@@ -123,18 +123,21 @@ same file content risks position drift.
   stored in `details.diff` for interactive display to the user.
 - **Mutation queue**: edits to the same file are serialized.
 
-## bash
+## epsh
 
-Execute a shell command.
+Execute a POSIX shell command and return its output.
 
 | Param | Type | Required | Default |
 |---|---|---|---|
 | `command` | string | yes | — |
-| `timeout` | integer | no | — |
+| `timeout` | integer | no | 120s (max 600s) |
 
-Runs `/bin/bash -c "{command}"` with piped stdout/stderr. The shell is
-always `/bin/bash` regardless of `$SHELL` — interactive shells (like custom
-`ish`) fail without a tty.
+Runs the command through the built-in `epsh` POSIX shell interpreter (not
+`/bin/bash`). The shell is launched with `errexit`, `nounset`, and
+`pipefail` set, so unset variables, failing commands, and failing pipeline
+stages all terminate the command with a non-zero exit code. Bash extensions
+are unavailable: no `[[ ]]`, no arrays, no process substitution `<()`, no
+brace expansion `{a,b}`, no here-strings `<<<`.
 
 **Streaming**: stdout is read in 8KB chunks and forwarded to the update
 callback for real-time display. Stderr is drained on a background thread
@@ -156,7 +159,7 @@ full pipeline description.
 exceeds 50 KB (≈12k tokens) the user is prompted via a blocking y/n:
 
 ```
-⚠ Output gate: bash
+⚠ Output gate: epsh
   cargo build --verbose
   1247 lines / ~18k tokens
   y = allow, n = deny (model gets hint to retry)
@@ -335,10 +338,10 @@ prevent context blowup when a query matches an unexpectedly large result set:
 
 Truncation messages indicate how much was omitted.
 
-`bash` does not use `truncate_tail`. Instead it runs the output filter
+`epsh` does not use `truncate_tail`. Instead it runs the output filter
 pipeline eagerly and then applies the output gate — a human-in-the-loop
-check for results that are still large after compression. See the [bash
-tool docs](tools.md#bash) for details.
+check for results that are still large after compression. See the [epsh
+tool docs](tools.md#epsh) for details.
 
 ### File mutation queue (`file_mutation_queue.rs`)
 
