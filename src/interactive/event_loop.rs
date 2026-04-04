@@ -287,7 +287,7 @@ impl InteractiveMode {
                         (dir.clone(), crate::core::permissions::path_to_display(&dir))
                     });
                 let prompt_line = match &allow_dir {
-                    Some((_, label)) => format!("y = allow, n = deny, a = allow dir ({})", label),
+                    Some((_, label)) => format!("y = allow, n = deny, a = allow read access ({})", label),
                     None => "y = allow, n = deny".to_string(),
                 };
                 self.status_message = Some(format!(

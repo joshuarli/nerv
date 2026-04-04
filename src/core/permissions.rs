@@ -49,8 +49,12 @@ pub fn check_with_policy(
     allowed_dirs: &[PathBuf],
     policy: &PathPolicy,
 ) -> Permission {
-    // If the user has granted a directory, auto-approve paths inside it.
+    // If the user has granted a directory, auto-approve read-only tool paths
+    // inside it. Write tools (edit, write, epsh) are intentionally excluded —
+    // the user approved read access, not write access.
+    const READ_TOOLS: &[&str] = &["read", "grep", "find", "ls", "symbols", "codemap"];
     if !allowed_dirs.is_empty()
+        && READ_TOOLS.contains(&tool)
         && let Some(path) = path_for_args(tool, args)
     {
         let resolved = crate::resolve_path(&path, repo_root.unwrap_or(Path::new(".")));
@@ -1025,6 +1029,21 @@ mod tests {
         let args = serde_json::json!({"path": "/etc/passwd"});
         assert!(matches!(
             check_with_policy("read", &args, Some(&repo()), &[allowed], &PathPolicy::default()),
+            Permission::Ask(_)
+        ));
+    }
+
+    #[test]
+    fn allowed_dir_does_not_grant_write_access() {
+        // "allow dir" grants read access only — write/edit tools must still prompt.
+        let allowed = PathBuf::from("/Users/josh/external");
+        let args = serde_json::json!({"path": "/Users/josh/external/foo.rs"});
+        assert!(matches!(
+            check_with_policy("write", &args, Some(&repo()), &[allowed.clone()], &PathPolicy::default()),
+            Permission::Ask(_)
+        ));
+        assert!(matches!(
+            check_with_policy("edit", &args, Some(&repo()), &[allowed], &PathPolicy::default()),
             Permission::Ask(_)
         ));
     }

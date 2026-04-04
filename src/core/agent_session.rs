@@ -34,7 +34,9 @@ pub struct PlanQuestion {
 
 /// Typed wrapper around the shared allowed-directories list.
 ///
-/// Directories added here are granted full tool access without per-call prompts.
+/// Directories added here are granted read-tool access (read/grep/find/ls/symbols/codemap)
+/// without per-call prompts. Write tools (write, edit, epsh) are not covered —
+/// those still require explicit permission per call.
 /// The Arc makes it cheap to clone into closures.
 #[derive(Clone, Default)]
 pub struct AllowedDirs(Arc<std::sync::Mutex<Vec<PathBuf>>>);

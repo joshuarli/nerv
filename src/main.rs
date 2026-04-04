@@ -548,7 +548,7 @@ fn main() {
                                         let display = nerv::core::permissions::path_to_display(&dir);
                                         layout.chat.push_styled(
                                             nerv::interactive::theme::SUCCESS,
-                                            &format!("  → allowed dir: {}", display),
+                                            &format!("  → allowed read access: {}", display),
                                         );
                                     }
                                     if let Some(tx) = interactive.pending_permission.take() {
