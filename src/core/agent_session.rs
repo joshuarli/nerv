@@ -35,18 +35,27 @@ pub struct PlanQuestion {
 /// Typed wrapper around the shared allowed-directories list.
 ///
 /// Directories added here are granted read-tool access (read/grep/find/ls/symbols/codemap)
-/// without per-call prompts. Write tools (write, edit, epsh) are not covered —
-/// those still require explicit permission per call.
+/// without per-call prompts. Write tools (write, edit, epsh) require separate entries
+/// in the write list — added when the user presses 'a' on a write-tool prompt.
 /// The Arc makes it cheap to clone into closures.
 #[derive(Clone, Default)]
-pub struct AllowedDirs(Arc<std::sync::Mutex<Vec<PathBuf>>>);
+pub struct AllowedDirs {
+    read: Arc<std::sync::Mutex<Vec<PathBuf>>>,
+    write: Arc<std::sync::Mutex<Vec<PathBuf>>>,
+}
 
 impl AllowedDirs {
     pub fn push(&self, dir: PathBuf) {
-        self.0.lock().unwrap().push(dir);
+        self.read.lock().unwrap().push(dir);
+    }
+    pub fn push_write(&self, dir: PathBuf) {
+        self.write.lock().unwrap().push(dir);
     }
     pub fn snapshot(&self) -> Vec<PathBuf> {
-        self.0.lock().unwrap().clone()
+        self.read.lock().unwrap().clone()
+    }
+    pub fn snapshot_write(&self) -> Vec<PathBuf> {
+        self.write.lock().unwrap().clone()
     }
 }
 
@@ -671,11 +680,13 @@ impl AgentSession {
                     }
 
                     let dirs = allowed_dirs.snapshot();
+                    let write_dirs = allowed_dirs.snapshot_write();
                     let perm = super::permissions::check_with_policy(
                         tool,
                         args,
                         repo_root.as_deref(),
                         &dirs,
+                        &write_dirs,
                         &path_policy,
                     );
                     match perm {

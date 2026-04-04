@@ -544,12 +544,21 @@ fn main() {
                                         && let Some(path_str) = nerv::core::permissions::path_for_args(&tool, args)
                                     {
                                         let dir = nerv::core::permissions::allow_dir_for_path(&path_str);
-                                        interactive.allowed_dirs.push(dir.clone());
+                                        const WRITE_TOOLS: &[&str] = &["edit", "write", "epsh"];
                                         let display = nerv::core::permissions::path_to_display(&dir);
-                                        layout.chat.push_styled(
-                                            nerv::interactive::theme::SUCCESS,
-                                            &format!("  → allowed read access: {}", display),
-                                        );
+                                        if WRITE_TOOLS.contains(&tool.as_str()) {
+                                            interactive.allowed_dirs.push_write(dir.clone());
+                                            layout.chat.push_styled(
+                                                nerv::interactive::theme::SUCCESS,
+                                                &format!("  → allowed write access: {}", display),
+                                            );
+                                        } else {
+                                            interactive.allowed_dirs.push(dir.clone());
+                                            layout.chat.push_styled(
+                                                nerv::interactive::theme::SUCCESS,
+                                                &format!("  → allowed read access: {}", display),
+                                            );
+                                        }
                                     }
                                     if let Some(tx) = interactive.pending_permission.take() {
                                         let _ = tx.send(true);

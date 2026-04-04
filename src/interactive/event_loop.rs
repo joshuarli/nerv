@@ -286,7 +286,12 @@ impl InteractiveMode {
                         let dir = crate::core::permissions::allow_dir_for_path(&path_str);
                         (dir.clone(), crate::core::permissions::path_to_display(&dir))
                     });
+                const WRITE_TOOLS: &[&str] = &["edit", "write", "epsh"];
+                let is_write_tool = WRITE_TOOLS.contains(&tool.as_str());
                 let prompt_line = match &allow_dir {
+                    Some((_, label)) if is_write_tool => {
+                        format!("y = allow, n = deny, a = allow write access ({})", label)
+                    }
                     Some((_, label)) => format!("y = allow, n = deny, a = allow read access ({})", label),
                     None => "y = allow, n = deny".to_string(),
                 };

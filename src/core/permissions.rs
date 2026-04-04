@@ -36,22 +36,22 @@ impl PathPolicy {
 /// Check whether a tool call should be auto-approved or needs user
 /// confirmation.
 pub fn check(tool: &str, args: &serde_json::Value, repo_root: Option<&Path>) -> Permission {
-    check_with_policy(tool, args, repo_root, &[], &PathPolicy::default())
+    check_with_policy(tool, args, repo_root, &[], &[], &PathPolicy::default())
 }
 
 /// Like [`check`], but also auto-approves any path that falls within one of
-/// the user-granted `allowed_dirs` (populated by the "allow directory" prompt
-/// response) or config-based `PathPolicy`.
+/// the user-granted `allowed_dirs` / `allowed_write_dirs` (populated by the
+/// "allow directory" prompt response) or config-based `PathPolicy`.
 pub fn check_with_policy(
     tool: &str,
     args: &serde_json::Value,
     repo_root: Option<&Path>,
     allowed_dirs: &[PathBuf],
+    allowed_write_dirs: &[PathBuf],
     policy: &PathPolicy,
 ) -> Permission {
-    // If the user has granted a directory, auto-approve read-only tool paths
-    // inside it. Write tools (edit, write, epsh) are intentionally excluded —
-    // the user approved read access, not write access.
+    // If the user has granted a directory for reads, auto-approve read-only
+    // tool paths inside it. Write tools are handled separately below.
     const READ_TOOLS: &[&str] = &["read", "grep", "find", "ls", "symbols", "codemap"];
     if !allowed_dirs.is_empty()
         && READ_TOOLS.contains(&tool)
@@ -60,6 +60,23 @@ pub fn check_with_policy(
         let resolved = crate::resolve_path(&path, repo_root.unwrap_or(Path::new(".")));
         let resolved = normalize_path(&resolved);
         for dir in allowed_dirs {
+            let dir = normalize_path(dir);
+            if resolved.starts_with(&dir) {
+                return Permission::Allow;
+            }
+        }
+    }
+
+    // If the user has granted a directory for writes, auto-approve write/edit/epsh
+    // paths inside it.
+    const WRITE_TOOLS: &[&str] = &["edit", "write", "epsh"];
+    if !allowed_write_dirs.is_empty()
+        && WRITE_TOOLS.contains(&tool)
+        && let Some(path) = path_for_args(tool, args)
+    {
+        let resolved = crate::resolve_path(&path, repo_root.unwrap_or(Path::new(".")));
+        let resolved = normalize_path(&resolved);
+        for dir in allowed_write_dirs {
             let dir = normalize_path(dir);
             if resolved.starts_with(&dir) {
                 return Permission::Allow;
@@ -982,7 +999,7 @@ mod tests {
         let cmd = format!("cat {}/.cargo/config.toml", home.display());
         let args = serde_json::json!({"command": cmd});
         assert_eq!(
-            check_with_policy("epsh", &args, Some(&repo()), &[], &policy),
+            check_with_policy("epsh", &args, Some(&repo()), &[], &[], &policy),
             Permission::Allow
         );
     }
@@ -995,7 +1012,7 @@ mod tests {
         };
         let args = serde_json::json!({"command": "echo hello > /var/log/myapp/out.log"});
         assert_eq!(
-            check_with_policy("epsh", &args, Some(&repo()), &[], &policy),
+            check_with_policy("epsh", &args, Some(&repo()), &[], &[], &policy),
             Permission::Allow
         );
     }
@@ -1008,7 +1025,7 @@ mod tests {
         };
         let args = serde_json::json!({"command": "cat /var/log/other.log"});
         assert!(matches!(
-            check_with_policy("epsh", &args, Some(&repo()), &[], &policy),
+            check_with_policy("epsh", &args, Some(&repo()), &[], &[], &policy),
             Permission::Ask(_)
         ));
     }
@@ -1018,7 +1035,7 @@ mod tests {
         let allowed = PathBuf::from("/Users/josh/external");
         let args = serde_json::json!({"path": "/Users/josh/external/foo.rs"});
         assert_eq!(
-            check_with_policy("read", &args, Some(&repo()), &[allowed], &PathPolicy::default()),
+            check_with_policy("read", &args, Some(&repo()), &[allowed], &[], &PathPolicy::default()),
             Permission::Allow
         );
     }
@@ -1028,22 +1045,48 @@ mod tests {
         let allowed = PathBuf::from("/Users/josh/external");
         let args = serde_json::json!({"path": "/etc/passwd"});
         assert!(matches!(
-            check_with_policy("read", &args, Some(&repo()), &[allowed], &PathPolicy::default()),
+            check_with_policy("read", &args, Some(&repo()), &[allowed], &[], &PathPolicy::default()),
             Permission::Ask(_)
         ));
     }
 
     #[test]
     fn allowed_dir_does_not_grant_write_access() {
-        // "allow dir" grants read access only — write/edit tools must still prompt.
+        // read-allowed dirs do not grant write access — write must be in the write list.
         let allowed = PathBuf::from("/Users/josh/external");
         let args = serde_json::json!({"path": "/Users/josh/external/foo.rs"});
         assert!(matches!(
-            check_with_policy("write", &args, Some(&repo()), &[allowed.clone()], &PathPolicy::default()),
+            check_with_policy("write", &args, Some(&repo()), &[allowed.clone()], &[], &PathPolicy::default()),
             Permission::Ask(_)
         ));
         assert!(matches!(
-            check_with_policy("edit", &args, Some(&repo()), &[allowed], &PathPolicy::default()),
+            check_with_policy("edit", &args, Some(&repo()), &[allowed], &[], &PathPolicy::default()),
+            Permission::Ask(_)
+        ));
+    }
+
+    #[test]
+    fn allowed_write_dir_grants_write_access() {
+        // Pressing 'a' on a write-tool prompt pushes to the write list.
+        let write_allowed = PathBuf::from("/Users/josh/external");
+        let args = serde_json::json!({"path": "/Users/josh/external/foo.rs"});
+        assert_eq!(
+            check_with_policy("write", &args, Some(&repo()), &[], &[write_allowed.clone()], &PathPolicy::default()),
+            Permission::Allow
+        );
+        assert_eq!(
+            check_with_policy("edit", &args, Some(&repo()), &[], &[write_allowed], &PathPolicy::default()),
+            Permission::Allow
+        );
+    }
+
+    #[test]
+    fn allowed_write_dir_does_not_grant_read_access() {
+        // Write-allowed dirs only cover write tools, not reads (reads need their own list).
+        let write_allowed = PathBuf::from("/Users/josh/external");
+        let args = serde_json::json!({"path": "/Users/josh/external/secret.rs"});
+        assert!(matches!(
+            check_with_policy("read", &args, Some(&repo()), &[], &[write_allowed], &PathPolicy::default()),
             Permission::Ask(_)
         ));
     }
@@ -1052,7 +1095,7 @@ mod tests {
     fn allowed_dir_empty_falls_back_to_normal_check() {
         let args = serde_json::json!({"path": "/etc/passwd"});
         assert!(matches!(
-            check_with_policy("read", &args, Some(&repo()), &[], &PathPolicy::default()),
+            check_with_policy("read", &args, Some(&repo()), &[], &[], &PathPolicy::default()),
             Permission::Ask(_)
         ));
     }
