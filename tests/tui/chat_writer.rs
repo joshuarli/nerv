@@ -44,13 +44,11 @@ fn streaming_thinking_shows_last_lines() {
     w.begin_stream();
     w.append_thinking("line one\nline two\nline three\nline four\nline five");
     let lines = w.render(80);
-    // Should show last 3 lines of thinking
+    // All thinking lines should be shown while streaming
     let joined = lines.join("\n");
+    assert!(joined.contains("line one"));
     assert!(joined.contains("line three"));
-    assert!(joined.contains("line four"));
     assert!(joined.contains("line five"));
-    // First two should be trimmed
-    assert!(!joined.contains("line one"));
 }
 
 #[test]

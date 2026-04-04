@@ -164,6 +164,8 @@ fn compaction_preserves_messages_after_cut_point() {
         model_id: String::new(),
         cost_usd_before: 0.0,
         archived_messages: vec![],
+        preserved_user_messages: vec![],
+        compaction_type: "full".into(),
     }).unwrap();
 
     let ctx = mgr.build_session_context();
@@ -195,6 +197,8 @@ fn compaction_survives_reload() {
         model_id: String::new(),
         cost_usd_before: 0.0,
         archived_messages: vec![],
+        preserved_user_messages: vec![],
+        compaction_type: "full".into(),
     }).unwrap();
 
     let session_id = mgr.session_id().to_string();
@@ -229,6 +233,8 @@ fn compaction_with_tool_calls_across_boundary() {
         model_id: String::new(),
         cost_usd_before: 0.0,
         archived_messages: vec![],
+        preserved_user_messages: vec![],
+        compaction_type: "full".into(),
     }).unwrap();
 
     let ctx = mgr.build_session_context();
@@ -441,6 +447,8 @@ fn compaction_only_removes_current_branch_entries() {
         model_id: String::new(),
         cost_usd_before: 0.0,
         archived_messages: vec![],
+        preserved_user_messages: vec![],
+        compaction_type: "full".into(),
     }).unwrap();
 
     // Branch B sentinel should still be in the DB
@@ -475,6 +483,8 @@ fn compaction_removes_pre_cut_entries_on_current_branch() {
         model_id: String::new(),
         cost_usd_before: 0.0,
         archived_messages: vec![],
+        preserved_user_messages: vec![],
+        compaction_type: "full".into(),
     }).unwrap();
 
     let ctx = mgr.build_session_context();
@@ -779,6 +789,8 @@ fn compaction_removes_fts_entries() {
         model_id: String::new(),
         cost_usd_before: 0.0,
         archived_messages: vec![],
+        preserved_user_messages: vec![],
+        compaction_type: "full".into(),
     }).unwrap();
 
     // The compacted message's text should be gone from search

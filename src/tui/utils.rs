@@ -723,7 +723,7 @@ mod tests {
     #[test]
     fn wrap_simple() {
         let lines = wrap_text_with_ansi("hello world", 5);
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 2);
         assert_eq!(visible_width(&lines[0]), 5);
     }
 

@@ -357,17 +357,17 @@ use nerv::agent::agent::{
     OUTPUT_GATE_THRESHOLD_BYTES, OutputGateDecision, OutputGateInfo, ToolResult,
 };
 
-/// Mock "bash" tool: always returns the given fixed output.
+/// Mock "epsh" tool: always returns the given fixed output.
 struct BigBashTool {
     output: String,
 }
 
 impl AgentTool for BigBashTool {
     fn name(&self) -> &str {
-        "bash"
+        "epsh"
     }
     fn description(&self) -> &str {
-        "Mock bash"
+        "Mock epsh"
     }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({"type":"object","properties":{"command":{"type":"string"}}})
@@ -403,7 +403,7 @@ fn output_gate_not_triggered_below_threshold() {
     // Output below 50 KB → gate should never fire.
     let small = "x".repeat(1_000);
     let mut agent = setup_agent_with_bash(
-        vec![tool_call_response("c1", "bash", r#"{"command":"echo hi"}"#), simple_response("Done")],
+        vec![tool_call_response("c1", "epsh", r#"{"command":"echo hi"}"#), simple_response("Done")],
         small.clone(),
     );
     let gate_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -436,7 +436,7 @@ fn output_gate_allow_passes_result_through() {
     let big = "A".repeat(OUTPUT_GATE_THRESHOLD_BYTES + 1_000);
     let mut agent = setup_agent_with_bash(
         vec![
-            tool_call_response("c1", "bash", r#"{"command":"cat big_file"}"#),
+            tool_call_response("c1", "epsh", r#"{"command":"cat big_file"}"#),
             simple_response("Done"),
         ],
         big.clone(),
@@ -472,7 +472,7 @@ fn output_gate_deny_replaces_with_hint() {
     let big = "B".repeat(OUTPUT_GATE_THRESHOLD_BYTES + 1_000);
     let mut agent = setup_agent_with_bash(
         vec![
-            tool_call_response("c1", "bash", r#"{"command":"find / -type f"}"#),
+            tool_call_response("c1", "epsh", r#"{"command":"find / -type f"}"#),
             simple_response("Done"),
         ],
         big,

@@ -33,7 +33,15 @@ fn set_active_filters_tools() {
 #[test]
 fn plan_mode_restricts_tools_and_injects_prompt() {
     let (_tmp, mut session, tx) =
-        mock_session(vec![simple_response("plan output"), simple_response("edit done")], true);
+        mock_session(
+            vec![
+                simple_response("plan output"),
+                // correction prompt injected when "plan output" has no questions JSON block
+                simple_response("{\"questions\":[]}"),
+                simple_response("edit done"),
+            ],
+            true,
+        );
 
     // Enable plan mode
     session.set_plan_mode(true, &tx);

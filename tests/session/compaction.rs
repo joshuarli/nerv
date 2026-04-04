@@ -117,6 +117,8 @@ fn should_compact_triggers_at_threshold() {
         threshold_pct: 0.90,
         keep_recent_tokens: 20_000,
         verbatim_window_tokens: 5_000,
+        preserved_user_tokens: 0,
+        summary_compact_max_turns: 0,
     };
     assert!(!should_compact(89_999, 100_000, &s));
     assert!(should_compact(90_001, 100_000, &s));
@@ -129,6 +131,8 @@ fn should_compact_respects_enabled_flag() {
         threshold_pct: 0.10,
         keep_recent_tokens: 1_000,
         verbatim_window_tokens: 0,
+        preserved_user_tokens: 0,
+        summary_compact_max_turns: 0,
     };
     // Even 99% full, disabled means no compact
     assert!(!should_compact(99_999, 100_000, &s));

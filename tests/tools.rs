@@ -602,7 +602,7 @@ fn edit_multi_deletion_and_insertion() {
 #[test]
 fn bash_tool_runs_command() {
     let tmp = TempDir::new().unwrap();
-    let tool = BashTool::new(tmp.path().to_path_buf());
+    let tool = EpshTool::new(tmp.path().to_path_buf());
     let result =
         tool.execute(serde_json::json!({"command": "echo hello"}), &noop_cancel());
 
@@ -613,7 +613,7 @@ fn bash_tool_runs_command() {
 #[test]
 fn bash_tool_reports_nonzero_exit() {
     let tmp = TempDir::new().unwrap();
-    let tool = BashTool::new(tmp.path().to_path_buf());
+    let tool = EpshTool::new(tmp.path().to_path_buf());
     let result =
         tool.execute(serde_json::json!({"command": "exit 42"}), &noop_cancel());
 
