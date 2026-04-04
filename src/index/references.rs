@@ -21,23 +21,31 @@ pub struct ReferenceHit {
 }
 
 /// Hard cap on candidate files to prevent runaway scans on large repos.
-/// Partial-result summary message (WS5) is a TODO follow-up.
-const MAX_CANDIDATE_FILES: usize = 500;
+pub const MAX_CANDIDATE_FILES: usize = 500;
+
+#[derive(Debug)]
+pub struct ReferencesOutput {
+    pub hits: Vec<ReferenceHit>,
+    /// Number of candidate files not scanned because the cap was reached.
+    pub skipped_files: usize,
+}
 
 pub fn find_references(
     index: &SymbolIndex,
     query: &str,
     cwd: &Path,
     file_filter: Option<&Path>,
-) -> Result<Vec<ReferenceHit>, String> {
+) -> Result<ReferencesOutput, String> {
     let query = query.trim();
     if query.is_empty() {
         return Err("query must be non-empty when references=true".to_string());
     }
 
-    let candidate_files = candidate_files(index, file_filter);
-    // WS5: cap file list to prevent runaway scans on large repos.
-    let candidate_files: Vec<PathBuf> = candidate_files.into_iter().take(MAX_CANDIDATE_FILES).collect();
+    let all_candidates = candidate_files(index, file_filter);
+    let total_candidates = all_candidates.len();
+    // WS5: cap file list and surface how many were skipped so callers can warn users.
+    let candidate_files: Vec<PathBuf> = all_candidates.into_iter().take(MAX_CANDIDATE_FILES).collect();
+    let skipped_files = total_candidates.saturating_sub(candidate_files.len());
 
     let mut dedup: HashMap<(PathBuf, u32), ReferenceHit> = HashMap::new();
 
@@ -81,14 +89,14 @@ pub fn find_references(
         }
     }
 
-    let mut out: Vec<ReferenceHit> = dedup.into_values().collect();
-    out.sort_by(|a, b| {
+    let mut hits: Vec<ReferenceHit> = dedup.into_values().collect();
+    hits.sort_by(|a, b| {
         a.file
             .cmp(&b.file)
             .then_with(|| a.line.cmp(&b.line))
             .then_with(|| a.context.cmp(&b.context))
     });
-    Ok(out)
+    Ok(ReferencesOutput { hits, skipped_files })
 }
 
 fn candidate_files(index: &SymbolIndex, file_filter: Option<&Path>) -> Vec<PathBuf> {
@@ -686,7 +694,7 @@ mod tests {
             ),
         ]);
 
-        let hits = find_references(&index, "target", tmp.path(), None).unwrap();
+        let hits = find_references(&index, "target", tmp.path(), None).unwrap().hits;
         let root = tmp.path().canonicalize().unwrap_or_else(|_| tmp.path().to_path_buf());
         let rel_lines: BTreeSet<String> = hits
             .iter()
@@ -719,7 +727,7 @@ mod tests {
         let notes = tmp.path().join("notes.txt");
         std::fs::write(&notes, "targeter\nname = target\n").unwrap();
 
-        let hits = find_references(&index, "target", tmp.path(), Some(&notes)).unwrap();
+        let hits = find_references(&index, "target", tmp.path(), Some(&notes)).unwrap().hits;
         let root = tmp.path().canonicalize().unwrap_or_else(|_| tmp.path().to_path_buf());
         let rel_lines: BTreeSet<String> = hits
             .iter()
@@ -751,7 +759,7 @@ mod tests {
             "main.go",
             "func use() {\n\tx := target()\n\t_ = x\n}\nfunc target() int { return 1 }\n",
         )]);
-        let hits = find_references(&index, "x", tmp.path(), None).unwrap();
+        let hits = find_references(&index, "x", tmp.path(), None).unwrap().hits;
         let lines: Vec<u32> = hits.iter().map(|h| h.line).collect();
         assert!(!lines.contains(&2), "short_var lhs should not be a reference: {:?}", lines);
         assert!(lines.contains(&3), "usage of x should be found: {:?}", lines);
@@ -764,7 +772,7 @@ mod tests {
             "range.go",
             "func f() {\n\titems := []int{1,2}\n\tfor i, v := range items {\n\t\t_ = i + v\n\t}\n}\n",
         )]);
-        let hits = find_references(&index, "i", tmp.path(), None).unwrap();
+        let hits = find_references(&index, "i", tmp.path(), None).unwrap().hits;
         let lines: Vec<u32> = hits.iter().map(|h| h.line).collect();
         assert!(!lines.contains(&3), "range lhs should not be a reference: {:?}", lines);
         assert!(lines.contains(&4), "usage of i should be found: {:?}", lines);
@@ -777,7 +785,7 @@ mod tests {
             "loop.py",
             "items = [1, 2]\nfor x in items:\n    print(x)\n",
         )]);
-        let hits = find_references(&index, "x", tmp.path(), None).unwrap();
+        let hits = find_references(&index, "x", tmp.path(), None).unwrap().hits;
         let lines: Vec<u32> = hits.iter().map(|h| h.line).collect();
         assert!(!lines.contains(&2), "for-loop variable should not be a reference: {:?}", lines);
         assert!(lines.contains(&3), "body usage of loop var should be found: {:?}", lines);
@@ -790,7 +798,7 @@ mod tests {
             "param.py",
             "def foo(x):\n    return x + 1\n",
         )]);
-        let hits = find_references(&index, "x", tmp.path(), None).unwrap();
+        let hits = find_references(&index, "x", tmp.path(), None).unwrap().hits;
         let lines: Vec<u32> = hits.iter().map(|h| h.line).collect();
         assert!(!lines.contains(&1), "simple param should not be a reference: {:?}", lines);
         assert!(lines.contains(&2), "usage of param in body should be found: {:?}", lines);
@@ -803,7 +811,7 @@ mod tests {
             "vars.go",
             "var x int = 0\nfunc use() int { return x }\n",
         )]);
-        let hits = find_references(&index, "x", tmp.path(), None).unwrap();
+        let hits = find_references(&index, "x", tmp.path(), None).unwrap().hits;
         let lines: Vec<u32> = hits.iter().map(|h| h.line).collect();
         assert!(!lines.contains(&1), "var_spec name should not be a reference: {:?}", lines);
         assert!(lines.contains(&2), "usage of x should be found: {:?}", lines);
@@ -861,7 +869,7 @@ mod tests {
         // AND has C-style block comments.
         let js = tmp.path().join("code.js");
         std::fs::write(&js, "/* \ntarget\n*/\nconst x = target;\n").unwrap();
-        let hits = find_references(&index, "target", tmp.path(), Some(&js)).unwrap();
+        let hits = find_references(&index, "target", tmp.path(), Some(&js)).unwrap().hits;
         let root = tmp.path().canonicalize().unwrap_or_else(|_| tmp.path().to_path_buf());
         let lines: BTreeSet<u32> = hits
             .iter()
@@ -905,5 +913,89 @@ mod tests {
     fn definition_line_single_occurrence_would_be_dropped() {
         assert_eq!(count_word_occurrences("fn target() {}", "target", "rs"), 1);
         // count == 1 → WS3 would drop this hit on a definition line
+    }
+
+    // WS5 tests
+
+    #[test]
+    fn skipped_files_is_zero_when_under_cap() {
+        let (tmp, index) = setup_index(&[("a.rs", "fn foo() {}\nfn bar() { foo(); }\n")]);
+        let out = find_references(&index, "foo", tmp.path(), None).unwrap();
+        assert_eq!(out.skipped_files, 0, "should not skip any files under the cap");
+        assert!(!out.hits.is_empty(), "should find the reference");
+    }
+
+    // File-filter tests
+
+    #[test]
+    fn file_filter_restricts_to_single_file() {
+        let (tmp, index) = setup_index(&[
+            ("a.rs", "fn foo() {}\nfn bar() { foo(); }\n"),
+            ("b.rs", "fn baz() { foo(); }\n"),
+        ]);
+        let filter = tmp.path().join("a.rs");
+        let hits = find_references(&index, "foo", tmp.path(), Some(&filter)).unwrap().hits;
+        assert!(
+            hits.iter().all(|h| h.file.ends_with("a.rs")),
+            "file filter should restrict hits to a.rs: {hits:#?}"
+        );
+        // b.rs usage must not appear
+        assert!(
+            !hits.iter().any(|h| h.file.ends_with("b.rs")),
+            "b.rs should be excluded by file filter: {hits:#?}"
+        );
+    }
+
+    #[test]
+    fn file_filter_restricts_to_directory() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        std::fs::write(
+            tmp.path().join("sub/a.rs"),
+            "fn foo() {}\nfn use_foo() { foo(); }\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("other.rs"), "fn also_uses() { foo(); }\n").unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.force_index_dir(tmp.path());
+
+        let filter = tmp.path().join("sub");
+        let hits =
+            find_references(&index, "foo", tmp.path(), Some(&filter)).unwrap().hits;
+        assert!(
+            hits.iter().all(|h| h.file.to_string_lossy().contains("sub")),
+            "directory filter should restrict hits to sub/: {hits:#?}"
+        );
+        assert!(
+            !hits.iter().any(|h| h.file.ends_with("other.rs")),
+            "other.rs outside sub/ should be excluded: {hits:#?}"
+        );
+    }
+
+    // Symlink / canonical-path dedup test
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_paths_deduplicate_to_canonical() {
+        // When a file is reachable via two paths (original + symlink), the hits
+        // should be deduplicated to one per (canonical_file, line) pair.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let real = tmp.path().join("real.rs");
+        std::fs::write(&real, "fn foo() {}\nfn bar() { foo(); }\n").unwrap();
+        let link = tmp.path().join("link.rs");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let mut index = SymbolIndex::new();
+        index.force_index_dir(tmp.path());
+
+        let hits = find_references(&index, "foo", tmp.path(), None).unwrap().hits;
+        // Regardless of how many candidate paths are considered, the usage on
+        // line 2 should appear exactly once after canonical-path dedup.
+        let line2_count = hits.iter().filter(|h| h.line == 2).count();
+        assert_eq!(
+            line2_count, 1,
+            "symlinked file should not produce duplicate hits: {hits:#?}"
+        );
     }
 }

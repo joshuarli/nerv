@@ -195,7 +195,9 @@ impl AgentTool for SymbolsTool {
                 &self.cwd,
                 file_path.as_deref(),
             ) {
-                Ok(refs) => {
+                Ok(refs_out) => {
+                    let skipped = refs_out.skipped_files;
+                    let refs = refs_out.hits;
                     if !refs.is_empty() {
                         out.push_str("\nREFERENCES:\n");
                         for hit in refs.iter().take(MAX_RESULTS) {
@@ -216,6 +218,13 @@ impl AgentTool for SymbolsTool {
                                 MAX_RESULTS
                             ));
                         }
+                    }
+                    if skipped > 0 {
+                        out.push_str(&format!(
+                            "  [partial: {} file(s) not scanned — result set capped at {} files]\n",
+                            skipped,
+                            crate::index::references::MAX_CANDIDATE_FILES,
+                        ));
                     }
                 }
                 Err(message) => {

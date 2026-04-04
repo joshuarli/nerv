@@ -1420,3 +1420,119 @@ fn codemap_tool_kind_filter() {
     assert!(result.content.contains("Foo"), "{}", result.content);
     assert!(!result.content.contains("bar"), "should not contain fn: {}", result.content);
 }
+
+// ── Reindex-after-edit integration tests ──
+
+#[test]
+fn symbols_reindex_after_file_edit() {
+    // Verifies that after a file write (simulated via index_file, as the
+    // edit/write post-tool callback does in production), subsequent symbols
+    // calls reflect the new content.
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("lib.rs");
+    std::fs::write(&file, "fn original_name() {}\n").unwrap();
+
+    let tool = SymbolsTool::new(tmp.path().to_path_buf());
+
+    // First call triggers initial index.
+    let before = tool.execute(serde_json::json!({"query": ""}), &noop_cancel());
+    assert!(before.content.contains("original_name"), "initial index should have original_name");
+    assert!(!before.content.contains("renamed_fn"), "renamed_fn should not exist yet");
+
+    // Overwrite the file and explicitly reindex (simulates the edit/write post-tool callback).
+    std::fs::write(&file, "fn renamed_fn() {}\n").unwrap();
+    tool.index().write().unwrap().index_file(&file);
+
+    let after = tool.execute(serde_json::json!({"query": ""}), &noop_cancel());
+    assert!(
+        after.content.contains("renamed_fn"),
+        "after edit symbols should contain renamed_fn: {}",
+        after.content
+    );
+    assert!(
+        !after.content.contains("original_name"),
+        "after edit original_name should be gone: {}",
+        after.content
+    );
+}
+
+#[test]
+fn codemap_reindex_after_file_edit() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("lib.rs");
+    std::fs::write(&file, "fn original_name() {}\n").unwrap();
+
+    // Create index and tool together so we can trigger index_file directly.
+    let index = Arc::new(std::sync::RwLock::new(nerv::index::SymbolIndex::new()));
+    let tool = CodemapTool::new(tmp.path().to_path_buf(), index.clone());
+
+    let before = tool.execute(
+        serde_json::json!({"query": "original_name", "depth": "full"}),
+        &noop_cancel(),
+    );
+    assert!(before.content.contains("original_name"), "should find original_name before edit");
+
+    // Simulate edit + post-tool reindex callback.
+    std::fs::write(&file, "fn renamed_fn() {}\n").unwrap();
+    index.write().unwrap().index_file(&file);
+
+    let after_old = tool.execute(
+        serde_json::json!({"query": "original_name", "depth": "full"}),
+        &noop_cancel(),
+    );
+    assert!(
+        !after_old.content.contains("fn original_name"),
+        "old function should be gone after edit: {}",
+        after_old.content
+    );
+
+    let after_new = tool.execute(
+        serde_json::json!({"query": "renamed_fn", "depth": "full"}),
+        &noop_cancel(),
+    );
+    assert!(
+        after_new.content.contains("renamed_fn"),
+        "new function should be found after edit: {}",
+        after_new.content
+    );
+}
+
+#[test]
+fn references_reindex_after_file_edit() {
+    // Verifies that after adding a new call site and reindexing, the references
+    // query picks up the new usage.
+    let tmp = TempDir::new().unwrap();
+    let lib = tmp.path().join("lib.rs");
+    // Start with one usage of `target`.
+    std::fs::write(&lib, "fn target() {}\nfn caller() { target(); }\n").unwrap();
+
+    let tool = SymbolsTool::new(tmp.path().to_path_buf());
+
+    let before = tool.execute(
+        serde_json::json!({"query": "target", "references": true}),
+        &noop_cancel(),
+    );
+    assert!(
+        before.content.contains("caller"),
+        "caller should appear as reference before edit: {}",
+        before.content
+    );
+
+    // Add a second call site and simulate the post-edit reindex callback.
+    std::fs::write(
+        &lib,
+        "fn target() {}\nfn caller() { target(); }\nfn caller2() { target(); }\n",
+    )
+    .unwrap();
+    tool.index().write().unwrap().index_file(&lib);
+
+    let after = tool.execute(
+        serde_json::json!({"query": "target", "references": true}),
+        &noop_cancel(),
+    );
+    assert!(
+        after.content.contains("caller2"),
+        "new call site should appear after edit: {}",
+        after.content
+    );
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "There are bugs in processor.py. The tests in test_processor.py describe the correct behavior. Find and fix the bugs so all tests pass.",
+  "verify": "python3 test_processor.py",
+  "max_turns": 8,
+  "goals": {
+    "require_before_read": ["symbols", "codemap"],
+    "forbid_bash_search": true,
+    "require_tools": ["symbols", "codemap"],
+    "max_turns": 5,
+    "max_broad_greps_before_targeted": 0,
+    "description": "Known-file bug hunt oracle: symbols(file:processor.py) → codemap(exact) → edit. No broad grep, no read-first. ≤5 turns."
+  }
+}

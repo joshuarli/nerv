@@ -334,6 +334,44 @@ def check_goals(goals: dict, output: dict, result: EvalResult) -> list[str]:
                 f"{'GOAL' if used else 'MISS'} require_tools: {tool_name} {'used' if used else 'never used'}"
             )
 
+    # WS9: redundant reads — count reads of the same path more than once.
+    if "max_redundant_reads" in goals:
+        limit = goals["max_redundant_reads"]
+        read_counts: dict[str, int] = {}
+        for t in tool_seq:
+            if t["tool"] == "read":
+                path = t["args"].get("path", "")
+                if path:
+                    read_counts[path] = read_counts.get(path, 0) + 1
+        redundant = sum(c - 1 for c in read_counts.values() if c > 1)
+        ok = redundant <= limit
+        results.append(
+            f"{'GOAL' if ok else 'MISS'} max_redundant_reads: {redundant} (goal: <={limit})"
+        )
+
+    # WS9: broad greps before targeted — count grep calls without a specific
+    # `path` arg (i.e. scanning the whole project) before the first grep that
+    # names a specific file or directory.
+    if "max_broad_greps_before_targeted" in goals:
+        limit = goals["max_broad_greps_before_targeted"]
+        broad_count = 0
+        found_targeted = False
+        for t in tool_seq:
+            if t["tool"] != "grep":
+                continue
+            path_arg = t["args"].get("path", "")
+            if not path_arg or path_arg in (".", "./"):
+                broad_count += 1
+            else:
+                found_targeted = True
+                break
+        ok = broad_count <= limit
+        label = "targeted grep" if found_targeted else "no targeted grep"
+        results.append(
+            f"{'GOAL' if ok else 'MISS'} max_broad_greps_before_targeted: "
+            f"{broad_count} broad before {label} (goal: <={limit})"
+        )
+
     return results
 
 

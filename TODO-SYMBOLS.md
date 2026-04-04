@@ -73,7 +73,7 @@ This document tracks known quality gaps and concrete improvements for future age
 
 - [x] **Reference scan can be expensive on large repos with broad filters.**
   - Added `MAX_CANDIDATE_FILES = 500` cap in `find_references`; candidate list is truncated at that limit.
-  - Note: partial-result summary message ("N more files not scanned") is a follow-up; current behavior silently truncates.
+  - `find_references` now returns `ReferencesOutput { hits, skipped_files }`; callers emit a `[partial: N file(s) not scanned]` note when `skipped_files > 0`.
   - File: `src/index/references.rs`.
 
 - [ ] **Per-file parser setup is repeated and not pooled.**
@@ -199,19 +199,21 @@ Goal: reduce wasted calls and loop churn after read cache signals.
 Goal: catch exploration regressions automatically.
 
 #### Tasks
-- [ ] Add eval metrics:
-  - early miss rate (first N calls),
-  - redundant read count,
-  - broad grep count before first bounded target hit.
-- [ ] Add oracle cases for "known-file bug hunt" where best path is symbols -> codemap -> bounded grep.
-- [ ] Fail/flag when anti-pattern thresholds are exceeded.
+- [x] Add eval metrics:
+  - `max_redundant_reads`: counts same-path re-reads in the trace; GOAL/MISS against a threshold.
+  - `max_broad_greps_before_targeted`: counts grep calls without a path arg before the first scoped grep.
+- [x] Add oracle task for "known-file bug hunt": `eval/tasks/known-file-bug-hunt/` — a Python bug-fix task where the agent is told which file to look at; goals enforce `require_before_read: ["symbols","codemap"]`, `max_broad_greps_before_targeted: 0`, and `max_turns: 5`.
+- [x] Fail/flag when anti-pattern thresholds are exceeded: `check_goals` in `eval/run.py` emits MISS lines for both new metrics when thresholds are violated.
+- [ ] Early miss rate (first N call quality) — still pending; no clear oracle definition yet.
 
 #### Candidate files
-- `eval/` harness and report scripts.
+- `eval/run.py` (metrics added).
+- `eval/tasks/known-file-bug-hunt/` (new oracle task).
 
 #### Acceptance criteria
-- CI/local eval report includes new efficiency counters.
-- Reproduced trace class (`a44f5a92`) scores better after guardrails land.
+- [x] `max_redundant_reads` and `max_broad_greps_before_targeted` goal types recognized and scored in `check_goals`.
+- [x] `known-file-bug-hunt` task runs via `python3 eval/run.py --task known-file-bug-hunt`.
+- [ ] Early miss rate counter still pending.
 
 ## Workstreams
 
@@ -265,18 +267,18 @@ Goal: parity between CLI and tool API.
 - [x] `nerv codemap foo --match exact --from src/lib.rs` works end-to-end.
 - [x] Invalid `--from` path errors clearly and exits non-zero.
 
-## WS5: Add scale guards for references (P2) — partial
+## WS5: Add scale guards for references (P2) ✓
 
 Goal: preserve responsiveness on very large repos.
 
 ### Tasks
 - [x] Add max-files guardrail: `MAX_CANDIDATE_FILES = 500` cap in `find_references`.
-- [ ] Return partial results with explicit summary when capped (follow-up: signal truncation in output).
+- [x] Return partial results with explicit summary when capped: `[partial: N file(s) not scanned — result set capped at 500 files]` appended to REFERENCES output.
 - [x] Keep default behavior backward-compatible unless guard is tripped.
 
 ### Acceptance criteria
-- [x] Deterministic capped behavior (candidate list silently truncated at 500).
-- [ ] Partial-output summary message still pending.
+- [x] Deterministic capped behavior.
+- [x] Partial-output summary message (`skipped_files_is_zero_when_under_cap` test; message surfaces in `symbols.rs` output when `skipped_files > 0`).
 
 ## Test expansion backlog
 
@@ -284,8 +286,8 @@ Goal: preserve responsiveness on very large repos.
 - [x] language-specific fixtures: Go short_var_declaration, range_clause, var_spec; Python for-loop, simple parameter. (WS1)
 - [x] multiline comment/string exclusion in fallback: `blocked_lines_*`, `fallback_block_comment_interior_suppressed`. (WS2)
 - [x] same-line definition+usage collision: `count_word_occurrences_*`, `definition_line_with_dual_occurrence_retained_for_fallback`. (WS3)
-- [ ] symlink/canonical path dedupe edge cases.
-- [ ] file filter behavior for file and directory filters in large trees.
+- [x] symlink/canonical path dedupe: `symlink_paths_deduplicate_to_canonical` (unix).
+- [x] file filter behavior: `file_filter_restricts_to_single_file`, `file_filter_restricts_to_directory`.
 
 ## Tool tests (`src/tools/symbols.rs`, `src/tools/codemap.rs`)
 - [x] `symbols` invalid references query (empty/whitespace) error shape.
@@ -294,7 +296,7 @@ Goal: preserve responsiveness on very large repos.
 - [x] `codemap` invalid `from` error wording stability tests.
 
 ## Integration tests (`tests/tools.rs` / `tests/integration.rs`)
-- [ ] end-to-end scenario: edit -> reindex -> references and codemap exact reflect updates.
+- [x] end-to-end scenario: edit → reindex → references and codemap exact reflect updates. (`symbols_reindex_after_file_edit`, `codemap_reindex_after_file_edit`, `references_reindex_after_file_edit` in `tests/tools.rs`). Tests simulate the post-edit `index_file()` callback because `index_dir` is debounced (5s) and would otherwise skip re-parsing in rapid test loops.
 - [x] CLI codemap exact/from (WS4 shipped; covered by CLI flag parsing).
 
 ## Suggested execution order
