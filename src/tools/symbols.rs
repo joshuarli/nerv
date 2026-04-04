@@ -363,4 +363,38 @@ mod tests {
         let err = tool.validate(&serde_json::json!({"query": "hello", "bogus": true})).unwrap_err();
         assert!(err.to_string().contains("unknown argument"), "{}", err);
     }
+
+    #[test]
+    fn validate_references_requires_non_empty_query() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = SymbolsTool::new(tmp.path().to_path_buf());
+        let err = tool
+            .validate(&serde_json::json!({"query": "", "references": true}))
+            .unwrap_err();
+        assert!(err.to_string().contains("non-empty"), "{}", err);
+    }
+
+    #[test]
+    fn validate_references_requires_non_whitespace_query() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = SymbolsTool::new(tmp.path().to_path_buf());
+        let err = tool
+            .validate(&serde_json::json!({"query": "   ", "references": true}))
+            .unwrap_err();
+        assert!(err.to_string().contains("non-empty"), "{}", err);
+    }
+
+    #[test]
+    fn references_output_is_deterministically_ordered() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn foo() {}\nfn bar() { foo(); }\n").unwrap();
+        std::fs::write(tmp.path().join("b.rs"), "fn baz() { foo(); }\n").unwrap();
+
+        // Run twice; output should be identical.
+        let tool = SymbolsTool::new(tmp.path().to_path_buf());
+        let cancel = new_cancel_flag();
+        let r1 = tool.execute(serde_json::json!({"query": "foo", "references": true}), &cancel);
+        let r2 = tool.execute(serde_json::json!({"query": "foo", "references": true}), &cancel);
+        assert_eq!(r1.content, r2.content, "references output must be deterministic");
+    }
 }

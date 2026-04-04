@@ -255,13 +255,22 @@ fn format_exact_ambiguity(
 
     for sym in candidates {
         let parent_suffix = sym.parent.as_ref().map(|p| format!("  ({})", p)).unwrap_or_default();
+        let file_rel = display_path(&sym.file, project_root);
+        // Emit a ready-to-run narrowing snippet alongside each candidate.
+        let snippet = format!(
+            "  → codemap(query: \"{}\", match: \"exact\", from: \"{}\", kind: \"{}\")",
+            query,
+            file_rel,
+            sym.kind.label(),
+        );
         out.push_str(&format!(
-            "  - {} {}  {}:{}{}\n",
+            "  - {} {}  {}:{}{}\n{}\n",
             sym.kind.label(),
             sym.name,
-            display_path(&sym.file, project_root),
+            file_rel,
             sym.line,
-            parent_suffix
+            parent_suffix,
+            snippet,
         ));
     }
     if remaining > 0 {

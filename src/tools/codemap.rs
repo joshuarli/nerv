@@ -283,4 +283,67 @@ mod tests {
             tool.validate(&serde_json::json!({"query": "target", "unexpected": 1})).unwrap_err();
         assert!(err.to_string().contains("unknown argument"), "{}", err);
     }
+
+    #[test]
+    fn exact_ambiguity_message_contains_file_kind_from_hints() {
+        // Regression: the ambiguity guidance text must mention narrowing options.
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn target() {}\n").unwrap();
+        std::fs::write(tmp.path().join("b.rs"), "fn target() {}\n").unwrap();
+        let tool = setup_tool(tmp.path());
+        let cancel = crate::agent::provider::new_cancel_flag();
+        let result = tool.execute(
+            serde_json::json!({"query": "target", "match": "exact"}),
+            &cancel,
+        );
+        assert!(result.content.contains("Ambiguous"), "expected ambiguity message: {}", result.content);
+        // Narrowing hints in the message
+        assert!(
+            result.content.contains("file") || result.content.contains("kind") || result.content.contains("from"),
+            "ambiguity message should suggest narrowing options: {}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn exact_ambiguity_candidate_format_stable() {
+        // Regression: each candidate must include kind, name, and file:line.
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn target() {}\n").unwrap();
+        std::fs::write(tmp.path().join("b.rs"), "fn target() {}\n").unwrap();
+        let tool = setup_tool(tmp.path());
+        let cancel = crate::agent::provider::new_cancel_flag();
+        let result = tool.execute(
+            serde_json::json!({"query": "target", "match": "exact"}),
+            &cancel,
+        );
+        // Each candidate line: "  - fn target  <path>:1"
+        let candidate_lines: Vec<&str> =
+            result.content.lines().filter(|l| l.trim_start().starts_with("- ")).collect();
+        assert!(!candidate_lines.is_empty(), "should have candidate lines: {}", result.content);
+        for line in &candidate_lines {
+            assert!(line.contains("target"), "candidate should contain symbol name: {}", line);
+            assert!(line.contains(':'), "candidate should contain file:line: {}", line);
+        }
+    }
+
+    #[test]
+    fn invalid_from_error_mentions_path() {
+        // Regression: error message for invalid from-path must reference the path.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = setup_tool(tmp.path());
+        let err = tool
+            .validate(&serde_json::json!({
+                "query": "target",
+                "match": "exact",
+                "from": "definitely_missing.rs"
+            }))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing") || msg.contains("unresolvable") || msg.contains("invalid"),
+            "error should describe the problem: {}",
+            msg
+        );
+    }
 }

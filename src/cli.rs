@@ -550,14 +550,16 @@ pub fn parse_args() -> Cmd {
         Value(v) if v == "codemap" => {
             if matches!(parser.clone().next(), Ok(Some(Short('h') | Long("help")))) {
                 println!(
-                    "Usage: nerv codemap <query> [path] [--kind <kind>] [--depth full|signatures]"
+                    "Usage: nerv codemap <query> [path] [--kind <kind>] [--depth full|signatures] [--match substring|exact] [--from <file>]"
                 );
                 println!();
                 println!("Show symbol implementations matching a query.");
                 println!();
                 println!("Options:");
-                println!("  --kind <kind>          Filter by symbol kind");
-                println!("  --depth full|signatures  Output verbosity (default: full)");
+                println!("  --kind <kind>                Filter by symbol kind");
+                println!("  --depth full|signatures      Output verbosity (default: full)");
+                println!("  --match substring|exact      Match mode (default: substring)");
+                println!("  --from <file>                Constrain exact disambiguation to this file");
                 std::process::exit(0);
             }
             Cmd::Codemap { rest: remaining_strings(parser) }
@@ -969,7 +971,7 @@ pub fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
         "codemap" => {
             if args.is_empty() {
                 eprintln!(
-                    "Usage: nerv codemap <query> [path] [--kind <kind>] [--depth full|signatures]"
+                    "Usage: nerv codemap <query> [path] [--kind <kind>] [--depth full|signatures] [--match substring|exact] [--from <file>]"
                 );
                 std::process::exit(1);
             }
@@ -977,9 +979,11 @@ pub fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
             // Parse optional flags and positional path arg
-            let mut kind_str = None;
-            let mut file_str = None;
-            let mut depth_str = None;
+            let mut kind_str: Option<&str> = None;
+            let mut file_str: Option<&str> = None;
+            let mut depth_str: Option<&str> = None;
+            let mut match_str: Option<&str> = None;
+            let mut from_str: Option<&str> = None;
             let mut i = 1;
             while i < args.len() {
                 match args[i].as_str() {
@@ -993,6 +997,14 @@ pub fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
                     }
                     "--depth" => {
                         depth_str = args.get(i + 1).map(|s| s.as_str());
+                        i += 2;
+                    }
+                    "--match" => {
+                        match_str = args.get(i + 1).map(|s| s.as_str());
+                        i += 2;
+                    }
+                    "--from" => {
+                        from_str = args.get(i + 1).map(|s| s.as_str());
                         i += 2;
                     }
                     s if !s.starts_with('-') && file_str.is_none() => {
@@ -1009,8 +1021,26 @@ pub fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
             let depth = depth_str
                 .map(nerv::index::codemap::parse_depth)
                 .unwrap_or(nerv::index::codemap::Depth::Full);
+            let match_mode = match match_str {
+                Some(s) => match nerv::index::codemap::parse_match_mode(s) {
+                    Some(m) => m,
+                    None => {
+                        eprintln!("--match: unknown mode '{}'. Choose: substring, exact", s);
+                        std::process::exit(1);
+                    }
+                },
+                None => nerv::index::codemap::MatchMode::Substring,
+            };
             let file_path =
                 file_str.map(|f| if f.starts_with('/') { PathBuf::from(f) } else { cwd.join(f) });
+            let from_path = from_str.map(|f| {
+                let p = if f.starts_with('/') { PathBuf::from(f) } else { cwd.join(f) };
+                if !p.is_file() {
+                    eprintln!("--from: '{}' is not a readable file", f);
+                    std::process::exit(1);
+                }
+                p
+            });
 
             let mut index = nerv::index::SymbolIndex::new();
             index.force_index_dir(&cwd);
@@ -1020,8 +1050,8 @@ pub fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
                 kind,
                 file: file_path.as_deref(),
                 depth,
-                match_mode: nerv::index::codemap::MatchMode::Substring,
-                from: None,
+                match_mode,
+                from: from_path.as_deref(),
             };
             println!("{}", nerv::index::codemap::codemap(&index, &cwd, &params));
         }

@@ -289,7 +289,8 @@ so that the index lock is released before file I/O, enabling parallel codemap
 calls without serializing on the mutex.
 
 Also available as a CLI subcommand: `nerv codemap <query> [--kind <kind>]
-[--file <path>] [--depth full|signatures]`. CLI defaults to `full` depth.
+[--file <path>] [--depth full|signatures] [--match substring|exact]
+[--from <file>]`. CLI defaults to `full` depth.
 
 ## memory
 
