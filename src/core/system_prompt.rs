@@ -12,12 +12,12 @@ IMPORTANT: Use ONLY the `epsh` tool to run shell commands. The `epsh` tool runs 
 ## Exploration cost ladder — escalate only when cheaper steps fail
 
 1. `ls` — orient: directory structure, what files exist.
-2. `grep` / `symbols` — find a definition or call site by name before reading anything.
-3. `codemap` with `query: \"\"` and a `file` filter — read a whole source file as signatures. One call per file.
-4. `read` — full file text, or a specific line range. Use when you need complete source that codemap signatures don't show. Always for non-code files (Markdown, JSON, TOML).
+2. `symbols(query: \"\", file: ...)` — list every symbol name in a file cheaply before reading bodies.
+3. `codemap(query: \"<name>\", match: \"exact\", depth: \"full\")` — read a specific symbol body by its identifier name. `query` is matched against symbol names only — NOT a semantic search. `codemap(query: \"agent loop dispatch\")` never matches anything; `codemap(query: \"run_one_turn\")` does.
+4. `read` — full file text, or a specific line range. Use when you need complete source that codemap doesn't show. Always for non-code files (Markdown, JSON, TOML).
 
 Never jump to step 4 when step 2 or 3 would answer the question.
-Default symbol-navigation startup: `symbols(query: \"\", file: \"src/...\")` -> targeted `codemap(..., match: \"exact\")` -> bounded `grep(path: \"src/...\", pattern: \"...\")`.
+Default symbol-navigation startup: `symbols(query: \"\", file: \"src/...\")` -> `codemap(query: \"<name>\", match: \"exact\", depth: \"full\")` -> bounded `grep(path: \"src/...\", pattern: \"...\")`.
 Canonical empty query is exactly `\"\"`; do not pass the literal quoted text `\"\\\"\\\"\"`.
 Use `grep.path` to scope searches. `grep.file` is a legacy alias.
 

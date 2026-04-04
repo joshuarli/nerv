@@ -64,9 +64,14 @@ fn search_substring(index: &SymbolIndex, params: &CodemapParams) -> SearchResult
         if !params.query.is_empty() {
             let total = index.search("", params.kind, params.file).len();
             if total > 0 {
+                let hint = if params.query.contains(' ') {
+                    " codemap matches identifier names only — multi-word phrases never match. Use symbols(query: \"\", file: ...) to see names first.".to_string()
+                } else {
+                    String::new()
+                };
                 return SearchResult::Redirect(format!(
-                    "No symbols matching '{}'. {} definitions exist in this scope — use query: \"\" to see them all.",
-                    params.query, total
+                    "No symbols matching '{}'.{} {} definitions exist in this scope — use query: \"\" to see them all.",
+                    params.query, hint, total
                 ));
             }
         }
@@ -483,6 +488,44 @@ mod tests {
         // Non-empty query, definitions exist → redirect message
         assert!(out.contains("No symbols matching 'nonexistent'"), "should redirect: {}", out);
         assert!(out.contains("1 definitions exist"), "should count: {}", out);
+    }
+
+    #[test]
+    fn multi_word_query_miss_includes_hint() {
+        let (tmp, index) = setup_index(&[("lib.rs", "fn run_one_turn() {}\n")]);
+        let params = CodemapParams {
+            query: "agent loop tool dispatch",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
+        let out = codemap(&index, tmp.path(), &params);
+        assert!(
+            out.contains("multi-word phrases never match"),
+            "multi-word miss should include identifier-name hint: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn single_word_query_miss_no_hint() {
+        let (tmp, index) = setup_index(&[("lib.rs", "fn run_one_turn() {}\n")]);
+        let params = CodemapParams {
+            query: "nonexistent",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
+        let out = codemap(&index, tmp.path(), &params);
+        assert!(
+            !out.contains("multi-word"),
+            "single-word miss should not include multi-word hint: {}",
+            out
+        );
     }
 
     #[test]

@@ -77,7 +77,7 @@ impl AgentTool for CodemapTool {
     }
 
     fn description(&self) -> &str {
-        "Show symbol implementations from the codebase. Returns source bodies for matching functions, structs, traits, etc. grouped by file. Replaces multiple read calls when you need to understand how something works."
+        "Look up a named symbol and return its source body. `query` is matched against identifier names — this is NOT semantic search. If you do not know the symbol name, call `symbols(query: \"\", file: ...)` first to inventory names in the file."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -86,7 +86,7 @@ impl AgentTool for CodemapTool {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Symbol name to search for (case-insensitive substring match)"
+                    "description": "Identifier name to look up — matched against symbol names only, not descriptions. Multi-word phrases like 'agent loop dispatch' will never match. If you do not know the name yet, call symbols(query: \"\", file: ...) first."
                 },
                 "kind": {
                     "type": "string",
@@ -121,6 +121,7 @@ impl AgentTool for CodemapTool {
         vec![
             "Call with `query: \"\"` and a `file` filter to get all signatures in a file. Use `depth: full` only when you need the body of a specific named symbol. Use `match: \"exact\"` for deterministic targeting; add `from` when exact matches are ambiguous across files.".into(),
             "Canonical empty query is exactly `\"\"`; do not pass the literal quoted text `\"\\\"\\\"\"`.".into(),
+            "WRONG: `codemap(file: \"src/agent/agent.rs\", query: \"agent loop tool dispatch\")` — multi-word descriptions never match symbol names. RIGHT: `symbols(query: \"\", file: \"src/agent/agent.rs\")` to see all names, then `codemap(query: \"run_one_turn\", match: \"exact\", depth: \"full\")`.".into(),
         ]
     }
 
