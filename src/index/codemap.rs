@@ -6,10 +6,17 @@ use super::{SymbolDef, SymbolIndex, SymbolKind};
 
 /// Max total lines in output before demoting remaining symbols to signatures.
 const LINE_BUDGET: usize = 4000;
+const AMBIGUITY_CANDIDATE_LIMIT: usize = 10;
 
 pub enum Depth {
     Signatures,
     Full,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchMode {
+    Substring,
+    Exact,
 }
 
 pub struct CodemapParams<'a> {
@@ -17,6 +24,8 @@ pub struct CodemapParams<'a> {
     pub kind: Option<SymbolKind>,
     pub file: Option<&'a Path>,
     pub depth: Depth,
+    pub match_mode: MatchMode,
+    pub from: Option<&'a Path>,
 }
 
 /// Result of the search phase — tells the caller what to do next.
@@ -28,12 +37,28 @@ pub enum SearchResult {
     Redirect(String),
     /// No definitions in scope at all.
     Empty,
+    /// Exact mode miss.
+    NoExactMatch { query: String, from: Option<PathBuf> },
+    /// Exact mode ambiguity.
+    AmbiguousExact {
+        query: String,
+        candidates: Vec<SymbolDef>,
+        remaining: usize,
+        from: Option<PathBuf>,
+    },
 }
 
 /// Search phase: queries the index and returns owned results.
 /// Call this while holding the index lock, then drop the lock before calling
 /// `render`.
 pub fn search(index: &SymbolIndex, params: &CodemapParams) -> SearchResult {
+    if matches!(params.match_mode, MatchMode::Exact) {
+        return search_exact(index, params);
+    }
+    search_substring(index, params)
+}
+
+fn search_substring(index: &SymbolIndex, params: &CodemapParams) -> SearchResult {
     let results = index.search(params.query, params.kind, params.file);
     if results.is_empty() {
         if !params.query.is_empty() {
@@ -50,19 +75,53 @@ pub fn search(index: &SymbolIndex, params: &CodemapParams) -> SearchResult {
     SearchResult::Found(results.into_iter().cloned().collect())
 }
 
+fn search_exact(index: &SymbolIndex, params: &CodemapParams) -> SearchResult {
+    let mut results: Vec<SymbolDef> =
+        index.search_exact(params.query, params.kind, params.file).into_iter().cloned().collect();
+    let normalized_from =
+        params.from.map(|from| from.canonicalize().unwrap_or_else(|_| from.to_path_buf()));
+    if let Some(from) = normalized_from.as_ref() {
+        results.retain(|sym| {
+            let sym_path = sym.file.canonicalize().unwrap_or_else(|_| sym.file.clone());
+            &sym_path == from
+        });
+    }
+    sort_deterministic(&mut results);
+
+    if results.is_empty() {
+        return SearchResult::NoExactMatch {
+            query: params.query.to_string(),
+            from: normalized_from,
+        };
+    }
+    if results.len() == 1 {
+        return SearchResult::Found(results);
+    }
+
+    let remaining = results.len().saturating_sub(AMBIGUITY_CANDIDATE_LIMIT);
+    let candidates = results.into_iter().take(AMBIGUITY_CANDIDATE_LIMIT).collect();
+    SearchResult::AmbiguousExact {
+        query: params.query.to_string(),
+        candidates,
+        remaining,
+        from: normalized_from,
+    }
+}
+
+fn sort_deterministic(results: &mut [SymbolDef]) {
+    results.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then_with(|| a.line.cmp(&b.line))
+            .then_with(|| a.kind.label().cmp(b.kind.label()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
 /// Render phase: reads source files and formats output. No index lock needed.
 ///
-/// `cached_sources` — map of path → source pre-fetched from
-/// `SymbolIndex::sources_for` while the read lock was held.  On a warm index
-/// this covers every file and no I/O happens here.  For any path that is absent
-/// (cold start, file just written), sources are read in parallel via scoped
-/// threads.
-pub fn render(
-    results: &[SymbolDef],
-    project_root: &Path,
-    depth: &Depth,
-    cached_sources: &HashMap<PathBuf, Arc<String>>,
-) -> String {
+/// For full mode, sources are read on demand in parallel via scoped threads.
+pub fn render(results: &[SymbolDef], project_root: &Path, depth: &Depth) -> String {
     let mut by_file: BTreeMap<&Path, Vec<&SymbolDef>> = BTreeMap::new();
     for sym in results {
         by_file.entry(sym.file.as_path()).or_default().push(sym);
@@ -70,15 +129,9 @@ pub fn render(
 
     let full_mode = matches!(depth, Depth::Full);
 
-    // For full mode: build a path → source map.
-    // 1. Use pre-fetched Arc<String> from the index cache (zero I/O on warm calls).
-    // 2. Read any missing files in parallel via scoped threads.
     let file_sources: BTreeMap<&Path, Arc<String>> = if full_mode {
-        // Collect which paths need a fresh read.
-        let missing: Vec<&Path> =
-            by_file.keys().copied().filter(|p| !cached_sources.contains_key(*p)).collect();
+        let missing: Vec<&Path> = by_file.keys().copied().collect();
 
-        // Parallel reads for cache misses.
         let fresh: HashMap<&Path, Arc<String>> = if missing.is_empty() {
             HashMap::new()
         } else {
@@ -104,13 +157,7 @@ pub fn render(
 
         by_file
             .keys()
-            .filter_map(|path| {
-                let src = cached_sources
-                    .get(*path)
-                    .map(Arc::clone)
-                    .or_else(|| fresh.get(path).map(Arc::clone))?;
-                Some((*path, src))
-            })
+            .filter_map(|path| fresh.get(path).map(|src| (*path, Arc::clone(src))))
             .collect()
     } else {
         BTreeMap::new()
@@ -158,15 +205,82 @@ pub fn render(
 /// duration). Used by CLI; the tool wrapper uses search/render separately to
 /// release the lock early.
 pub fn codemap(index: &SymbolIndex, project_root: &Path, params: &CodemapParams) -> String {
-    match search(index, params) {
-        SearchResult::Found(results) => {
-            let paths: Vec<&Path> = results.iter().map(|s| s.file.as_path()).collect();
-            let sources = index.sources_for(&paths);
-            render(&results, project_root, &params.depth, &sources)
-        }
+    format_search_result(search(index, params), project_root, &params.depth)
+}
+
+pub fn format_search_result(result: SearchResult, project_root: &Path, depth: &Depth) -> String {
+    match result {
+        SearchResult::Found(results) => render(&results, project_root, depth),
         SearchResult::Redirect(msg) => msg,
         SearchResult::Empty => "No symbols found".to_string(),
+        SearchResult::NoExactMatch { query, from } => {
+            format_exact_no_match(&query, from.as_deref(), project_root)
+        }
+        SearchResult::AmbiguousExact { query, candidates, remaining, from } => {
+            format_exact_ambiguity(&query, &candidates, remaining, from.as_deref(), project_root)
+        }
     }
+}
+
+fn format_exact_no_match(query: &str, from: Option<&Path>, project_root: &Path) -> String {
+    if let Some(from) = from {
+        format!("No exact symbol '{}' found in {}.", query, display_path(from, project_root))
+    } else {
+        format!("No exact symbol '{}' found.", query)
+    }
+}
+
+fn format_exact_ambiguity(
+    query: &str,
+    candidates: &[SymbolDef],
+    remaining: usize,
+    from: Option<&Path>,
+    project_root: &Path,
+) -> String {
+    let mut out = String::new();
+    if let Some(from) = from {
+        out.push_str(&format!(
+            "Ambiguous exact symbol '{}': {} same-file matches in {}. Narrow with `kind`.\n",
+            query,
+            candidates.len() + remaining,
+            display_path(from, project_root)
+        ));
+    } else {
+        out.push_str(&format!(
+            "Ambiguous exact symbol '{}': {} matches. Narrow with `file`, `kind`, or `from`.\n",
+            query,
+            candidates.len() + remaining
+        ));
+    }
+
+    for sym in candidates {
+        let parent_suffix = sym.parent.as_ref().map(|p| format!("  ({})", p)).unwrap_or_default();
+        out.push_str(&format!(
+            "  - {} {}  {}:{}{}\n",
+            sym.kind.label(),
+            sym.name,
+            display_path(&sym.file, project_root),
+            sym.line,
+            parent_suffix
+        ));
+    }
+    if remaining > 0 {
+        out.push_str(&format!("  ... and {} more\n", remaining));
+    }
+    out.truncate(out.trim_end().len());
+    out
+}
+
+fn display_path(path: &Path, project_root: &Path) -> String {
+    if let Ok(rel) = path.strip_prefix(project_root) {
+        return rel.display().to_string();
+    }
+    if let Ok(canonical_root) = project_root.canonicalize()
+        && let Ok(rel) = path.strip_prefix(&canonical_root)
+    {
+        return rel.display().to_string();
+    }
+    path.display().to_string()
 }
 
 /// Format a symbol with its full source body.
@@ -244,6 +358,14 @@ pub fn parse_depth(s: &str) -> Depth {
     }
 }
 
+pub fn parse_match_mode(s: &str) -> Option<MatchMode> {
+    match s {
+        "substring" => Some(MatchMode::Substring),
+        "exact" => Some(MatchMode::Exact),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,10 +384,28 @@ mod tests {
         (tmp, index)
     }
 
+    fn exact_params<'a>(query: &'a str, from: Option<&'a std::path::Path>) -> CodemapParams<'a> {
+        CodemapParams {
+            query,
+            kind: None,
+            file: None,
+            depth: Depth::Signatures,
+            match_mode: MatchMode::Exact,
+            from,
+        }
+    }
+
     #[test]
     fn full_mode_returns_source_body() {
         let (tmp, index) = setup_index(&[("lib.rs", "fn hello() {\n    println!(\"hi\");\n}\n")]);
-        let params = CodemapParams { query: "hello", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "hello",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("println!(\"hi\")"), "should contain function body: {}", out);
         assert!(out.contains("fn hello()"), "should contain signature: {}", out);
@@ -274,8 +414,14 @@ mod tests {
     #[test]
     fn signatures_mode_no_body() {
         let (tmp, index) = setup_index(&[("lib.rs", "fn hello() {\n    println!(\"hi\");\n}\n")]);
-        let params =
-            CodemapParams { query: "hello", kind: None, file: None, depth: Depth::Signatures };
+        let params = CodemapParams {
+            query: "hello",
+            kind: None,
+            file: None,
+            depth: Depth::Signatures,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("fn hello()"), "should contain signature: {}", out);
         assert!(!out.contains("println!"), "should NOT contain body: {}", out);
@@ -289,6 +435,8 @@ mod tests {
             kind: Some(SymbolKind::Function),
             file: None,
             depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
         };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("a.rs:"), "should have a.rs header: {}", out);
@@ -303,6 +451,8 @@ mod tests {
             kind: Some(SymbolKind::Struct),
             file: None,
             depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
         };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("Foo"), "should find struct: {}", out);
@@ -312,8 +462,14 @@ mod tests {
     #[test]
     fn no_matches_returns_message() {
         let (tmp, index) = setup_index(&[("lib.rs", "fn hello() {}\n")]);
-        let params =
-            CodemapParams { query: "nonexistent", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "nonexistent",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         // Non-empty query, definitions exist → redirect message
         assert!(out.contains("No symbols matching 'nonexistent'"), "should redirect: {}", out);
@@ -324,8 +480,14 @@ mod tests {
     fn no_matches_no_definitions_at_all() {
         // Empty file — no definitions exist, so no redirect
         let (tmp, index) = setup_index(&[("lib.rs", "// just a comment\n")]);
-        let params =
-            CodemapParams { query: "anything", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "anything",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         assert_eq!(out, "No symbols found");
     }
@@ -335,7 +497,14 @@ mod tests {
         // Empty query with no kind/file filter on empty index → plain message
         let index = SymbolIndex::new();
         let tmp = tempfile::TempDir::new().unwrap();
-        let params = CodemapParams { query: "", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         assert_eq!(out, "No symbols found");
     }
@@ -343,8 +512,14 @@ mod tests {
     #[test]
     fn redirect_includes_count() {
         let (tmp, index) = setup_index(&[("lib.rs", "fn one() {}\nfn two() {}\nfn three() {}\n")]);
-        let params =
-            CodemapParams { query: "nonexistent", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "nonexistent",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("3 definitions exist"), "should count all defs: {}", out);
     }
@@ -361,7 +536,14 @@ mod tests {
             source.push_str("}\n\n");
         }
         let (tmp, index) = setup_index(&[("big.rs", &source)]);
-        let params = CodemapParams { query: "func_", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "func_",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         let line_count = out.lines().count();
         // Should be under budget + some overhead for file headers
@@ -373,8 +555,14 @@ mod tests {
         let (tmp, index) =
             setup_index(&[("a.rs", "fn target() {}\n"), ("sub/b.rs", "fn target() {}\n")]);
         let sub = tmp.path().join("sub");
-        let params =
-            CodemapParams { query: "target", kind: None, file: Some(&sub), depth: Depth::Full };
+        let params = CodemapParams {
+            query: "target",
+            kind: None,
+            file: Some(&sub),
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         assert!(
             out.contains("sub/b.rs:") || out.contains("sub\\b.rs:"),
@@ -388,7 +576,14 @@ mod tests {
     fn line_numbers_match_source() {
         let source = "// comment\n\nfn hello() {\n    42\n}\n";
         let (tmp, index) = setup_index(&[("lib.rs", source)]);
-        let params = CodemapParams { query: "hello", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "hello",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         // fn hello() is on line 3
         assert!(out.contains("3     fn hello()"), "line numbers should match source: {}", out);
@@ -398,8 +593,14 @@ mod tests {
     fn methods_show_parent() {
         let source = "struct Agent;\nimpl Agent {\n    fn run(&self) {}\n}\n";
         let (tmp, index) = setup_index(&[("lib.rs", source)]);
-        let params =
-            CodemapParams { query: "run", kind: None, file: None, depth: Depth::Signatures };
+        let params = CodemapParams {
+            query: "run",
+            kind: None,
+            file: None,
+            depth: Depth::Signatures,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("(impl Agent)"), "should show parent: {}", out);
     }
@@ -408,7 +609,14 @@ mod tests {
     fn empty_query_returns_all_definitions() {
         let (tmp, index) =
             setup_index(&[("lib.rs", "fn alpha() {}\nstruct Beta;\nenum Gamma { A, B }\n")]);
-        let params = CodemapParams { query: "", kind: None, file: None, depth: Depth::Signatures };
+        let params = CodemapParams {
+            query: "",
+            kind: None,
+            file: None,
+            depth: Depth::Signatures,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("alpha"), "should contain alpha: {}", out);
         assert!(out.contains("Beta"), "should contain Beta: {}", out);
@@ -419,7 +627,14 @@ mod tests {
     fn full_mode_contains_body_and_closing_brace() {
         let source = "fn example() {\n    let x = 1;\n    let y = 2;\n    x + y\n}\n";
         let (tmp, index) = setup_index(&[("lib.rs", source)]);
-        let params = CodemapParams { query: "example", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "example",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("let x = 1"), "should contain body line 1: {}", out);
         assert!(out.contains("let y = 2"), "should contain body line 2: {}", out);
@@ -437,7 +652,14 @@ mod tests {
             ("a.rs", "fn alpha() {}\n"),
             ("m.rs", "fn mu() {}\n"),
         ]);
-        let params = CodemapParams { query: "", kind: None, file: None, depth: Depth::Signatures };
+        let params = CodemapParams {
+            query: "",
+            kind: None,
+            file: None,
+            depth: Depth::Signatures,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         let a_pos = out.find("a.rs:").unwrap();
         let m_pos = out.find("m.rs:").unwrap();
@@ -459,6 +681,8 @@ mod tests {
             kind: None,
             file: Some(&core_dir),
             depth: Depth::Signatures,
+            match_mode: MatchMode::Substring,
+            from: None,
         };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("core_fn"), "should contain core_fn: {}", out);
@@ -475,6 +699,8 @@ mod tests {
             kind: Some(SymbolKind::Trait),
             file: None,
             depth: Depth::Signatures,
+            match_mode: MatchMode::Substring,
+            from: None,
         };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("Baz"), "should find trait: {}", out);
@@ -495,7 +721,14 @@ mod tests {
             source.push_str("}\n\n");
         }
         let (tmp, index) = setup_index(&[("big.rs", &source)]);
-        let params = CodemapParams { query: "func_", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "func_",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         // First function should have full body (high priority)
         assert!(out.contains("let _0 = 0"), "first func should have body: {}", out);
@@ -513,7 +746,14 @@ impl Foo {
 }
 ";
         let (tmp, index) = setup_index(&[("lib.rs", source)]);
-        let params = CodemapParams { query: "", kind: None, file: None, depth: Depth::Signatures };
+        let params = CodemapParams {
+            query: "",
+            kind: None,
+            file: None,
+            depth: Depth::Signatures,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("Foo"), "should contain struct: {}", out);
         assert!(out.contains("method_a"), "should contain method_a: {}", out);
@@ -539,7 +779,14 @@ impl Foo {
             "}\n",
         );
         let (tmp, index) = setup_index(&[("lib.rs", source)]);
-        let params = CodemapParams { query: "target", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "target",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("fn target()"), "should have signature: {}", out);
         assert!(out.contains("answer = 42"), "should have body line: {}", out);
@@ -561,11 +808,83 @@ impl Foo {
             "}\n",
         );
         let (tmp, index) = setup_index(&[("lib.rs", source)]);
-        let params =
-            CodemapParams { query: "after_unicode", kind: None, file: None, depth: Depth::Full };
+        let params = CodemapParams {
+            query: "after_unicode",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
         let out = codemap(&index, tmp.path(), &params);
         assert!(out.contains("fn after_unicode()"), "should have signature: {}", out);
         assert!(out.contains("x = 99"), "should have body: {}", out);
         assert!(!out.contains("emoji"), "should not bleed into before(): {}", out);
+    }
+
+    #[test]
+    fn exact_mode_is_case_sensitive() {
+        let (tmp, index) = setup_index(&[("lib.rs", "fn target() {}\nfn Target() {}\n")]);
+        let params = exact_params("target", None);
+        let out = codemap(&index, tmp.path(), &params);
+        assert!(out.contains("target"), "should include lowercase match: {}", out);
+        assert!(!out.contains("Target"), "should not include case-mismatch: {}", out);
+    }
+
+    #[test]
+    fn exact_mode_ambiguity_capped_to_ten() {
+        let mut files = Vec::new();
+        for i in 0..12 {
+            files.push((format!("f{i}.rs"), String::from("fn target() {}\n")));
+        }
+        let owned: Vec<(&str, &str)> =
+            files.iter().map(|(name, src)| (name.as_str(), src.as_str())).collect();
+        let (tmp, index) = setup_index(&owned);
+        let params = exact_params("target", None);
+        let out = codemap(&index, tmp.path(), &params);
+
+        let candidate_lines = out.lines().filter(|l| l.trim_start().starts_with("- ")).count();
+        assert_eq!(candidate_lines, 10, "ambiguity list should be capped: {}", out);
+        assert!(out.contains("... and 2 more"), "should summarize remainder: {}", out);
+    }
+
+    #[test]
+    fn exact_with_from_returns_same_file_unique_match() {
+        let (tmp, index) =
+            setup_index(&[("a.rs", "fn target() {}\n"), ("b.rs", "fn target() {}\n")]);
+        let from = tmp.path().join("a.rs");
+        let params = exact_params("target", Some(&from));
+        let out = codemap(&index, tmp.path(), &params);
+        assert!(out.contains("a.rs:"), "should render match from from-file: {}", out);
+        assert!(!out.contains("b.rs:"), "should not render other files: {}", out);
+    }
+
+    #[test]
+    fn exact_with_from_returns_scoped_no_match() {
+        let (tmp, index) =
+            setup_index(&[("a.rs", "fn target() {}\n"), ("b.rs", "fn other() {}\n")]);
+        let from = tmp.path().join("b.rs");
+        let params = exact_params("target", Some(&from));
+        let out = codemap(&index, tmp.path(), &params);
+        assert!(out.contains("No exact symbol 'target' found in b.rs."), "scoped miss: {}", out);
+    }
+
+    #[test]
+    fn exact_with_from_ambiguity_shows_same_file_candidates_with_parent() {
+        let (tmp, index) = setup_index(&[
+            (
+                "a.rs",
+                "struct A;\nstruct B;\nimpl A { fn run(&self) {} }\nimpl B { fn run(&self) {} }\n",
+            ),
+            ("b.rs", "fn run() {}\n"),
+        ]);
+        let from = tmp.path().join("a.rs");
+        let params = exact_params("run", Some(&from));
+        let out = codemap(&index, tmp.path(), &params);
+        assert!(out.contains("Ambiguous exact symbol"), "should be ambiguous: {}", out);
+        assert!(out.contains("a.rs"), "should include from-file: {}", out);
+        assert!(!out.contains("b.rs"), "should not include non-from candidates: {}", out);
+        assert!(out.contains("(impl A)"), "should include nearest parent label: {}", out);
+        assert!(out.contains("(impl B)"), "should include nearest parent label: {}", out);
     }
 }

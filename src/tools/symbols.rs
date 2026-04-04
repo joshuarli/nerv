@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use crate::agent::agent::{AgentTool, ToolResult};
@@ -57,7 +57,9 @@ impl AgentTool for SymbolsTool {
     fn name(&self) -> &str {
         "symbols"
     }
-    fn is_readonly(&self) -> bool { true }
+    fn is_readonly(&self) -> bool {
+        true
+    }
 
     fn description(&self) -> &str {
         "Search the project's tree-sitter symbol index for definitions. Returns symbol names, kinds, file locations, and signatures. Use before reading files to understand code structure."
@@ -82,7 +84,7 @@ impl AgentTool for SymbolsTool {
                 },
                 "references": {
                     "type": "boolean",
-                    "description": "Also find call sites / usages via ripgrep (default: false)"
+                    "description": "Also find usages (definitions excluded), AST-first with per-file rg fallback (default: false)"
                 }
             },
             "required": ["query"],
@@ -91,23 +93,27 @@ impl AgentTool for SymbolsTool {
     }
 
     fn prompt_guidelines(&self) -> Vec<String> {
-        vec!["`symbols` with `query: \"\"` returns every definition (name, kind, file, line, signature). Use to orient before targeted `codemap` calls.".into()]
+        vec![
+            "`symbols` with `query: \"\"` returns every definition (name, kind, file, line, signature). Use to orient before targeted `codemap` calls.".into(),
+            "Use `references: true` only with a non-empty identifier query. References are usages-only (definitions excluded), AST-first for Rust/Go/Python/TS/TSX with per-file fallback.".into(),
+        ]
     }
 
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        if input.get("query").and_then(|v| v.as_str()).is_none() {
+        let query = input
+            .get("query")
+            .and_then(|v| v.as_str())
+            .ok_or(ToolError::InvalidArguments { message: "query (string) is required".into() })?;
+        let want_refs = input.get("references").and_then(|v| v.as_bool()).unwrap_or(false);
+        if want_refs && query.trim().is_empty() {
             return Err(ToolError::InvalidArguments {
-                message: "query (string) is required".into(),
+                message: "query must be non-empty when references=true".into(),
             });
         }
         Ok(())
     }
 
-    fn execute(
-        &self,
-        input: serde_json::Value,
-        _cancel: &CancelFlag,
-    ) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _cancel: &CancelFlag) -> ToolResult {
         let query = input["query"].as_str().unwrap_or("");
         let kind_filter = input.get("kind").and_then(|v| v.as_str()).and_then(parse_kind_filter);
         let file_filter = input.get("file").and_then(|v| v.as_str());
@@ -161,21 +167,39 @@ impl AgentTool for SymbolsTool {
             }
         }
 
-        // Reference search via ripgrep
+        // Reference search (AST-first, with per-file ripgrep fallback)
         if want_refs {
-            drop(idx); // release lock before shelling out
-            let refs = find_references(query, &self.cwd);
-            if !refs.is_empty() {
-                out.push_str("\nREFERENCES:\n");
-                for line in refs.iter().take(MAX_RESULTS) {
-                    out.push_str(&format!("  {}\n", line));
+            match crate::index::references::find_references(
+                &idx,
+                query,
+                &self.cwd,
+                file_path.as_deref(),
+            ) {
+                Ok(refs) => {
+                    if !refs.is_empty() {
+                        out.push_str("\nREFERENCES:\n");
+                        for hit in refs.iter().take(MAX_RESULTS) {
+                            out.push_str(&format!(
+                                "  {}\n",
+                                format_reference_line(
+                                    hit.file.as_path(),
+                                    hit.line,
+                                    &hit.context,
+                                    &self.cwd
+                                )
+                            ));
+                        }
+                        if refs.len() > MAX_RESULTS {
+                            out.push_str(&format!(
+                                "  ... ({} total, showing {})\n",
+                                refs.len(),
+                                MAX_RESULTS
+                            ));
+                        }
+                    }
                 }
-                if refs.len() > MAX_RESULTS {
-                    out.push_str(&format!(
-                        "  ... ({} total, showing {})\n",
-                        refs.len(),
-                        MAX_RESULTS
-                    ));
+                Err(message) => {
+                    return ToolResult::error(format!("invalid arguments: {}", message));
                 }
             }
         }
@@ -186,7 +210,10 @@ impl AgentTool for SymbolsTool {
         } else {
             format!("{} definitions", def_count)
         };
-        ToolResult::ok_with_details(out, ToolDetails { display: Some(display), ..Default::default() })
+        ToolResult::ok_with_details(
+            out,
+            ToolDetails { display: Some(display), ..Default::default() },
+        )
     }
 }
 
@@ -236,28 +263,9 @@ fn find_doc_files(cwd: &std::path::Path) -> Vec<String> {
     vec![]
 }
 
-fn find_references(symbol: &str, cwd: &std::path::Path) -> Vec<String> {
-    let rg = match crate::rg() {
-        Some(p) => p,
-        None => return vec![],
-    };
-    let output = match std::process::Command::new(rg)
-        .args([
-            "--no-heading",
-            "--line-number",
-            "--color=never",
-            "--word-regexp",
-            "--max-count=100",
-            symbol,
-        ])
-        .current_dir(cwd)
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => return vec![],
-    };
-
-    String::from_utf8_lossy(&output.stdout).lines().map(|l| l.to_string()).collect()
+fn format_reference_line(file: &Path, line: u32, context: &str, cwd: &Path) -> String {
+    let rel = file.strip_prefix(cwd).unwrap_or(file).display();
+    format!("{}:{}:{}", rel, line, context)
 }
 
 #[cfg(test)]
@@ -312,11 +320,7 @@ mod tests {
 
         let tool = SymbolsTool::new(tmp.path().to_path_buf());
         let cancel = new_cancel_flag();
-        let result = tool.execute(
-            serde_json::json!({"query": "", "file": "lib.rs"}),
-            
-            &cancel,
-        );
+        let result = tool.execute(serde_json::json!({"query": "", "file": "lib.rs"}), &cancel);
         assert!(
             !result.content.contains("DOCS:"),
             "file-filtered query should NOT have DOCS: {}",

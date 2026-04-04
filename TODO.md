@@ -1,3 +1,8 @@
+### Symbols follow-up
+- [ ] See [TODO-SYMBOLS.md](TODO-SYMBOLS.md) for detailed backlog on:
+      `symbols.references` precision, `codemap` exact-mode follow-ups, and
+      scale/perf hardening tasks.
+
 ### Tool schema
 - [ ] **Guided error recovery in edit**: when `old_text` doesn't match, return the
       closest fuzzy candidate and its line number rather than just "not found". The model

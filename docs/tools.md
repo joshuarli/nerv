@@ -232,8 +232,17 @@ is empty and no `file` filter is given, the output also includes a DOCS
 section listing markdown files in the project (via `rg --files --glob *.md`),
 capped at 20 entries.
 
-When `references` is true, also runs ripgrep (`--word-regexp`) on the query
-to find call sites / usages.
+When `references` is true:
+- `query` must be non-empty after trim.
+- References are found via an AST-first pipeline for Rust/Go/Python/TS/TSX.
+- If AST extraction fails for a supported file, that file falls back to
+  ripgrep (`--word-regexp --fixed-strings`) without aborting the full scan.
+- Unsupported file extensions use the same ripgrep fallback.
+- Results are usages-only: definitions are excluded.
+- Comments and strings are excluded.
+- AST + fallback hits are deduped by canonical `(file, line)` and sorted
+  deterministically.
+- Output format remains line-only under `REFERENCES:` (`path:line:context`).
 
 ## codemap
 
@@ -248,10 +257,24 @@ when the model needs to understand how something works.
 | `kind` | string | no | all kinds |
 | `file` | string | no | whole project |
 | `depth` | string (`signatures`/`full`) | no | `signatures` |
+| `match` | string (`substring`/`exact`) | no | `substring` |
+| `from` | string (file path) | no | — |
 
 **Depth modes**:
 - `signatures`: one-line signature per symbol, no disk reads beyond the index
 - `full`: complete source bodies for matched symbols, read from disk
+
+**Match modes**:
+- `substring` (default): existing case-insensitive substring behavior.
+- `exact`: case-sensitive `name == query`.
+  - `query` must be non-empty and at least 2 characters.
+  - `from` (if provided) must resolve to a readable file, otherwise validation
+    fails.
+  - With `from`, exact disambiguation is same-file only (no cross-file
+    auto-pick).
+  - Exact ambiguity never auto-selects; it returns a candidate list (max 10,
+    then `... and N more`) with `kind`, `name`, `file:line`, and nearest
+    parent symbol when available.
 
 Output is grouped by file with line numbers. If total output exceeds ~4000
 lines, excess symbols are demoted from `full` to `signatures`.
@@ -288,14 +311,14 @@ next interaction.
 `symbols` and `codemap` are backed by an in-process tree-sitter parse of the
 project. The index maps file paths to their parsed `SymbolDef` list (name,
 kind, start/end byte offsets, one-line signature). Currently indexed languages:
-Rust, TypeScript/TSX, Python, Go, C/C++.
+Rust, TypeScript/TSX, Python, Go.
 
-**Lazy, query-time indexing.** The index is not updated when `edit` or `write`
-runs — it is rebuilt on each `symbols`/`codemap` call. `force_index_dir` walks
-the directory, compares stored mtimes against the current filesystem, and
-re-parses only changed or new files. Deleted files are evicted. This means a
-`symbols` call immediately after an `edit` sees the updated symbols; there is
-no background watcher or stale-index window.
+**Lazy + incremental indexing.** On `symbols`/`codemap`, `force_index_dir`
+walks the directory, compares stored mtimes against the current filesystem, and
+re-parses only changed or new files (deleted files are evicted). In normal
+agent flow, file-mutating tools also trigger targeted `index_file` updates via
+post-tool callbacks, so follow-up symbol lookups see fresh definitions without
+a full rescan.
 
 **On-disk SQLite cache (`~/.nerv/symbol_cache.db`).** Parsing is the expensive
 step. The cache stores `(path, mtime) → JSON-serialized Vec<SymbolDef>` so

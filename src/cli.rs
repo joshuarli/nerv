@@ -71,7 +71,6 @@ pub enum ResumeOpt {
     Session(String),
 }
 
-
 pub fn print_top_help() {
     println!("nerv — coding agent for the terminal");
     println!();
@@ -149,7 +148,10 @@ pub fn parse_args() -> Cmd {
                 model = Some(
                     parser
                         .value()
-                        .unwrap_or_else(|_| { eprintln!("--model requires a value"); std::process::exit(1); })
+                        .unwrap_or_else(|_| {
+                            eprintln!("--model requires a value");
+                            std::process::exit(1);
+                        })
                         .string()
                         .unwrap(),
                 );
@@ -158,7 +160,10 @@ pub fn parse_args() -> Cmd {
                 log_level = Some(
                     parser
                         .value()
-                        .unwrap_or_else(|_| { eprintln!("--log-level requires a value"); std::process::exit(1); })
+                        .unwrap_or_else(|_| {
+                            eprintln!("--log-level requires a value");
+                            std::process::exit(1);
+                        })
                         .string()
                         .unwrap(),
                 );
@@ -167,7 +172,10 @@ pub fn parse_args() -> Cmd {
                 prompt = Some(
                     parser
                         .value()
-                        .unwrap_or_else(|_| { eprintln!("--prompt requires a value"); std::process::exit(1); })
+                        .unwrap_or_else(|_| {
+                            eprintln!("--prompt requires a value");
+                            std::process::exit(1);
+                        })
                         .string()
                         .unwrap(),
                 );
@@ -178,7 +186,10 @@ pub fn parse_args() -> Cmd {
                 effort = Some(parse_effort_level(
                     &parser
                         .value()
-                        .unwrap_or_else(|_| { eprintln!("--effort requires a value"); std::process::exit(1); })
+                        .unwrap_or_else(|_| {
+                            eprintln!("--effort requires a value");
+                            std::process::exit(1);
+                        })
                         .string()
                         .unwrap(),
                 ));
@@ -294,9 +305,7 @@ pub fn parse_args() -> Cmd {
                     println!("  id   Session id (or prefix) to resume directly");
                     std::process::exit(0);
                 }
-                Ok(Some(Value(id))) => {
-                    Cmd::Resume { id: Some(id.string().unwrap()) }
-                }
+                Ok(Some(Value(id))) => Cmd::Resume { id: Some(id.string().unwrap()) },
                 Ok(None) => Cmd::Resume { id: None },
                 Ok(Some(arg)) => {
                     eprintln!("nerv resume: unexpected argument '{}'", arg.unexpected());
@@ -500,9 +509,7 @@ pub fn parse_args() -> Cmd {
                 println!("Export a session to HTML and JSONL in ~/.nerv/exports/.");
                 std::process::exit(0);
             }
-            Ok(Some(Value(id))) => {
-                Cmd::Export { id: id.string().unwrap() }
-            }
+            Ok(Some(Value(id))) => Cmd::Export { id: id.string().unwrap() },
             _ => {
                 eprintln!("Usage: nerv export <session-id>");
                 std::process::exit(1);
@@ -712,7 +719,6 @@ pub fn repo_gate(cwd: &std::path::Path, nerv_dir: &std::path::Path) -> RepoGateR
         _ => RepoGateResult::Exit,
     }
 }
-
 
 pub fn list_all_models() {
     let nerv_dir = nerv::nerv_dir();
@@ -1014,6 +1020,8 @@ pub fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
                 kind,
                 file: file_path.as_deref(),
                 depth,
+                match_mode: nerv::index::codemap::MatchMode::Substring,
+                from: None,
             };
             println!("{}", nerv::index::codemap::codemap(&index, &cwd, &params));
         }
@@ -1110,4 +1118,3 @@ pub fn handle_subcommand(cmd: &str, args: &[String], nerv_dir: &Path) {
         }
     }
 }
-
