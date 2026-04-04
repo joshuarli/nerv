@@ -1483,9 +1483,9 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
                     })
                     .collect::<Vec<_>>()
                     .join("");
-                // Truncate long tool results in the trace
-                let text = if text.len() > 500 {
-                    format!("{}...[truncated {}b]", text.truncate_chars(500), text.len())
+                // Truncate long tool results in the trace (display only — agent sees full content).
+                let text = if text.len() > 2000 {
+                    format!("{}...[truncated {}b]", text.truncate_chars(2000), text.len())
                 } else {
                     text
                 };

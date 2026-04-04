@@ -6,6 +6,10 @@ use super::{SymbolDef, SymbolIndex, SymbolKind};
 
 /// Max total lines in output before demoting remaining symbols to signatures.
 const LINE_BUDGET: usize = 4000;
+/// Bodies longer than this are elided: first HEAD + last TAIL lines shown.
+const FULL_BODY_LINE_LIMIT: usize = 60;
+const FULL_BODY_HEAD_LINES: usize = 40;
+const FULL_BODY_TAIL_LINES: usize = 5;
 const AMBIGUITY_CANDIDATE_LIMIT: usize = 10;
 
 pub enum Depth {
@@ -191,7 +195,7 @@ pub fn render(results: &[SymbolDef], project_root: &Path, depth: &Depth) -> Stri
 
             if use_full {
                 if let Some(src) = source {
-                    format_full(&mut out, sym, src);
+                    format_full(&mut out, sym, src, project_root);
                 } else {
                     format_signature(&mut out, sym);
                 }
@@ -298,7 +302,9 @@ fn display_path(path: &Path, project_root: &Path) -> String {
 }
 
 /// Format a symbol with its full source body.
-fn format_full(out: &mut String, sym: &SymbolDef, source: &str) {
+/// Bodies exceeding FULL_BODY_LINE_LIMIT are elided: HEAD + TAIL lines shown
+/// with a read hint for the omitted middle.
+fn format_full(out: &mut String, sym: &SymbolDef, source: &str, project_root: &Path) {
     let start = sym.start_byte as usize;
     let end = sym.end_byte as usize;
     if start >= source.len() {
@@ -311,8 +317,37 @@ fn format_full(out: &mut String, sym: &SymbolDef, source: &str) {
     let end = source.floor_char_boundary(end.min(source.len()));
     let body = &source[start..end];
     let start_line = sym.line as usize; // 1-based line of first byte
-    for (i, line) in body.lines().enumerate() {
+    let lines: Vec<&str> = body.lines().collect();
+    let total = lines.len();
+
+    if total <= FULL_BODY_LINE_LIMIT {
+        for (i, line) in lines.iter().enumerate() {
+            out.push_str(&format!("  {:<5} {}\n", start_line + i, line));
+        }
+        return;
+    }
+
+    // Elide the middle: show HEAD lines, elision note, then TAIL lines.
+    let head_end_line = start_line + FULL_BODY_HEAD_LINES - 1; // last printed head line (1-based)
+    let tail_start_idx = total - FULL_BODY_TAIL_LINES;
+    let tail_start_line = start_line + tail_start_idx; // 1-based line of first tail line
+    let omitted = total - FULL_BODY_HEAD_LINES - FULL_BODY_TAIL_LINES;
+
+    for (i, line) in lines[..FULL_BODY_HEAD_LINES].iter().enumerate() {
         out.push_str(&format!("  {:<5} {}\n", start_line + i, line));
+    }
+
+    let path_hint = display_path(&sym.file, project_root);
+    out.push_str(&format!(
+        "  ... [{} lines omitted — read(\"{}\", offset={}, limit={}) to see full body]\n",
+        omitted,
+        path_hint,
+        head_end_line + 1,
+        omitted,
+    ));
+
+    for (i, line) in lines[tail_start_idx..].iter().enumerate() {
+        out.push_str(&format!("  {:<5} {}\n", tail_start_line + i, line));
     }
 }
 
@@ -330,18 +365,26 @@ fn format_signature_inline(out: &mut String, sym: &SymbolDef) {
 
 /// Find how many symbols (in search order) we can show in full mode
 /// before exceeding the line budget. Returns the count.
+/// Uses effective (post-elision) line counts so large bodies don't consume
+/// more budget than they actually render.
 fn find_demote_cutoff(
     results: &[&SymbolDef],
     file_sources: &BTreeMap<&Path, Arc<String>>,
 ) -> usize {
     let mut total_lines = 0;
     for (i, sym) in results.iter().enumerate() {
-        let body_lines = if file_sources.contains_key(sym.file.as_path()) {
+        let raw_lines = if file_sources.contains_key(sym.file.as_path()) {
             (sym.end_line - sym.line + 1) as usize
         } else {
             1
         };
-        total_lines += body_lines;
+        // Elision reduces rendered output for large bodies
+        let effective_lines = if raw_lines > FULL_BODY_LINE_LIMIT {
+            FULL_BODY_HEAD_LINES + FULL_BODY_TAIL_LINES + 1 // +1 for the elision note line
+        } else {
+            raw_lines
+        };
+        total_lines += effective_lines;
         if total_lines > LINE_BUDGET {
             return i;
         }
@@ -938,5 +981,87 @@ impl Foo {
         assert!(!out.contains("b.rs"), "should not include non-from candidates: {}", out);
         assert!(out.contains("(impl A)"), "should include nearest parent label: {}", out);
         assert!(out.contains("(impl B)"), "should include nearest parent label: {}", out);
+    }
+
+    #[test]
+    fn short_body_not_elided() {
+        // A function under the line limit renders fully without an elision note.
+        let mut source = "fn small() {\n".to_string();
+        for i in 0..10 {
+            source.push_str(&format!("    let _{i} = {i};\n"));
+        }
+        source.push_str("}\n");
+        let (tmp, index) = setup_index(&[("lib.rs", &source)]);
+        let params = CodemapParams {
+            query: "small",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
+        let out = codemap(&index, tmp.path(), &params);
+        assert!(!out.contains("omitted"), "short body should not be elided: {}", out);
+        assert!(out.contains("let _0 = 0"), "all lines should be present: {}", out);
+        assert!(out.contains("let _9 = 9"), "all lines should be present: {}", out);
+    }
+
+    #[test]
+    fn long_body_elided_with_read_hint() {
+        // A function over the line limit should produce head + elision note + tail.
+        let mut source = "fn big() {\n".to_string();
+        for i in 0..80 {
+            source.push_str(&format!("    let _{i} = {i};\n"));
+        }
+        source.push_str("}\n");
+        let (tmp, index) = setup_index(&[("lib.rs", &source)]);
+        let params = CodemapParams {
+            query: "big",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
+        let out = codemap(&index, tmp.path(), &params);
+        assert!(out.contains("omitted"), "long body should have elision note: {}", out);
+        assert!(out.contains("read("), "elision note should include read hint: {}", out);
+        assert!(out.contains("lib.rs"), "read hint should reference the file: {}", out);
+        // Head lines present
+        assert!(out.contains("let _0 = 0"), "head should contain first line: {}", out);
+        // Tail lines present (near the closing brace)
+        assert!(out.contains("let _79 = 79"), "tail should contain last body line: {}", out);
+        // Middle lines absent
+        assert!(!out.contains("let _50 = 50"), "middle lines should be elided: {}", out);
+        // Total rendered lines well under the raw 82
+        let line_count = out.lines().count();
+        assert!(
+            line_count < FULL_BODY_LINE_LIMIT,
+            "rendered lines should be well under limit: {}",
+            line_count
+        );
+    }
+
+    #[test]
+    fn elision_note_contains_offset_and_limit() {
+        // The read hint must include the offset (first omitted line) and limit (count).
+        let mut source = "fn huge() {\n".to_string();
+        for i in 0..70 {
+            source.push_str(&format!("    let _{i} = {i};\n"));
+        }
+        source.push_str("}\n");
+        let (tmp, index) = setup_index(&[("lib.rs", &source)]);
+        let params = CodemapParams {
+            query: "huge",
+            kind: None,
+            file: None,
+            depth: Depth::Full,
+            match_mode: MatchMode::Substring,
+            from: None,
+        };
+        let out = codemap(&index, tmp.path(), &params);
+        let elision_line = out.lines().find(|l| l.contains("omitted")).expect("elision line");
+        assert!(elision_line.contains("offset="), "should contain offset param: {}", elision_line);
+        assert!(elision_line.contains("limit="), "should contain limit param: {}", elision_line);
     }
 }
