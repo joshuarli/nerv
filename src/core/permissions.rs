@@ -187,6 +187,23 @@ const SHELL_NAMES: &[&str] = &["sh", "bash", "zsh"];
 /// Network fetch commands -- flagged when piped to anything.
 const FETCH_COMMANDS: &[&str] = &["curl", "wget"];
 
+/// Commands that only read files and produce output — never modify the
+/// filesystem. Arguments that are paths outside the repo are safe because
+/// the command cannot write to them. Redirects are still checked separately.
+const READONLY_COMMANDS: &[&str] = &[
+    "cat", "head", "tail", "less", "more", "bat",
+    "grep", "rg", "ag", "ack",
+    "sed", "awk",
+    "cut", "sort", "uniq", "wc", "tac", "tr",
+    "ls", "find", "fd", "stat", "file", "du", "df",
+    "man", "col", "mandoc", "mdcat",
+    "echo", "printf",
+    "diff", "cmp",
+    "strings", "hexdump", "xxd", "od",
+    "md5", "md5sum", "sha1sum", "sha256sum", "shasum",
+    "jq", "yq", "xmllint",
+];
+
 /// Walk the AST to check for dangerous commands and paths outside the repo.
 fn check_epsh_ast(program: &epsh::ast::Program, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
     for cmd in &program.commands {
@@ -303,7 +320,7 @@ fn visit_simple(
     // Extract the command name if it's a static literal.
     let cmd_name = args.first().and_then(|w| word_to_static_str(w));
 
-    if let Some(name) = cmd_name {
+    if let Some(ref name) = cmd_name {
         let base = name.rsplit('/').next().unwrap_or(&name);
 
         // Dangerous commands
@@ -338,7 +355,19 @@ fn visit_simple(
     }
 
     // Check all argument words for paths and embedded command substitutions.
+    // For known read-only commands, skip the path check for arguments that
+    // are under clearly-read-only system prefixes (documentation, libraries,
+    // installed binaries). Sensitive locations like /etc, ~ still prompt.
+    let is_readonly = cmd_name.as_deref().map(|name| {
+        let base = name.rsplit('/').next().unwrap_or(name);
+        READONLY_COMMANDS.contains(&base)
+    }).unwrap_or(false);
     for word in args.iter().skip(1) {
+        if let Some(literal) = word_to_static_str(word) {
+            if is_readonly && is_readonly_system_path(&literal) {
+                continue;
+            }
+        }
         if let p @ Permission::Ask(_) = check_word_paths(word, repo_root, policy) {
             return p;
         }
@@ -589,6 +618,32 @@ fn normalize_path(path: &Path) -> PathBuf {
 /// operation. Only the standard null/stdio devices are allowed; the rest of
 /// /dev/ requires explicit approval. Everything else requires config or user
 /// approval.
+/// Paths under clearly read-only system prefixes: documentation, installed
+/// libraries, compiled binaries. Arguments to known read-only commands at
+/// these locations can be allowed without prompting — there's nothing to write.
+/// Sensitive locations (/etc, ~, /var, /root) are deliberately excluded.
+fn is_readonly_system_path(path: &str) -> bool {
+    // Must be absolute.
+    if !path.starts_with('/') {
+        return false;
+    }
+    const READONLY_PREFIXES: &[&str] = &[
+        "/usr/share/",
+        "/usr/lib/",
+        "/usr/libexec/",
+        "/usr/include/",
+        "/usr/local/share/",
+        "/usr/local/lib/",
+        "/usr/local/include/",
+        "/opt/",
+        "/Applications/",
+        "/System/",
+        "/Library/",
+        "/proc/",     // Linux virtual FS: read is fine
+    ];
+    READONLY_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
+}
+
 fn is_safe_system_path(path: &str) -> bool {
     matches!(
         path,
@@ -1175,6 +1230,9 @@ mod tests {
         // in path components.
         let args = serde_json::json!({"command": "man dash 2>/dev/null | col -b | sed -n '/^OPTIONS/,/^[A-Z]/p' | head -120"});
         assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
+        // sed address without regex special chars — space in pattern is the distinguishing feature
+        let args2 = serde_json::json!({"command": "sed -n '/Ss Arguments/,/Ss /p' /usr/share/man/man1/dash.1 | head -150"});
+        assert_eq!(check("epsh", &args2, Some(&repo())), Permission::Allow);
     }
 
     #[test]
@@ -1201,11 +1259,22 @@ mod tests {
 
     #[test]
     fn previously_safe_paths_now_ask() {
-        // These were previously hardcoded safe but are now removed.
-        for path in &["/usr/bin/env", "/usr/local/bin/python3", "/bin/sh", "/opt/homebrew/bin/node", "/proc/self/fd/0", "/etc/hosts"] {
+        // Paths not under READONLY_PREFIXES — should always prompt even for
+        // read-only commands because they may be sensitive or writable.
+        for path in &["/usr/bin/env", "/usr/local/bin/python3", "/bin/sh", "/etc/hosts"] {
             let cmd = format!("ls {}", path);
             let args = serde_json::json!({"command": cmd});
             assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)), "should ask: {}", path);
+        }
+    }
+
+    #[test]
+    fn readonly_command_on_readonly_prefix_allowed() {
+        // Read-only commands on well-known read-only system prefixes should not prompt.
+        for path in &["/opt/homebrew/bin/node", "/usr/share/man/man1/dash.1", "/proc/self/fd/0"] {
+            let cmd = format!("ls {}", path);
+            let args = serde_json::json!({"command": cmd});
+            assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow, "should allow: {}", path);
         }
     }
 
