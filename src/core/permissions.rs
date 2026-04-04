@@ -481,7 +481,7 @@ fn check_path_strict(token: &str, root: &Path, policy: &PathPolicy) -> Permissio
     if abs.starts_with(&root_n) {
         return Permission::Allow;
     }
-    // Hardcoded safe paths (/dev/null, /tmp, ~/.nerv).
+    // Hardcoded safe paths (/dev/*, /tmp, ~/.nerv).
     if is_safe_system_path(token) {
         return Permission::Allow;
     }
@@ -532,6 +532,12 @@ fn looks_like_path(token: &str) -> bool {
     if token.contains('*') || token.contains('?') || token.contains('{') {
         return false;
     }
+    // Characters that appear in sed/awk/grep expressions but never in valid
+    // filesystem paths: ^, [, ], (, ), |, +, =, ;, @, comma, !, backslash.
+    // A path component is [a-zA-Z0-9._~-] separated by '/'.
+    if token.chars().any(|c| matches!(c, '^' | '[' | ']' | '(' | ')' | '|' | '+' | '=' | ';' | '@' | ',' | '!' | '\\')) {
+        return false;
+    }
     true
 }
 
@@ -580,11 +586,14 @@ fn normalize_path(path: &Path) -> PathBuf {
 }
 
 /// Hardcoded safe system paths — the absolute minimum needed for shell
-/// operation. Everything else requires explicit config or user approval.
+/// operation. Only the standard null/stdio devices are allowed; the rest of
+/// /dev/ requires explicit approval. Everything else requires config or user
+/// approval.
 fn is_safe_system_path(path: &str) -> bool {
-    path.starts_with("/dev/null")
-        || path.starts_with("/dev/stderr")
-        || path.starts_with("/dev/stdout")
+    matches!(
+        path,
+        "/dev/null" | "/dev/stdin" | "/dev/stdout" | "/dev/stderr"
+    ) || path.starts_with("/dev/fd/")
         || path.starts_with("/tmp")
         || is_safe_home_path(path)
 }
@@ -1160,6 +1169,21 @@ mod tests {
     }
 
     #[test]
+    fn sed_address_pattern_not_treated_as_path() {
+        // sed range address like `/^OPTIONS/,/^[A-Z]/p` must not be treated as
+        // a filesystem path — it contains `^`, `[`, `]` which are never valid
+        // in path components.
+        let args = serde_json::json!({"command": "man dash 2>/dev/null | col -b | sed -n '/^OPTIONS/,/^[A-Z]/p' | head -120"});
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
+    fn awk_pattern_not_treated_as_path() {
+        let args = serde_json::json!({"command": r#"awk '/^[[:space:]]*fn / { print NR, $0 }' src/main.rs"#});
+        assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
+    }
+
+    #[test]
     fn glob_pattern_not_treated_as_path() {
         let args = serde_json::json!({"command": r#"rg "pattern" /usr/local/share/*.conf"#});
         assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow);
@@ -1167,8 +1191,8 @@ mod tests {
 
     #[test]
     fn safe_system_paths_always_allowed() {
-        // Only /dev/null, /dev/stderr, /dev/stdout, /tmp are hardcoded safe.
-        for path in &["/dev/null", "/dev/stderr", "/dev/stdout", "/tmp/scratch"] {
+        // Standard stdio devices and /tmp are hardcoded safe.
+        for path in &["/dev/null", "/dev/stderr", "/dev/stdout", "/dev/stdin", "/dev/fd/0", "/tmp/scratch"] {
             let cmd = format!("ls {}", path);
             let args = serde_json::json!({"command": cmd});
             assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow, "should allow: {}", path);
