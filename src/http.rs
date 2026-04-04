@@ -26,10 +26,7 @@ fn log_middleware(
         method,
         uri,
         res.status(),
-        res.headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("-")
+        res.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("-")
     ));
     Ok(res)
 }

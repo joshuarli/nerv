@@ -220,7 +220,11 @@ impl FooterComponent {
         let git_branch = Self::current_git_branch(cwd);
 
         let mut this = Self {
-            cwd: shorten_path(cwd, &crate::home_dir().map(|h| h.to_string_lossy().into_owned()).unwrap_or_default(), None),
+            cwd: shorten_path(
+                cwd,
+                &crate::home_dir().map(|h| h.to_string_lossy().into_owned()).unwrap_or_default(),
+                None,
+            ),
             git_branch,
             session_id: None,
             session_name: None,
@@ -326,7 +330,11 @@ impl FooterComponent {
     }
 
     pub fn set_cwd(&mut self, cwd: &str) {
-        self.cwd = shorten_path(cwd, &crate::home_dir().map(|h| h.to_string_lossy().into_owned()).unwrap_or_default(), None);
+        self.cwd = shorten_path(
+            cwd,
+            &crate::home_dir().map(|h| h.to_string_lossy().into_owned()).unwrap_or_default(),
+            None,
+        );
         self.git_branch = Self::current_git_branch(cwd);
     }
 
@@ -590,12 +598,7 @@ impl Component for FooterComponent {
                 ));
             }
             if self.total_cache_write > 0 {
-                parts.push_str(&format!(
-                    " {}Wc{}{}",
-                    dim,
-                    fmt_tokens(self.total_cache_write),
-                    r
-                ));
+                parts.push_str(&format!(" {}Wc{}{}", dim, fmt_tokens(self.total_cache_write), r));
             }
             parts
         };
@@ -702,8 +705,6 @@ fn right_align(left: &str, right: &str, width: usize) -> Vec<String> {
         out
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

@@ -13,6 +13,32 @@ pub struct CodemapTool {
     index: Arc<RwLock<SymbolIndex>>,
 }
 
+const CODEMAP_ALLOWED_KEYS: &[&str] = &["query", "kind", "file", "depth", "match", "from"];
+
+fn normalize_empty_query_literal(raw: &str) -> Option<&'static str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "\"\"" || trimmed == "''" { Some("") } else { None }
+}
+
+fn validate_known_keys(input: &serde_json::Value, allowed: &[&str]) -> Result<(), ToolError> {
+    let Some(obj) = input.as_object() else {
+        return Err(ToolError::InvalidArguments { message: "arguments must be an object".into() });
+    };
+    let mut unknown: Vec<&str> =
+        obj.keys().map(|k| k.as_str()).filter(|k| !allowed.contains(k)).collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort_unstable();
+    Err(ToolError::InvalidArguments {
+        message: format!(
+            "unknown argument(s): {} (allowed: {})",
+            unknown.join(", "),
+            allowed.join(", ")
+        ),
+    })
+}
+
 impl CodemapTool {
     pub fn new(cwd: PathBuf, index: Arc<RwLock<SymbolIndex>>) -> Self {
         Self { cwd, index }
@@ -112,14 +138,27 @@ impl AgentTool for CodemapTool {
     fn prompt_guidelines(&self) -> Vec<String> {
         vec![
             "Call with `query: \"\"` and a `file` filter to get all signatures in a file. Use `depth: full` only when you need the body of a specific named symbol. Use `match: \"exact\"` for deterministic targeting; add `from` when exact matches are ambiguous across files.".into(),
+            "Canonical empty query is exactly `\"\"`; do not pass the literal quoted text `\"\\\"\\\"\"`.".into(),
         ]
     }
 
+    fn normalize(&self, mut input: serde_json::Value) -> serde_json::Value {
+        if let Some(obj) = input.as_object_mut()
+            && let Some(raw) = obj.get("query").and_then(|v| v.as_str())
+            && let Some(normalized) = normalize_empty_query_literal(raw)
+        {
+            obj.insert("query".into(), serde_json::Value::String(normalized.into()));
+        }
+        input
+    }
+
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        let query = input
+        validate_known_keys(input, CODEMAP_ALLOWED_KEYS)?;
+        let query_raw = input
             .get("query")
             .and_then(|v| v.as_str())
             .ok_or(ToolError::InvalidArguments { message: "query (string) is required".into() })?;
+        let query = normalize_empty_query_literal(query_raw).unwrap_or(query_raw);
         let mode = self.parse_match_mode(input)?;
         if matches!(mode, codemap::MatchMode::Exact) {
             if query.trim().is_empty() {
@@ -142,7 +181,8 @@ impl AgentTool for CodemapTool {
             Ok(mode) => mode,
             Err(err) => return ToolResult::error(err.to_string()),
         };
-        let query = input["query"].as_str().unwrap_or("");
+        let query_raw = input["query"].as_str().unwrap_or("");
+        let query = normalize_empty_query_literal(query_raw).unwrap_or(query_raw);
         let kind = input.get("kind").and_then(|v| v.as_str()).and_then(codemap::parse_kind);
         let depth = input
             .get("depth")
@@ -243,5 +283,22 @@ mod tests {
             "from": "lib.rs"
         }));
         assert!(result.is_ok(), "expected valid from file, got: {result:?}");
+    }
+
+    #[test]
+    fn normalize_converts_literal_quoted_empty_query() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = setup_tool(tmp.path());
+        let normalized = tool.normalize(serde_json::json!({"query": "\"\""}));
+        assert_eq!(normalized["query"], serde_json::json!(""));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_argument() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = setup_tool(tmp.path());
+        let err =
+            tool.validate(&serde_json::json!({"query": "target", "unexpected": 1})).unwrap_err();
+        assert!(err.to_string().contains("unknown argument"), "{}", err);
     }
 }

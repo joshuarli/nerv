@@ -195,8 +195,7 @@ impl OpenAICompatProvider {
                     } else {
                         body["reasoning_effort"] = serde_json::json!("medium");
                     }
-                    body["max_completion_tokens"] =
-                        serde_json::json!(request.max_tokens + tokens);
+                    body["max_completion_tokens"] = serde_json::json!(request.max_tokens + tokens);
                 }
             }
         }

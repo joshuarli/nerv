@@ -105,10 +105,7 @@ struct EvError {
 
 /// Deserialize a known SSE event, logging a warning on struct mismatch so
 /// schema bugs don't silently swallow events.
-fn parse_ev<T: serde::de::DeserializeOwned>(
-    event_type: &str,
-    raw: serde_json::Value,
-) -> Option<T> {
+fn parse_ev<T: serde::de::DeserializeOwned>(event_type: &str, raw: serde_json::Value) -> Option<T> {
     match serde_json::from_value::<T>(raw) {
         Ok(v) => Some(v),
         Err(e) => {
@@ -365,7 +362,8 @@ impl Provider for CodexProvider {
 
             match event_type {
                 "response.output_item.added" => {
-                    if let Some(ev) = parse_ev::<EvOutputItemAdded>("response.output_item.added", raw)
+                    if let Some(ev) =
+                        parse_ev::<EvOutputItemAdded>("response.output_item.added", raw)
                         && let OutputItem::FunctionCall { call_id, name } = ev.item
                     {
                         pending_fns.insert(ev.output_index, call_id.clone());
@@ -380,13 +378,11 @@ impl Provider for CodexProvider {
                     }
                 }
                 "response.function_call_arguments.delta" => {
-                    if let Some(ev) = parse_ev::<EvFnArgsDelta>("response.function_call_arguments.delta", raw)
+                    if let Some(ev) =
+                        parse_ev::<EvFnArgsDelta>("response.function_call_arguments.delta", raw)
                         && !ev.delta.is_empty()
                     {
-                        let id = pending_fns
-                            .get(&ev.output_index)
-                            .cloned()
-                            .unwrap_or_default();
+                        let id = pending_fns.get(&ev.output_index).cloned().unwrap_or_default();
                         on_event(ProviderEvent::ToolCallArgsDelta { id, delta: ev.delta });
                     }
                 }
@@ -412,10 +408,8 @@ impl Provider for CodexProvider {
                             on_event(ProviderEvent::UsageUpdate(usage));
 
                             if let Some(err) = &resp.error {
-                                let msg = err
-                                    .message
-                                    .clone()
-                                    .unwrap_or_else(|| "response failed".into());
+                                let msg =
+                                    err.message.clone().unwrap_or_else(|| "response failed".into());
                                 return Err(ProviderError::Server { status: 200, message: msg });
                             }
                         }

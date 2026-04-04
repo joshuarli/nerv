@@ -34,11 +34,7 @@ pub trait AgentTool: Send + Sync {
     /// Execute the tool synchronously.
     /// `cancel` is the shared abort flag — long-running tools should poll it
     /// and return early (with an error result) when it fires.
-    fn execute(
-        &self,
-        input: serde_json::Value,
-        cancel: &CancelFlag,
-    ) -> ToolResult;
+    fn execute(&self, input: serde_json::Value, cancel: &CancelFlag) -> ToolResult;
 }
 
 #[derive(Debug, Clone)]
@@ -312,7 +308,10 @@ impl Agent {
                 }
                 // Estimate context size after tool results so the caller can
                 // trigger compaction before the next API call overflows.
-                let estimated: usize = self.state.messages.iter()
+                let estimated: usize = self
+                    .state
+                    .messages
+                    .iter()
                     .map(crate::compaction::estimate_tokens)
                     .sum::<usize>()
                     + crate::compaction::count_tokens(&self.state.system_prompt);
@@ -382,9 +381,9 @@ impl Agent {
                         message: {
                             let p = &model.provider_name;
                             match p.as_str() {
-                                "openrouter" => format!(
-                                    "provider '{p}' not found — set $OPENROUTER_API_KEY"
-                                ),
+                                "openrouter" => {
+                                    format!("provider '{p}' not found — set $OPENROUTER_API_KEY")
+                                }
                                 "codex" => format!(
                                     "provider '{p}' not found — set $OPENAI_API_KEY or run `/login {p}`"
                                 ),
@@ -657,9 +656,7 @@ impl Agent {
         } else if let Some(tool) = tool {
             let args = tool.normalize(args.clone());
             match tool.validate(&args) {
-                Ok(()) => {
-                    tool.execute(args, &self.cancel)
-                }
+                Ok(()) => tool.execute(args, &self.cancel),
                 Err(e) => ToolResult {
                     content: format!("Validation error: {}", e),
                     details: None,

@@ -136,11 +136,8 @@ pub fn extract_user_messages(messages: &[AgentMessage], token_budget: usize) -> 
             // Truncate to fit the remaining budget (chars ≈ tokens * 4).
             let char_budget = remaining * 4;
             if char_budget > 0 && !text.is_empty() {
-                let end = text
-                    .char_indices()
-                    .nth(char_budget)
-                    .map(|(i, _)| i)
-                    .unwrap_or(text.len());
+                let end =
+                    text.char_indices().nth(char_budget).map(|(i, _)| i).unwrap_or(text.len());
                 let truncated = &text[..end];
                 if !truncated.is_empty() {
                     selected.push(truncated.to_string());
@@ -211,10 +208,8 @@ pub fn tokens_after_compaction(
             }
         })
         .sum();
-    let preserved_tokens: u32 = preserved_user_messages
-        .iter()
-        .map(|m| count_tokens(m) as u32)
-        .sum();
+    let preserved_tokens: u32 =
+        preserved_user_messages.iter().map(|m| count_tokens(m) as u32).sum();
     count_tokens(summary) as u32 + preserved_tokens + verbatim_tokens
 }
 
@@ -342,20 +337,14 @@ mod tests {
     #[test]
     fn tokens_before_picks_most_recent_nonzero() {
         // Only the first message has usage data — later ones don't.
-        let branch = vec![
-            assistant_entry("a", 85_301),
-            user_entry("b", 0),
-        ];
+        let branch = vec![assistant_entry("a", 85_301), user_entry("b", 0)];
         assert_eq!(tokens_before_compaction(&branch), 85_301);
     }
 
     #[test]
     fn tokens_before_falls_back_to_estimate_when_no_usage() {
         // No TokenInfo at all — must fall back to estimate_tokens sum.
-        let branch = vec![
-            user_entry("hello world", 0),
-            user_entry("another message", 0),
-        ];
+        let branch = vec![user_entry("hello world", 0), user_entry("another message", 0)];
         let estimated: u32 = branch
             .iter()
             .filter_map(|e| {
@@ -407,8 +396,8 @@ mod tests {
     fn tokens_after_includes_summary_and_verbatim() {
         let summary = "a".repeat(400); // 400 chars / 4 = 100 tokens
         let verbatim = vec![
-            user_entry("recent user message", 0),   // ~4 chars/4 + 4 overhead = ~5
-            assistant_entry("recent reply", 0),     // ~12 chars/4 + 4 overhead = ~7
+            user_entry("recent user message", 0), // ~4 chars/4 + 4 overhead = ~5
+            assistant_entry("recent reply", 0),   // ~12 chars/4 + 4 overhead = ~7
         ];
         let result = tokens_after_compaction(&summary, &[], &verbatim);
         let summary_toks = count_tokens(&summary) as u32;
@@ -497,10 +486,7 @@ mod tests {
     #[test]
     fn extract_user_messages_respects_budget() {
         // Each "x".repeat(400) is ~100 tokens. Budget of 150 should get 1 full + partial.
-        let msgs = vec![
-            make_user_msg(&"a".repeat(400)),
-            make_user_msg(&"b".repeat(400)),
-        ];
+        let msgs = vec![make_user_msg(&"a".repeat(400)), make_user_msg(&"b".repeat(400))];
         let result = extract_user_messages(&msgs, 150);
         // Most recent first: "b" fits (100 tokens), "a" gets truncated
         assert_eq!(result.len(), 2);
@@ -556,11 +542,7 @@ mod tests {
 
     #[test]
     fn count_turns_no_compaction() {
-        let branch = vec![
-            user_entry("a", 0),
-            assistant_entry("b", 0),
-            user_entry("c", 0),
-        ];
+        let branch = vec![user_entry("a", 0), assistant_entry("b", 0), user_entry("c", 0)];
         assert_eq!(count_user_turns_since_compaction(&branch), 2);
     }
 
@@ -577,10 +559,7 @@ mod tests {
 
     #[test]
     fn count_turns_after_summary_compaction() {
-        let branch = vec![
-            compaction_entry("summary"),
-            user_entry("a", 0),
-        ];
+        let branch = vec![compaction_entry("summary"), user_entry("a", 0)];
         assert_eq!(count_user_turns_since_compaction(&branch), 1);
     }
 
@@ -599,10 +578,7 @@ mod tests {
 
     #[test]
     fn count_turns_zero_after_compaction() {
-        let branch = vec![
-            compaction_entry("full"),
-            assistant_entry("reply", 0),
-        ];
+        let branch = vec![compaction_entry("full"), assistant_entry("reply", 0)];
         assert_eq!(count_user_turns_since_compaction(&branch), 0);
     }
 

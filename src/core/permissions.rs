@@ -27,8 +27,16 @@ pub struct PathPolicy {
 impl PathPolicy {
     pub fn from_config(config: &super::config::NervConfig) -> Self {
         Self {
-            allowed_read: config.allowed_read_paths.iter().map(|s| crate::resolve_path(s, Path::new("."))).collect(),
-            allowed_write: config.allowed_write_paths.iter().map(|s| crate::resolve_path(s, Path::new("."))).collect(),
+            allowed_read: config
+                .allowed_read_paths
+                .iter()
+                .map(|s| crate::resolve_path(s, Path::new(".")))
+                .collect(),
+            allowed_write: config
+                .allowed_write_paths
+                .iter()
+                .map(|s| crate::resolve_path(s, Path::new(".")))
+                .collect(),
         }
     }
 }
@@ -97,8 +105,12 @@ pub fn check_with_policy(
 /// Used to determine whether a path falls within a user-granted directory.
 pub fn path_for_args(tool: &str, args: &serde_json::Value) -> Option<String> {
     match tool {
-        "read" | "edit" | "write" | "grep" | "find" | "ls" | "symbols" | "codemap" => {
-            args["path"].as_str().map(|s| s.to_string())
+        "read" | "edit" | "write" | "find" | "ls" => args["path"].as_str().map(|s| s.to_string()),
+        // grep uses `path`; legacy calls may still send `file`.
+        "grep" => args["path"].as_str().or_else(|| args["file"].as_str()).map(|s| s.to_string()),
+        // symbols/codemap scope by `file` rather than `path`.
+        "symbols" | "codemap" => {
+            args["file"].as_str().or_else(|| args["path"].as_str()).map(|s| s.to_string())
         }
         // For bash, extract the first path-like token from the parsed AST.
         "epsh" => {
@@ -160,7 +172,11 @@ fn check_write_tool(tool: &str, args: &serde_json::Value, repo_root: Option<&Pat
     }
 }
 
-fn check_epsh(args: &serde_json::Value, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
+fn check_epsh(
+    args: &serde_json::Value,
+    repo_root: Option<&Path>,
+    policy: &PathPolicy,
+) -> Permission {
     let Some(cmd) = args["command"].as_str() else {
         return Permission::Allow;
     };
@@ -173,9 +189,7 @@ fn check_epsh(args: &serde_json::Value, repo_root: Option<&Path>, policy: &PathP
 }
 
 /// Dangerous command names that always need user approval.
-const DANGEROUS_COMMANDS: &[&str] = &[
-    "sudo", "mkfs", "dd",
-];
+const DANGEROUS_COMMANDS: &[&str] = &["sudo", "mkfs", "dd"];
 
 /// Builtins that execute arbitrary strings, replace the process, or install
 /// signal handlers. These are a subset of epsh's builtins that need approval.
@@ -191,21 +205,59 @@ const FETCH_COMMANDS: &[&str] = &["curl", "wget"];
 /// filesystem. Arguments that are paths outside the repo are safe because
 /// the command cannot write to them. Redirects are still checked separately.
 const READONLY_COMMANDS: &[&str] = &[
-    "cat", "head", "tail", "less", "more", "bat",
-    "grep", "rg", "ag", "ack",
-    "sed", "awk",
-    "cut", "sort", "uniq", "wc", "tac", "tr",
-    "ls", "find", "fd", "stat", "file", "du", "df",
-    "man", "col", "mandoc", "mdcat",
-    "echo", "printf",
-    "diff", "cmp",
-    "strings", "hexdump", "xxd", "od",
-    "md5", "md5sum", "sha1sum", "sha256sum", "shasum",
-    "jq", "yq", "xmllint",
+    "cat",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "bat",
+    "grep",
+    "rg",
+    "ag",
+    "ack",
+    "sed",
+    "awk",
+    "cut",
+    "sort",
+    "uniq",
+    "wc",
+    "tac",
+    "tr",
+    "ls",
+    "find",
+    "fd",
+    "stat",
+    "file",
+    "du",
+    "df",
+    "man",
+    "col",
+    "mandoc",
+    "mdcat",
+    "echo",
+    "printf",
+    "diff",
+    "cmp",
+    "strings",
+    "hexdump",
+    "xxd",
+    "od",
+    "md5",
+    "md5sum",
+    "sha1sum",
+    "sha256sum",
+    "shasum",
+    "jq",
+    "yq",
+    "xmllint",
 ];
 
 /// Walk the AST to check for dangerous commands and paths outside the repo.
-fn check_epsh_ast(program: &epsh::ast::Program, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
+fn check_epsh_ast(
+    program: &epsh::ast::Program,
+    repo_root: Option<&Path>,
+    policy: &PathPolicy,
+) -> Permission {
     for cmd in &program.commands {
         if let p @ Permission::Ask(_) = visit_command(cmd, repo_root, false, policy) {
             return p;
@@ -358,10 +410,13 @@ fn visit_simple(
     // For known read-only commands, skip the path check for arguments that
     // are under clearly-read-only system prefixes (documentation, libraries,
     // installed binaries). Sensitive locations like /etc, ~ still prompt.
-    let is_readonly = cmd_name.as_deref().map(|name| {
-        let base = name.rsplit('/').next().unwrap_or(name);
-        READONLY_COMMANDS.contains(&base)
-    }).unwrap_or(false);
+    let is_readonly = cmd_name
+        .as_deref()
+        .map(|name| {
+            let base = name.rsplit('/').next().unwrap_or(name);
+            READONLY_COMMANDS.contains(&base)
+        })
+        .unwrap_or(false);
     for word in args.iter().skip(1) {
         if let Some(literal) = word_to_static_str(word) {
             if is_readonly && is_readonly_system_path(&literal) {
@@ -389,9 +444,14 @@ fn visit_simple(
 }
 
 /// Check chmod for execute-bit changes targeting paths outside the repo.
-fn check_chmod(args: &[epsh::ast::Word], repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
+fn check_chmod(
+    args: &[epsh::ast::Word],
+    repo_root: Option<&Path>,
+    policy: &PathPolicy,
+) -> Permission {
     let Some(root) = repo_root else { return Permission::Allow };
-    let literals: Vec<Option<String>> = args.iter().skip(1).map(|w| word_to_static_str(w)).collect();
+    let literals: Vec<Option<String>> =
+        args.iter().skip(1).map(|w| word_to_static_str(w)).collect();
     let has_exec_mode = literals.iter().any(|l| {
         let Some(s) = l else { return false };
         // Symbolic: +x, a+x, u+x, g+x, o+x, ug+x, etc.
@@ -426,13 +486,15 @@ fn check_chmod(args: &[epsh::ast::Word], repo_root: Option<&Path>, policy: &Path
 /// Check redirect targets for paths outside the repo.
 /// Write redirects (>, >>, >|) use strict path checking that doesn't require
 /// the target to exist -- you can `> /etc/cron.d/backdoor` to a new file.
-fn check_redirs(redirs: &[epsh::ast::Redir], repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
+fn check_redirs(
+    redirs: &[epsh::ast::Redir],
+    repo_root: Option<&Path>,
+    policy: &PathPolicy,
+) -> Permission {
     use epsh::ast::RedirKind;
     for redir in redirs {
         let (target, is_write) = match &redir.kind {
-            RedirKind::Output(w) | RedirKind::Clobber(w) | RedirKind::Append(w) => {
-                (Some(w), true)
-            }
+            RedirKind::Output(w) | RedirKind::Clobber(w) | RedirKind::Append(w) => (Some(w), true),
             RedirKind::Input(w) | RedirKind::ReadWrite(w) => (Some(w), false),
             _ => (None, false),
         };
@@ -459,7 +521,11 @@ fn check_redirs(redirs: &[epsh::ast::Redir], repo_root: Option<&Path>, policy: &
 }
 
 /// If a word resolves to a single static string, check it as a potential path.
-fn check_word_paths(word: &epsh::ast::Word, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
+fn check_word_paths(
+    word: &epsh::ast::Word,
+    repo_root: Option<&Path>,
+    policy: &PathPolicy,
+) -> Permission {
     if let Some(literal) = word_to_static_str(word) {
         return check_path_token(&literal, repo_root, policy);
     }
@@ -467,7 +533,11 @@ fn check_word_paths(word: &epsh::ast::Word, repo_root: Option<&Path>, policy: &P
 }
 
 /// Recurse into command substitutions embedded in word parts.
-fn check_word_substs(word: &epsh::ast::Word, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
+fn check_word_substs(
+    word: &epsh::ast::Word,
+    repo_root: Option<&Path>,
+    policy: &PathPolicy,
+) -> Permission {
     for part in &word.parts {
         if let p @ Permission::Ask(_) = check_part_substs(part, repo_root, policy) {
             return p;
@@ -476,7 +546,11 @@ fn check_word_substs(word: &epsh::ast::Word, repo_root: Option<&Path>, policy: &
     Permission::Allow
 }
 
-fn check_part_substs(part: &epsh::ast::WordPart, repo_root: Option<&Path>, policy: &PathPolicy) -> Permission {
+fn check_part_substs(
+    part: &epsh::ast::WordPart,
+    repo_root: Option<&Path>,
+    policy: &PathPolicy,
+) -> Permission {
     use epsh::ast::WordPart;
     match part {
         WordPart::CmdSubst(cmd) | WordPart::Backtick(cmd) => {
@@ -564,7 +638,9 @@ fn looks_like_path(token: &str) -> bool {
     // Characters that appear in sed/awk/grep expressions but never in valid
     // filesystem paths: ^, [, ], (, ), |, +, =, ;, @, comma, !, backslash.
     // A path component is [a-zA-Z0-9._~-] separated by '/'.
-    if token.chars().any(|c| matches!(c, '^' | '[' | ']' | '(' | ')' | '|' | '+' | '=' | ';' | '@' | ',' | '!' | '\\')) {
+    if token.chars().any(|c| {
+        matches!(c, '^' | '[' | ']' | '(' | ')' | '|' | '+' | '=' | ';' | '@' | ',' | '!' | '\\')
+    }) {
         return false;
     }
     true
@@ -639,16 +715,14 @@ fn is_readonly_system_path(path: &str) -> bool {
         "/Applications/",
         "/System/",
         "/Library/",
-        "/proc/",     // Linux virtual FS: read is fine
+        "/proc/", // Linux virtual FS: read is fine
     ];
     READONLY_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
 }
 
 fn is_safe_system_path(path: &str) -> bool {
-    matches!(
-        path,
-        "/dev/null" | "/dev/stdin" | "/dev/stdout" | "/dev/stderr"
-    ) || path.starts_with("/dev/fd/")
+    matches!(path, "/dev/null" | "/dev/stdin" | "/dev/stdout" | "/dev/stderr")
+        || path.starts_with("/dev/fd/")
         || path.starts_with("/tmp")
         || is_safe_home_path(path)
 }
@@ -698,9 +772,7 @@ fn first_path_in_command(cmd: &epsh::ast::Command) -> Option<String> {
             }
             None
         }
-        Command::Pipeline { commands, .. } => {
-            commands.iter().find_map(first_path_in_command)
-        }
+        Command::Pipeline { commands, .. } => commands.iter().find_map(first_path_in_command),
         Command::And(l, r) | Command::Or(l, r) | Command::Sequence(l, r) => {
             first_path_in_command(l).or_else(|| first_path_in_command(r))
         }
@@ -711,11 +783,9 @@ fn first_path_in_command(cmd: &epsh::ast::Command) -> Option<String> {
         | Command::For { body, .. }
         | Command::FuncDef { body, .. }
         | Command::Not(body) => first_path_in_command(body),
-        Command::If { cond, then_part, else_part, .. } => {
-            first_path_in_command(cond)
-                .or_else(|| first_path_in_command(then_part))
-                .or_else(|| else_part.as_ref().and_then(|e| first_path_in_command(e)))
-        }
+        Command::If { cond, then_part, else_part, .. } => first_path_in_command(cond)
+            .or_else(|| first_path_in_command(then_part))
+            .or_else(|| else_part.as_ref().and_then(|e| first_path_in_command(e))),
         Command::Case { arms, .. } => {
             arms.iter().find_map(|arm| arm.body.as_ref().and_then(first_path_in_command))
         }
@@ -845,9 +915,23 @@ mod tests {
     #[test]
     fn allowed_builtins_pass() {
         // Common builtins the agent uses should be allowed.
-        for cmd in &["echo hello", "cd src", "pwd", "export FOO=bar", "test -f file", "[ -d dir ]", "set -e", "printf '%s' x"] {
+        for cmd in &[
+            "echo hello",
+            "cd src",
+            "pwd",
+            "export FOO=bar",
+            "test -f file",
+            "[ -d dir ]",
+            "set -e",
+            "printf '%s' x",
+        ] {
             let args = serde_json::json!({"command": cmd});
-            assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow, "should allow: {}", cmd);
+            assert_eq!(
+                check("epsh", &args, Some(&repo())),
+                Permission::Allow,
+                "should allow: {}",
+                cmd
+            );
         }
     }
 
@@ -1016,6 +1100,22 @@ mod tests {
     }
 
     #[test]
+    fn path_for_args_prefers_grep_path_then_file_alias() {
+        let args = serde_json::json!({"path": "src/main.rs", "file": "src/lib.rs"});
+        assert_eq!(super::path_for_args("grep", &args), Some("src/main.rs".to_string()));
+
+        let args = serde_json::json!({"file": "src/lib.rs"});
+        assert_eq!(super::path_for_args("grep", &args), Some("src/lib.rs".to_string()));
+    }
+
+    #[test]
+    fn path_for_args_symbols_and_codemap_use_file_scope() {
+        let args = serde_json::json!({"file": "src/main.rs"});
+        assert_eq!(super::path_for_args("symbols", &args), Some("src/main.rs".to_string()));
+        assert_eq!(super::path_for_args("codemap", &args), Some("src/main.rs".to_string()));
+    }
+
+    #[test]
     fn bash_heredoc_to_tmp_allowed() {
         // heredoc body contains `//` (a Rust comment) which is a valid filesystem
         // path on macOS but must not be scanned — only the redirect target matters.
@@ -1056,10 +1156,7 @@ mod tests {
     fn config_allowed_read_path_passes() {
         let home = crate::home_dir().unwrap();
         let cargo_dir = home.join(".cargo");
-        let policy = PathPolicy {
-            allowed_read: vec![cargo_dir],
-            allowed_write: vec![],
-        };
+        let policy = PathPolicy { allowed_read: vec![cargo_dir], allowed_write: vec![] };
         let cmd = format!("cat {}/.cargo/config.toml", home.display());
         let args = serde_json::json!({"command": cmd});
         assert_eq!(
@@ -1099,7 +1196,14 @@ mod tests {
         let allowed = PathBuf::from("/Users/josh/external");
         let args = serde_json::json!({"path": "/Users/josh/external/foo.rs"});
         assert_eq!(
-            check_with_policy("read", &args, Some(&repo()), &[allowed], &[], &PathPolicy::default()),
+            check_with_policy(
+                "read",
+                &args,
+                Some(&repo()),
+                &[allowed],
+                &[],
+                &PathPolicy::default()
+            ),
             Permission::Allow
         );
     }
@@ -1109,7 +1213,14 @@ mod tests {
         let allowed = PathBuf::from("/Users/josh/external");
         let args = serde_json::json!({"path": "/etc/passwd"});
         assert!(matches!(
-            check_with_policy("read", &args, Some(&repo()), &[allowed], &[], &PathPolicy::default()),
+            check_with_policy(
+                "read",
+                &args,
+                Some(&repo()),
+                &[allowed],
+                &[],
+                &PathPolicy::default()
+            ),
             Permission::Ask(_)
         ));
     }
@@ -1120,11 +1231,25 @@ mod tests {
         let allowed = PathBuf::from("/Users/josh/external");
         let args = serde_json::json!({"path": "/Users/josh/external/foo.rs"});
         assert!(matches!(
-            check_with_policy("write", &args, Some(&repo()), &[allowed.clone()], &[], &PathPolicy::default()),
+            check_with_policy(
+                "write",
+                &args,
+                Some(&repo()),
+                &[allowed.clone()],
+                &[],
+                &PathPolicy::default()
+            ),
             Permission::Ask(_)
         ));
         assert!(matches!(
-            check_with_policy("edit", &args, Some(&repo()), &[allowed], &[], &PathPolicy::default()),
+            check_with_policy(
+                "edit",
+                &args,
+                Some(&repo()),
+                &[allowed],
+                &[],
+                &PathPolicy::default()
+            ),
             Permission::Ask(_)
         ));
     }
@@ -1135,11 +1260,25 @@ mod tests {
         let write_allowed = PathBuf::from("/Users/josh/external");
         let args = serde_json::json!({"path": "/Users/josh/external/foo.rs"});
         assert_eq!(
-            check_with_policy("write", &args, Some(&repo()), &[], &[write_allowed.clone()], &PathPolicy::default()),
+            check_with_policy(
+                "write",
+                &args,
+                Some(&repo()),
+                &[],
+                &[write_allowed.clone()],
+                &PathPolicy::default()
+            ),
             Permission::Allow
         );
         assert_eq!(
-            check_with_policy("edit", &args, Some(&repo()), &[], &[write_allowed], &PathPolicy::default()),
+            check_with_policy(
+                "edit",
+                &args,
+                Some(&repo()),
+                &[],
+                &[write_allowed],
+                &PathPolicy::default()
+            ),
             Permission::Allow
         );
     }
@@ -1150,7 +1289,14 @@ mod tests {
         let write_allowed = PathBuf::from("/Users/josh/external");
         let args = serde_json::json!({"path": "/Users/josh/external/secret.rs"});
         assert!(matches!(
-            check_with_policy("read", &args, Some(&repo()), &[], &[write_allowed], &PathPolicy::default()),
+            check_with_policy(
+                "read",
+                &args,
+                Some(&repo()),
+                &[],
+                &[write_allowed],
+                &PathPolicy::default()
+            ),
             Permission::Ask(_)
         ));
     }
@@ -1250,10 +1396,17 @@ mod tests {
     #[test]
     fn safe_system_paths_always_allowed() {
         // Standard stdio devices and /tmp are hardcoded safe.
-        for path in &["/dev/null", "/dev/stderr", "/dev/stdout", "/dev/stdin", "/dev/fd/0", "/tmp/scratch"] {
+        for path in
+            &["/dev/null", "/dev/stderr", "/dev/stdout", "/dev/stdin", "/dev/fd/0", "/tmp/scratch"]
+        {
             let cmd = format!("ls {}", path);
             let args = serde_json::json!({"command": cmd});
-            assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow, "should allow: {}", path);
+            assert_eq!(
+                check("epsh", &args, Some(&repo())),
+                Permission::Allow,
+                "should allow: {}",
+                path
+            );
         }
     }
 
@@ -1264,7 +1417,11 @@ mod tests {
         for path in &["/usr/bin/env", "/usr/local/bin/python3", "/bin/sh", "/etc/hosts"] {
             let cmd = format!("ls {}", path);
             let args = serde_json::json!({"command": cmd});
-            assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)), "should ask: {}", path);
+            assert!(
+                matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)),
+                "should ask: {}",
+                path
+            );
         }
     }
 
@@ -1274,7 +1431,12 @@ mod tests {
         for path in &["/opt/homebrew/bin/node", "/usr/share/man/man1/dash.1", "/proc/self/fd/0"] {
             let cmd = format!("ls {}", path);
             let args = serde_json::json!({"command": cmd});
-            assert_eq!(check("epsh", &args, Some(&repo())), Permission::Allow, "should allow: {}", path);
+            assert_eq!(
+                check("epsh", &args, Some(&repo())),
+                Permission::Allow,
+                "should allow: {}",
+                path
+            );
         }
     }
 
@@ -1283,7 +1445,11 @@ mod tests {
         for path in &["/etc/shadow", "/var/run/secrets", "/root/.ssh/id_rsa"] {
             let cmd = format!("cat {}", path);
             let args = serde_json::json!({"command": cmd});
-            assert!(matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)), "should ask: {}", path);
+            assert!(
+                matches!(check("epsh", &args, Some(&repo())), Permission::Ask(_)),
+                "should ask: {}",
+                path
+            );
         }
     }
 

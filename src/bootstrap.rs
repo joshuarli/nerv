@@ -49,7 +49,6 @@ impl Default for BootstrapOptions {
     }
 }
 
-
 /// Construct agent + tools + session from disk config.
 /// Both interactive and headless modes call this.
 pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstrap {
@@ -62,9 +61,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     let nerv_dir_for_registry = nerv_dir.to_path_buf();
     let registry_handle = std::thread::Builder::new()
         .name("nerv-registry".into())
-        .spawn(move || {
-            ModelRegistry::new(&config_for_registry, &nerv_dir_for_registry)
-        })
+        .spawn(move || ModelRegistry::new(&config_for_registry, &nerv_dir_for_registry))
         .expect("failed to spawn registry thread");
 
     // SessionManager opens sessions.db (DDL on first run, ~19ms cold).
@@ -104,9 +101,7 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
         let nerv_dir_buf = nerv_dir.to_path_buf();
         let resources_handle = std::thread::Builder::new()
             .name("nerv-resources".into())
-            .spawn(move || {
-                crate::core::resource_loader::load_resources(&cwd_buf, &nerv_dir_buf)
-            })
+            .spawn(move || crate::core::resource_loader::load_resources(&cwd_buf, &nerv_dir_buf))
             .expect("failed to spawn resources thread");
 
         (Some((symbols_tool, symbol_index)), Some(index_handle), Some(resources_handle))
@@ -172,7 +167,9 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
                     } else {
                         project_root.join(path_str)
                     };
-                    if path.extension().is_some_and(|e| SOURCE_EXTENSIONS.contains(&e.to_str().unwrap_or("")))
+                    if path
+                        .extension()
+                        .is_some_and(|e| SOURCE_EXTENSIONS.contains(&e.to_str().unwrap_or("")))
                         && let Ok(mut index) = symbol_index.write()
                     {
                         index.index_file(&path);
@@ -208,8 +205,11 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     // Apply default thinking level from config (true = on, false = off).
     if let Some(enabled) = config.default_thinking {
         use crate::agent::types::ThinkingLevel;
-        session.agent.set_thinking_level(
-            if enabled { ThinkingLevel::On } else { ThinkingLevel::Off });
+        session.agent.set_thinking_level(if enabled {
+            ThinkingLevel::On
+        } else {
+            ThinkingLevel::Off
+        });
     }
 
     // Apply default effort level from config ("low", "medium", "high", "max").
@@ -226,7 +226,16 @@ pub fn bootstrap(cwd: &Path, nerv_dir: &Path, opts: BootstrapOptions) -> Bootstr
     let known_ids: Vec<&str> = model_registry.all_models().iter().map(|m| m.id.as_str()).collect();
     let config_warnings = config.validate_model_ids(&known_ids);
 
-    Bootstrap { session, config, model_registry, resources, cancel_flag, midturn_inject, config_warnings, symbols_handle }
+    Bootstrap {
+        session,
+        config,
+        model_registry,
+        resources,
+        cancel_flag,
+        midturn_inject,
+        config_warnings,
+        symbols_handle,
+    }
 }
 
 /// Resolve a model by name (fuzzy match or provider/id).

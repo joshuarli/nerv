@@ -119,10 +119,7 @@ impl AgentTool for EpshTool {
     }
     fn execute(&self, input: serde_json::Value, cancel: &CancelFlag) -> ToolResult {
         let command = input["command"].as_str().unwrap_or("");
-        let timeout_secs = input.get("timeout")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(120)
-            .min(600);
+        let timeout_secs = input.get("timeout").and_then(|v| v.as_u64()).unwrap_or(120).min(600);
 
         // Parse first -- syntax errors are caught before any execution.
         let mut parser = epsh::parser::Parser::new(command);
@@ -204,7 +201,8 @@ impl AgentTool for EpshTool {
             Some(content.clone())
         };
 
-        let details = ToolDetails { display, filtered: true, exit_code: Some(exit_code), diff: None };
+        let details =
+            ToolDetails { display, filtered: true, exit_code: Some(exit_code), diff: None };
         if exit_code != 0 {
             ToolResult { content, details: Some(details), is_error: true }
         } else {

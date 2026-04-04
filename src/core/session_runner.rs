@@ -2,9 +2,8 @@ use std::sync::atomic::Ordering;
 
 use crossbeam_channel::Sender;
 
-use crate::agent::types::Cost;
-
 use super::agent_session::{AgentSession, AgentSessionEvent, CompactionReason, SessionCommand};
+use crate::agent::types::Cost;
 use crate::str::StrExt as _;
 
 fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<AgentSessionEvent>) {
@@ -168,7 +167,6 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
         }
     }
 }
-
 
 /// The session task — runs in a dedicated thread, processes commands
 /// sequentially.

@@ -1,5 +1,4 @@
 pub mod agent;
-pub mod str;
 pub mod bootstrap;
 pub mod compaction;
 pub mod core;
@@ -10,6 +9,7 @@ pub mod index;
 pub mod interactive;
 pub mod log;
 pub mod session;
+pub mod str;
 pub mod tools;
 pub mod tui;
 pub mod worktree;
@@ -148,13 +148,19 @@ pub fn git() -> &'static std::path::Path {
 }
 
 /// Resolved path for `rg` (ripgrep), or `None` if not installed.
-pub fn rg() -> Option<&'static std::path::Path> { rg_bin() }
+pub fn rg() -> Option<&'static std::path::Path> {
+    rg_bin()
+}
 
 /// Resolved path for `fd`, or `None` if not installed.
-pub fn fd() -> Option<&'static std::path::Path> { fd_bin() }
+pub fn fd() -> Option<&'static std::path::Path> {
+    fd_bin()
+}
 
 /// Resolved path for the macOS `security` CLI, or `None` on non-macOS.
-pub fn security() -> Option<&'static std::path::Path> { security_bin() }
+pub fn security() -> Option<&'static std::path::Path> {
+    security_bin()
+}
 
 /// Resolve a path string to an absolute `PathBuf`.
 ///
@@ -174,8 +180,9 @@ pub fn resolve_path(path: &str, cwd: &std::path::Path) -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::path::Path;
+
+    use super::*;
 
     #[test]
     fn resolve_path_bare_tilde() {

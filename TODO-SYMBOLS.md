@@ -87,6 +87,129 @@ This document tracks known quality gaps and concrete improvements for future age
   - Symbol extraction and references logic duplicate language distinctions in separate places.
   - Suggest centralizing language config (extension → grammar + identifier rules + def node rules).
 
+## Tool-call hygiene backlog (from export `~/.nerv/exports/a44f5a92.jsonl`)
+
+This section tracks concrete fixes for weak early exploration behavior observed in the export:
+- `codemap` called first with semantic terms (`cd`, `tilde`) instead of symbol-oriented discovery.
+- Empty-query calls were sent as `query: "\"\""` (literal quote chars) instead of `query: ""`.
+- `grep` calls used `file` and behaved as broad scans; intended file scoping was not enforced.
+- `read` was reissued for ranges already present in context despite explicit already-read messages.
+
+### Operator playbook: first 3 calls (default)
+
+Use this sequence unless there is a very strong reason not to.
+
+1. `symbols` inventory in likely files
+   - Example:
+     - `symbols(query: "", file: "src/main.rs")`
+     - `symbols(query: "", file: "src/expand.rs")`
+   - Goal: list candidate definitions cheaply before content reads.
+
+2. Targeted `codemap` by exact symbol name
+   - Example:
+     - `codemap(file: "src/main.rs", query: "do_cd", match: "exact", depth: "full")`
+   - Goal: inspect real symbol bodies rather than semantic keyword matches.
+
+3. Bounded `grep` for literal wiring/call sites
+   - Example:
+     - `grep(path: "src/main.rs", pattern: "do_cd\\(")`
+   - Goal: confirm call path and integration points with tight scope.
+
+Escalate to `read` only if signatures/body snippets are insufficient or file is non-code.
+
+### Do-not-do list for initial exploration
+
+- Do not start with `codemap(query: "tilde")` or similar semantic probe words.
+- Do not send `query: "\"\""` to `symbols`/`codemap`; empty query must be exactly `""`.
+- Do not use broad grep roots for first-pass triage when a file is already known.
+- Do not re-read files/ranges already in context after `[already read ...]`.
+
+### WS6: Prompt-level guardrails for tool-call quality (P1)
+
+Goal: make correct first calls the default through stronger tool instructions.
+
+#### Tasks
+- [x] Add explicit examples in system prompt for correct empty query:
+  - `symbols(query: "")`, `codemap(query: "", file: "...")`.
+- [x] Add a short anti-example block:
+  - reject/avoid `query: "\"\""`.
+- [x] Add startup guidance:
+  - "Prefer `symbols(query: "", file: ...)` before semantic `codemap` probes."
+- [x] Add re-read discipline text with concrete fallback:
+  - "After `[already read ...]`, use `grep(path: ..., pattern: ...)` instead of `read`."
+
+#### Files
+- `src/core/system_prompt.rs`
+- optional prompt docs where examples are mirrored.
+
+#### Acceptance criteria
+- Prompt snapshot/regression tests include both valid and invalid empty-query examples.
+- Agent traces show reduced first-turn miss loops in local eval runs.
+
+### WS7: Tool argument normalization and strict validation (P0/P1)
+
+Goal: prevent silent drift from malformed or ambiguous arguments.
+
+#### Tasks
+- [x] `symbols`/`codemap`: normalize `query: "\"\""` and whitespace-only query to canonical empty query where safe.
+- [x] `grep`: enforce canonical key as `path`; decide one policy:
+  - strict error on unknown `file`, or
+  - compatibility alias `file -> path` with explicit warning in tool output.
+- [ ] Add unknown-argument detection for all tool JSON inputs used by agentic loop.
+  - Implemented for `symbols`, `codemap`, and `grep`; still pending repo-wide rollout.
+- [ ] Include "effective normalized args" in debug logging to aid postmortems.
+
+#### Candidate files
+- `src/tools/symbols.rs`
+- `src/tools/codemap.rs`
+- `src/tools/grep.rs`
+- shared argument parsing/validation path in tool registry layer.
+
+#### Acceptance criteria
+- Unit tests for malformed inputs:
+  - `query: "\"\""` -> behaves as empty query.
+  - `grep(file: "x", pattern: "...")` follows chosen policy deterministically.
+  - unknown keys return deterministic, actionable errors (or warnings if compat mode).
+- Export traces no longer show broad accidental scans caused by arg-key mismatch.
+
+### WS8: Duplicate-read suppression (P1)
+
+Goal: reduce wasted calls and loop churn after read cache signals.
+
+#### Tasks
+- [ ] Add per-turn duplicate-read detection in tool orchestration:
+  - same `(path, offset/limit or equivalent range)` should be dropped or downgraded.
+- [ ] Surface a compact advisory message:
+  - "range already present; use grep for localization."
+- [ ] Keep override path for intentional rereads after edit mutation events.
+
+#### Candidate files
+- `src/agent/agent.rs`
+- `src/tools/read.rs`
+
+#### Acceptance criteria
+- Tests confirm repeated identical reads in a turn are blocked/deduped.
+- No regression for valid reread after file mutation.
+
+### WS9: Evaluation harness additions for first-turn efficiency (P1/P2)
+
+Goal: catch exploration regressions automatically.
+
+#### Tasks
+- [ ] Add eval metrics:
+  - early miss rate (first N calls),
+  - redundant read count,
+  - broad grep count before first bounded target hit.
+- [ ] Add oracle cases for "known-file bug hunt" where best path is symbols -> codemap -> bounded grep.
+- [ ] Fail/flag when anti-pattern thresholds are exceeded.
+
+#### Candidate files
+- `eval/` harness and report scripts.
+
+#### Acceptance criteria
+- CI/local eval report includes new efficiency counters.
+- Reproduced trace class (`a44f5a92`) scores better after guardrails land.
+
 ## Workstreams
 
 ## WS1: Strengthen AST references semantics per language (P0)
@@ -213,4 +336,3 @@ cargo test index::codemap -- --nocapture
 cargo test tools::codemap -- --nocapture
 cargo test -q
 ```
-

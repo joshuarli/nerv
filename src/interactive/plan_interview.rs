@@ -85,8 +85,7 @@ pub fn run_plan_interview(
         return Some(Vec::new());
     }
 
-    let mut states: Vec<QuestionState> =
-        questions.into_iter().map(QuestionState::new).collect();
+    let mut states: Vec<QuestionState> = questions.into_iter().map(QuestionState::new).collect();
     let total = states.len();
     let current = 0usize;
 
@@ -125,11 +124,7 @@ fn interview_loop(
     loop {
         // Use poll() with a short timeout so SIGWINCH causes a timely redraw
         // even without a keypress (plain read() would block indefinitely).
-        let mut pfd = libc::pollfd {
-            fd: libc::STDIN_FILENO,
-            events: libc::POLLIN,
-            revents: 0,
-        };
+        let mut pfd = libc::pollfd { fd: libc::STDIN_FILENO, events: libc::POLLIN, revents: 0 };
         let ready = unsafe { libc::poll(&mut pfd, 1, 50) };
 
         // SIGWINCH check — fires after poll() returns (timeout or input).
@@ -275,7 +270,12 @@ fn advance(
 fn collect_answers(states: &[QuestionState]) -> Vec<(String, String)> {
     states
         .iter()
-        .map(|s| (s.question.q.clone(), s.answer.as_ref().map(|a| a.as_str().to_string()).unwrap_or_default()))
+        .map(|s| {
+            (
+                s.question.q.clone(),
+                s.answer.as_ref().map(|a| a.as_str().to_string()).unwrap_or_default(),
+            )
+        })
         .collect()
 }
 
@@ -324,17 +324,27 @@ fn render_question(
     let subtext_width = (cols as u16).saturating_sub(12); // 8 indent + 4 right pad
     for (i, opt) in st.display_options.iter().enumerate() {
         let selected = i == st.cursor;
-        let answered = st.answer.as_ref().map(|a| match a {
-            Answer::Option(s) => s == opt,
-            Answer::Custom(_) => i == st.custom_option_idx(),
-            Answer::Skipped => false,
-        }).unwrap_or(false);
+        let answered = st
+            .answer
+            .as_ref()
+            .map(|a| match a {
+                Answer::Option(s) => s == opt,
+                Answer::Custom(_) => i == st.custom_option_idx(),
+                Answer::Skipped => false,
+            })
+            .unwrap_or(false);
 
         let is_custom_opt = i == st.custom_option_idx();
         // Fetch structured option data (not available for the synthetic custom row).
         let plan_opt: Option<&PlanOption> = st.question.options.get(i);
 
-        let marker = if selected { "●" } else if answered { "✓" } else { "○" };
+        let marker = if selected {
+            "●"
+        } else if answered {
+            "✓"
+        } else {
+            "○"
+        };
 
         if selected {
             buf.push_str("\x1b[1;36m");

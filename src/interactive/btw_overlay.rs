@@ -18,9 +18,9 @@ use crate::agent::types::{
     StreamDelta,
 };
 use crate::interactive::theme;
+use crate::str::StrExt as _;
 use crate::tui::keys;
 use crate::tui::stdin_buffer::{StdinBuffer, StdinEvent};
-use crate::str::StrExt as _;
 
 // ─────────────────────────────── public entry ────────────────────────────────
 
@@ -189,10 +189,9 @@ fn tool_call_summary(name: &str, args: &serde_json::Value) -> String {
     // Show the most useful argument for each tool so the model understands what
     // happened.
     let detail = match name {
-        "epsh" => args
-            .get("command")
-            .and_then(|v| v.as_str())
-            .map(|s| s.truncate_chars(120).to_string()),
+        "epsh" => {
+            args.get("command").and_then(|v| v.as_str()).map(|s| s.truncate_chars(120).to_string())
+        }
         "read" | "edit" | "write" | "ls" | "find" => {
             args.get("path").and_then(|v| v.as_str()).map(|s| s.to_string())
         }

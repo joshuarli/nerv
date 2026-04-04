@@ -2,7 +2,9 @@ use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagE
 
 use crate::tui::highlight;
 use crate::tui::tui::Component;
-use crate::tui::utils::{char_wrap_with_ansi, truncate_to_width, visible_width, wrap_text_with_ansi};
+use crate::tui::utils::{
+    char_wrap_with_ansi, truncate_to_width, visible_width, wrap_text_with_ansi,
+};
 
 /// Theme functions for markdown rendering. Each takes raw text and returns
 /// ANSI-styled output.
@@ -301,10 +303,7 @@ impl Markdown {
                     if let Some(ref mut ts) = table_state {
                         if !ts.current_row.is_empty() {
                             let cells = std::mem::take(&mut ts.current_row);
-                            ts.rows.push(TableRow {
-                                cells,
-                                is_header: true,
-                            });
+                            ts.rows.push(TableRow { cells, is_header: true });
                         }
                         ts.in_header = false;
                     }
@@ -319,10 +318,7 @@ impl Markdown {
                     if let Some(ref mut ts) = table_state {
                         if !ts.current_row.is_empty() {
                             let cells = std::mem::take(&mut ts.current_row);
-                            ts.rows.push(TableRow {
-                                cells,
-                                is_header: ts.current_row_is_header,
-                            });
+                            ts.rows.push(TableRow { cells, is_header: ts.current_row_is_header });
                         }
                     }
                 }
@@ -359,7 +355,12 @@ impl Markdown {
     }
 }
 
-fn render_table(ts: &TableState, content_width: u16, padding: &str, theme: &MarkdownTheme) -> Vec<String> {
+fn render_table(
+    ts: &TableState,
+    content_width: u16,
+    padding: &str,
+    theme: &MarkdownTheme,
+) -> Vec<String> {
     if ts.rows.is_empty() {
         return vec![];
     }
@@ -460,11 +461,7 @@ fn render_table(ts: &TableState, content_width: u16, padding: &str, theme: &Mark
             truncated,
             " ".repeat(pad_right as usize)
         );
-        if is_header {
-            (theme.table_header)(&cell_str)
-        } else {
-            cell_str
-        }
+        if is_header { (theme.table_header)(&cell_str) } else { cell_str }
     };
 
     let fmt_row = |row: &TableRow| -> String {
@@ -533,21 +530,9 @@ mod tests {
         let text = "| A | B |\n|---|---|\n| 1 | 2 |\n";
         let lines = md(text).render_markdown(80);
         // Should have top border, header row, header-sep, data row, bot border
-        assert!(
-            lines.iter().any(|l| l.contains('┌')),
-            "missing top border: {:?}",
-            lines
-        );
-        assert!(
-            lines.iter().any(|l| l.contains('╞')),
-            "missing header sep: {:?}",
-            lines
-        );
-        assert!(
-            lines.iter().any(|l| l.contains('└')),
-            "missing bottom border: {:?}",
-            lines
-        );
+        assert!(lines.iter().any(|l| l.contains('┌')), "missing top border: {:?}", lines);
+        assert!(lines.iter().any(|l| l.contains('╞')), "missing header sep: {:?}", lines);
+        assert!(lines.iter().any(|l| l.contains('└')), "missing bottom border: {:?}", lines);
     }
 
     #[test]
@@ -557,7 +542,8 @@ mod tests {
         // Every non-empty table line should have 4 │ characters (3 columns = 4 pipes)
         for line in &lines {
             let stripped = line.trim();
-            if stripped.starts_with('│') || stripped.starts_with('├') || stripped.starts_with('╞') {
+            if stripped.starts_with('│') || stripped.starts_with('├') || stripped.starts_with('╞')
+            {
                 let pipe_count = stripped.chars().filter(|&c| c == '│').count();
                 assert_eq!(pipe_count, 4, "wrong pipe count in: {}", stripped);
             }

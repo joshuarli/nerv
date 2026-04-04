@@ -110,7 +110,9 @@ impl Default for NervConfig {
             default_thinking: Some(true),
             default_effort_level: Some(EffortLevel::Medium),
             auto_compact: Some(true),
-            compaction_model: Some(crate::core::model_registry::DEFAULT_COMPACTION_MODEL.to_string()),
+            compaction_model: Some(
+                crate::core::model_registry::DEFAULT_COMPACTION_MODEL.to_string(),
+            ),
             lite_compact_age: None,
             headers: builtin_default_headers(),
             notifications: Vec::new(),

@@ -9,6 +9,19 @@ use crate::errors::ToolError;
 use crate::str::StrExt as _;
 
 const GREP_MAX_LINE_LENGTH: usize = 500;
+const GREP_ALLOWED_KEYS: &[&str] = &[
+    "pattern",
+    "path",
+    "file",
+    "glob",
+    "include",
+    "ignore_case",
+    "literal",
+    "context",
+    "limit",
+    "files_with_matches",
+    "count",
+];
 
 pub struct GrepTool {
     cwd: PathBuf,
@@ -26,7 +39,9 @@ impl AgentTool for GrepTool {
     fn name(&self) -> &str {
         "grep"
     }
-    fn is_readonly(&self) -> bool { true }
+    fn is_readonly(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
         "Search file contents using ripgrep. Respects .gitignore."
     }
@@ -36,6 +51,7 @@ impl AgentTool for GrepTool {
             "properties": {
                 "pattern": {"type": "string", "description": "Regex pattern to search for"},
                 "path": {"type": "string", "description": "Directory or file to search (default: cwd)"},
+                "file": {"type": "string", "description": "Deprecated alias for `path` (prefer `path`)"},
                 "glob": {"type": "string", "description": "Filter files by glob, e.g. '*.ts' or '**/*.spec.ts'"},
                 "ignore_case": {"type": "boolean", "description": "Case-insensitive search (default: false)"},
                 "literal": {"type": "boolean", "description": "Treat pattern as literal string, not regex (default: false)"},
@@ -48,7 +64,29 @@ impl AgentTool for GrepTool {
             "additionalProperties": false
         })
     }
+
+    fn prompt_guidelines(&self) -> Vec<String> {
+        vec!["For scoped searches, pass `grep.path` (not `grep.file`).".into()]
+    }
+
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
+        let Some(obj) = input.as_object() else {
+            return Err(ToolError::InvalidArguments {
+                message: "arguments must be an object".into(),
+            });
+        };
+        let mut unknown: Vec<&str> =
+            obj.keys().map(|k| k.as_str()).filter(|k| !GREP_ALLOWED_KEYS.contains(k)).collect();
+        if !unknown.is_empty() {
+            unknown.sort_unstable();
+            return Err(ToolError::InvalidArguments {
+                message: format!(
+                    "unknown argument(s): {} (allowed: {})",
+                    unknown.join(", "),
+                    GREP_ALLOWED_KEYS.join(", ")
+                ),
+            });
+        }
         if input.get("pattern").and_then(|v| v.as_str()).is_none() {
             let keys: Vec<&str> = input
                 .as_object()
@@ -58,15 +96,28 @@ impl AgentTool for GrepTool {
                 message: format!("pattern (string) is required (got keys: {})", keys.join(", ")),
             });
         }
+        let path = input.get("path").and_then(|v| v.as_str());
+        let file = input.get("file").and_then(|v| v.as_str());
+        if let (Some(path), Some(file)) = (path, file)
+            && path != file
+        {
+            return Err(ToolError::InvalidArguments {
+                message: "use only one path selector: `path` or legacy `file`".into(),
+            });
+        }
         Ok(())
     }
-    fn execute(
-        &self,
-        input: serde_json::Value,
-        _cancel: &CancelFlag,
-    ) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _cancel: &CancelFlag) -> ToolResult {
         let pattern = input["pattern"].as_str().unwrap_or("");
-        let path = input["path"].as_str().unwrap_or(".");
+        let path_from_path = input.get("path").and_then(|v| v.as_str());
+        let path_from_file = input.get("file").and_then(|v| v.as_str());
+        let legacy_file_alias_used = path_from_path.is_none() && path_from_file.is_some();
+        let path = path_from_path.or(path_from_file).unwrap_or(".");
+        let legacy_warning = if legacy_file_alias_used {
+            Some("[warning] `grep.file` is deprecated; use `grep.path`.")
+        } else {
+            None
+        };
         let resolved_path = self.resolve_path(path);
         let glob = input.get("glob").and_then(|v| v.as_str());
         // Legacy param name
@@ -125,7 +176,11 @@ impl AgentTool for GrepTool {
                     if !stderr.trim().is_empty() {
                         return ToolResult::error(format!("rg: {}", stderr.trim()));
                     }
-                    return ToolResult::ok("No matches found");
+                    return if let Some(w) = legacy_warning {
+                        ToolResult::ok(format!("{w}\nNo matches found"))
+                    } else {
+                        ToolResult::ok("No matches found")
+                    };
                 }
                 let tr = truncate_tail(&output.stdout, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES);
 
@@ -139,10 +194,17 @@ impl AgentTool for GrepTool {
                     content.push_str("\n[stderr]\n");
                     content.push_str(stderr.trim());
                 }
+                if let Some(w) = legacy_warning {
+                    if content.is_empty() {
+                        content.push_str(w);
+                    } else {
+                        content = format!("{w}\n{content}");
+                    }
+                }
                 let content = content;
 
                 let display = if files_with_matches {
-                    let file_count = content.lines().filter(|l| !l.is_empty()).count();
+                    let file_count = tr.content.lines().filter(|l| !l.is_empty()).count();
                     if tr.truncated {
                         format!("{} files (truncated)", file_count)
                     } else {
@@ -150,7 +212,8 @@ impl AgentTool for GrepTool {
                     }
                 } else if count_mode {
                     // Each line is "file:N"; sum the N values
-                    let total: u64 = content
+                    let total: u64 = tr
+                        .content
                         .lines()
                         .filter_map(|l| l.rfind(':').and_then(|i| l[i + 1..].parse::<u64>().ok()))
                         .sum();
@@ -160,8 +223,11 @@ impl AgentTool for GrepTool {
                         format!("{} matches across files", total)
                     }
                 } else {
-                    let match_count =
-                        content.lines().filter(|l| !l.starts_with("--") && !l.is_empty()).count();
+                    let match_count = tr
+                        .content
+                        .lines()
+                        .filter(|l| !l.starts_with("--") && !l.is_empty())
+                        .count();
                     if tr.truncated {
                         format!("{} matches (truncated)", match_count)
                     } else {
@@ -213,5 +279,31 @@ mod tests {
         let result = truncate_long_lines(&long, 500);
         assert!(result.ends_with("..."));
         assert_eq!(result.len(), 503); // 500 + "..."
+    }
+
+    #[test]
+    fn validate_accepts_legacy_file_alias() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = GrepTool::new(tmp.path().to_path_buf());
+        let result = tool.validate(&serde_json::json!({"pattern": "foo", "file": "src"}));
+        assert!(result.is_ok(), "legacy alias should be accepted");
+    }
+
+    #[test]
+    fn validate_rejects_conflicting_path_and_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = GrepTool::new(tmp.path().to_path_buf());
+        let err = tool
+            .validate(&serde_json::json!({"pattern": "foo", "path": "src", "file": "tests"}))
+            .unwrap_err();
+        assert!(err.to_string().contains("use only one path selector"), "{}", err);
+    }
+
+    #[test]
+    fn validate_rejects_unknown_argument() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = GrepTool::new(tmp.path().to_path_buf());
+        let err = tool.validate(&serde_json::json!({"pattern": "foo", "bogus": true})).unwrap_err();
+        assert!(err.to_string().contains("unknown argument"), "{}", err);
     }
 }

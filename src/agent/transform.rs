@@ -155,10 +155,8 @@ struct MessageMeta {
 
 impl MessageMeta {
     fn new(messages: &[AgentMessage]) -> Self {
-        let mut tool_names: HashMap<String, String> =
-            HashMap::new();
-        let mut bash_commands: HashMap<String, String> =
-            HashMap::new();
+        let mut tool_names: HashMap<String, String> = HashMap::new();
+        let mut bash_commands: HashMap<String, String> = HashMap::new();
         for msg in messages {
             if let AgentMessage::Assistant(a) = msg {
                 for block in &a.content {
@@ -442,9 +440,7 @@ fn content_text(content: &[ContentItem]) -> String {
 /// For each read tool call, find line numbers referenced by later edits on the
 /// same file. Returns a map of tool_call_id → set of referenced line numbers
 /// (1-based).
-fn find_read_referenced_lines(
-    messages: &[AgentMessage],
-) -> HashMap<String, HashSet<usize>> {
+fn find_read_referenced_lines(messages: &[AgentMessage]) -> HashMap<String, HashSet<usize>> {
     // Collect read tool calls: (index, tool_call_id, path)
     let mut reads: Vec<(usize, String, String)> = Vec::new();
     for (i, msg) in messages.iter().enumerate() {
@@ -460,8 +456,7 @@ fn find_read_referenced_lines(
         }
     }
 
-    let mut result: HashMap<String, HashSet<usize>> =
-        HashMap::new();
+    let mut result: HashMap<String, HashSet<usize>> = HashMap::new();
 
     for (read_idx, read_id, read_path) in &reads {
         // Find the corresponding tool result to parse its lines
@@ -539,10 +534,7 @@ fn find_read_referenced_lines(
 /// Fold a read result, keeping referenced lines + context and collapsing gaps.
 const FOLD_CONTEXT: usize = 2;
 
-fn fold_read_result(
-    read_text: &str,
-    referenced_lines: &HashSet<usize>,
-) -> String {
+fn fold_read_result(read_text: &str, referenced_lines: &HashSet<usize>) -> String {
     // Parse into (line_num, full_original_line) pairs
     let lines: Vec<(usize, &str)> = read_text
         .lines()
@@ -761,14 +753,7 @@ pub fn lite_compact(
     // Second pass: zero eligible stale results.
     let mut zeroed = 0usize;
     for msg in messages.iter_mut() {
-        if let AgentMessage::ToolResult {
-            tool_call_id,
-            content,
-            is_error,
-            display,
-            ..
-        } = msg
-        {
+        if let AgentMessage::ToolResult { tool_call_id, content, is_error, display, .. } = msg {
             if *is_error {
                 continue;
             }
@@ -789,9 +774,8 @@ pub fn lite_compact(
             if byte_len < LITE_COMPACT_MIN_BYTES {
                 continue;
             }
-            *content = vec![ContentItem::Text {
-                text: "[output cleared — re-run if needed]".into(),
-            }];
+            *content =
+                vec![ContentItem::Text { text: "[output cleared — re-run if needed]".into() }];
             *display = None;
             zeroed += 1;
         }
@@ -1486,8 +1470,7 @@ mod tests {
             }
             _ => panic!("expected ToolResult for b1"),
         };
-        let filtered =
-            details.as_ref().map_or(false, |d| d.filtered);
+        let filtered = details.as_ref().map_or(false, |d| d.filtered);
         assert!(filtered, "details should survive superseded rewrite");
     }
 
@@ -2244,7 +2227,11 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         let content = "line\nline\nline\nline\nline\n";
         let msgs = vec![
             assistant_tool_call("c1", "epsh", serde_json::json!({"command": "echo line"})),
-            tool_result_with_details("c1", content, ToolDetails { filtered: true, ..Default::default() }),
+            tool_result_with_details(
+                "c1",
+                content,
+                ToolDetails { filtered: true, ..Default::default() },
+            ),
             // A response to terminate the sequence
             AgentMessage::Assistant(AssistantMessage {
                 content: vec![ContentBlock::Text { text: "done".into() }],
@@ -2356,7 +2343,10 @@ test result: FAILED. 2 passed; 1 failed; 0 ignored";
         let zeroed = lite_compact(&mut msgs, 2, &default_compactable());
         assert_eq!(zeroed, 1);
         if let AgentMessage::ToolResult { content, .. } = &msgs[2] {
-            let text = match &content[0] { ContentItem::Text { text } => text, _ => panic!() };
+            let text = match &content[0] {
+                ContentItem::Text { text } => text,
+                _ => panic!(),
+            };
             assert!(text.contains("output cleared"));
         } else {
             panic!("expected tool result");

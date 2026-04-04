@@ -6,16 +6,17 @@ use std::time::Duration;
 mod cli;
 
 use nerv::agent::EffortLevel;
-use crate::cli::{Cmd, RepoGateResult, ResumeOpt, handle_subcommand, parse_args, repo_gate};
 use nerv::core::*;
 use nerv::interactive::event_loop::InteractiveMode;
 use nerv::interactive::footer::FooterComponent;
 use nerv::interactive::layout::AppLayout;
 use nerv::interactive::statusbar::StatusBar;
 use nerv::nerv_dir;
+use nerv::str::StrExt as _;
 use nerv::tui::components::editor::Editor;
 use nerv::tui::*;
-use nerv::str::StrExt as _;
+
+use crate::cli::{Cmd, RepoGateResult, ResumeOpt, handle_subcommand, parse_args, repo_gate};
 
 /// Render a frame and notify ChatWriter of how many lines have been flushed to
 /// terminal scrollback, so it can free heap memory for blocks it will never
@@ -116,9 +117,17 @@ fn main() {
         Cmd::Interactive { model, resume, log_level, prompt, thinking, effort, plan_mode } => {
             (model, resume, log_level, None, false, prompt, thinking, effort, plan_mode)
         }
-        Cmd::Wt { branch, model, log_level, prompt, thinking, effort, plan_mode } => {
-            (model, ResumeOpt::None, log_level, Some(branch), false, prompt, thinking, effort, plan_mode)
-        }
+        Cmd::Wt { branch, model, log_level, prompt, thinking, effort, plan_mode } => (
+            model,
+            ResumeOpt::None,
+            log_level,
+            Some(branch),
+            false,
+            prompt,
+            thinking,
+            effort,
+            plan_mode,
+        ),
         Cmd::Resume { id } => {
             let resume = match id {
                 Some(id) => ResumeOpt::Session(id),
@@ -151,7 +160,10 @@ fn main() {
     #[cfg(target_os = "macos")]
     match nerv::security_bin() {
         Some(p) if p != std::path::Path::new("/usr/bin/security") => {
-            eprintln!("error: `security` resolved to `{}` — expected /usr/bin/security", p.display());
+            eprintln!(
+                "error: `security` resolved to `{}` — expected /usr/bin/security",
+                p.display()
+            );
             std::process::exit(1);
         }
         None => {
@@ -327,10 +339,16 @@ fn main() {
         layout.chat.push_styled(nerv::interactive::theme::WARN, &format!("⚠  {}", warning));
     }
     if nerv::rg_bin().is_none() {
-        layout.chat.push_styled(nerv::interactive::theme::WARN, "⚠  `rg` (ripgrep) not found — grep and symbol search tools will be unavailable");
+        layout.chat.push_styled(
+            nerv::interactive::theme::WARN,
+            "⚠  `rg` (ripgrep) not found — grep and symbol search tools will be unavailable",
+        );
     }
     if nerv::fd_bin().is_none() {
-        layout.chat.push_styled(nerv::interactive::theme::WARN, "⚠  `fd` not found — find tool will be unavailable");
+        layout.chat.push_styled(
+            nerv::interactive::theme::WARN,
+            "⚠  `fd` not found — find tool will be unavailable",
+        );
     }
 
     tui.terminal_mut().start();
@@ -1027,14 +1045,15 @@ fn launch_picker(
         }
         PickerRequest::PlanInterview { questions, plan_path } => {
             // Run the full-screen interview; returns answered (question, answer) pairs.
-            match nerv::interactive::plan_interview::run_plan_interview(questions.clone(), &plan_path) {
+            match nerv::interactive::plan_interview::run_plan_interview(
+                questions.clone(),
+                &plan_path,
+            ) {
                 Some(answers) => PickResult::PlanAnswers(answers),
                 None => {
                     // User cancelled (Ctrl+C / Escape). Stash so /interview can re-open.
-                    interactive.pending_interview = Some(PickerRequest::PlanInterview {
-                        questions,
-                        plan_path,
-                    });
+                    interactive.pending_interview =
+                        Some(PickerRequest::PlanInterview { questions, plan_path });
                     PickResult::PlanInterviewCancelled
                 }
             }
@@ -1082,9 +1101,7 @@ fn launch_picker(
             }
         }
         PickResult::PlanAnswers(answers) => {
-            let _ = interactive
-                .cmd_tx()
-                .send(nerv::core::SessionCommand::PlanAnswers { answers });
+            let _ = interactive.cmd_tx().send(nerv::core::SessionCommand::PlanAnswers { answers });
         }
         PickResult::PlanInterviewCancelled => {
             layout.chat.push_styled(
@@ -1208,8 +1225,14 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
         eprintln!("error: `git` not found in $PATH — nerv requires git");
         std::process::exit(1);
     }
-    if nerv::rg_bin().is_none() { eprintln!("warning: `rg` (ripgrep) not found — grep and symbol search tools will be unavailable"); }
-    if nerv::fd_bin().is_none() { eprintln!("warning: `fd` not found — find tool will be unavailable"); }
+    if nerv::rg_bin().is_none() {
+        eprintln!(
+            "warning: `rg` (ripgrep) not found — grep and symbol search tools will be unavailable"
+        );
+    }
+    if nerv::fd_bin().is_none() {
+        eprintln!("warning: `fd` not found — find tool will be unavailable");
+    }
     let b = nerv::bootstrap::bootstrap(
         &cwd,
         nerv_dir,
@@ -1462,11 +1485,7 @@ fn print_mode(model_arg: Option<&str>, max_turns: u32, verbose: bool) {
                     .join("");
                 // Truncate long tool results in the trace
                 let text = if text.len() > 500 {
-                    format!(
-                        "{}...[truncated {}b]",
-                        text.truncate_chars(500),
-                        text.len()
-                    )
+                    format!("{}...[truncated {}b]", text.truncate_chars(500), text.len())
                 } else {
                     text
                 };

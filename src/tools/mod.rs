@@ -1,7 +1,7 @@
 pub mod codemap;
-pub mod epsh;
 pub mod diff;
 pub mod edit;
+pub mod epsh;
 pub mod file_mutation_queue;
 pub mod find;
 pub mod grep;
@@ -14,8 +14,8 @@ pub mod truncate;
 pub mod write;
 
 pub use codemap::CodemapTool;
-pub use epsh::EpshTool;
 pub use edit::EditTool;
+pub use epsh::EpshTool;
 pub use file_mutation_queue::FileMutationQueue;
 pub use find::FindTool;
 pub use grep::GrepTool;

@@ -48,11 +48,7 @@ impl AgentTool for WriteTool {
         }
         Ok(())
     }
-    fn execute(
-        &self,
-        input: serde_json::Value,
-        _cancel: &CancelFlag,
-    ) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _cancel: &CancelFlag) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");
         let content = input["content"].as_str().unwrap_or("");
         let abs_path = self.resolve_path(path_str);

@@ -4,9 +4,11 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::convert::{LlmContent, LlmMessage};
-use crate::str::StrExt as _;
-use crate::agent::provider::{CacheConfig, CompletionRequest, Provider, ProviderEvent, new_cancel_flag};
+use crate::agent::provider::{
+    CacheConfig, CompletionRequest, Provider, ProviderEvent, new_cancel_flag,
+};
 use crate::agent::types::{AgentMessage, ContentBlock, ContentItem};
+use crate::str::StrExt as _;
 
 // Per-field character caps applied during conversation serialisation for
 // compaction. These bound individual fields before the overall prompt clamp
@@ -27,11 +29,7 @@ const FIELD_CAP_TOOL_OUTPUT: usize = 2_000;
 /// valid UTF-8.
 fn trunc(s: &str, cap: usize) -> Cow<'_, str> {
     let t = s.truncate_chars(cap);
-    if t.len() == s.len() {
-        Cow::Borrowed(s)
-    } else {
-        Cow::Owned(format!("{}...[truncated]", t))
-    }
+    if t.len() == s.len() { Cow::Borrowed(s) } else { Cow::Owned(format!("{}...[truncated]", t)) }
 }
 
 /// Structured output from the LLM summarizer. Every field is bounded by the
@@ -243,14 +241,13 @@ pub fn generate_summary(
         / 100;
     let conversation = clamp_conversation(conversation, char_cap);
 
-    let prompt = format!("<conversation>\n{conversation}\n</conversation>\n\n{SUMMARIZATION_PROMPT}");
+    let prompt =
+        format!("<conversation>\n{conversation}\n</conversation>\n\n{SUMMARIZATION_PROMPT}");
 
     let request = CompletionRequest {
         model_id: model_id.to_string(),
         system_prompt: "You are a conversation summarizer.".to_string(),
-        messages: vec![LlmMessage::User {
-            content: vec![LlmContent::Text(prompt)],
-        }],
+        messages: vec![LlmMessage::User { content: vec![LlmContent::Text(prompt)] }],
         tools: vec![],
         max_tokens: 4096,
         thinking: None,
@@ -268,7 +265,9 @@ pub fn generate_summary(
     match serde_json::from_str::<StructuredSummary>(stripped) {
         Ok(structured) => Ok(GeneratedSummary::Structured(structured)),
         Err(e) => {
-            crate::log::warn(&format!("Compaction summary JSON parse failed, using prose fallback: {e}"));
+            crate::log::warn(&format!(
+                "Compaction summary JSON parse failed, using prose fallback: {e}"
+            ));
             Ok(GeneratedSummary::Prose(result))
         }
     }

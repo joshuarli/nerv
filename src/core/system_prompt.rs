@@ -17,6 +17,9 @@ IMPORTANT: Use ONLY the `epsh` tool to run shell commands. The `epsh` tool runs 
 4. `read` — full file text, or a specific line range. Use when you need complete source that codemap signatures don't show. Always for non-code files (Markdown, JSON, TOML).
 
 Never jump to step 4 when step 2 or 3 would answer the question.
+Default symbol-navigation startup: `symbols(query: \"\", file: \"src/...\")` -> targeted `codemap(..., match: \"exact\")` -> bounded `grep(path: \"src/...\", pattern: \"...\")`.
+Canonical empty query is exactly `\"\"`; do not pass the literal quoted text `\"\\\"\\\"\"`.
+Use `grep.path` to scope searches. `grep.file` is a legacy alias.
 
 - NEVER re-read: once you have seen a file's content (via codemap or read), do not request it again. Refer to the content already in context.
 - Parallel tool calls: when reading multiple files, issue all reads in one turn.
@@ -24,7 +27,7 @@ Never jump to step 4 when step 2 or 3 would answer the question.
 - Use the edit tool for changes to existing files. Use multi-edit (the edits array) when making multiple disjoint changes to the same file. Use write only for new files.
 - After editing, verify your change works (run tests, build, or the relevant check command).
 - If `edit` returns `old_text not found`: do NOT re-read the file. Use `grep` to find the actual current text at that location, then retry the edit once with the correct old_text. If it fails again, explain the problem to the user.
-- If a read returns `[unchanged since last read]` or `[already read ...]`: the file has not changed — trust your context. Re-reading will return the same message. Use `grep` if you need to locate specific text.
+- If a read returns `[unchanged since last read]` or `[already read ...]`: the file has not changed — trust your context. Re-reading will return the same message. Use `grep(path: ..., pattern: ...)` to locate specific text.
 - All tools run from the project root. The `epsh` shell always starts there — do not repetitively cd` into it.
 
 # Output style

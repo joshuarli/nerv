@@ -375,11 +375,7 @@ impl AgentTool for BigBashTool {
     fn validate(&self, _: &serde_json::Value) -> Result<(), nerv::errors::ToolError> {
         Ok(())
     }
-    fn execute(
-        &self,
-        _input: serde_json::Value,
-        _cancel: &CancelFlag,
-    ) -> ToolResult {
+    fn execute(&self, _input: serde_json::Value, _cancel: &CancelFlag) -> ToolResult {
         ToolResult::ok_with_details(
             self.output.clone(),
             ToolDetails { filtered: true, exit_code: Some(0), ..Default::default() },

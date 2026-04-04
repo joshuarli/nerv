@@ -9,7 +9,6 @@ fn setup() -> (TempDir, MemoryTool) {
     (tmp, tool)
 }
 
-
 fn noop_cancel() -> CancelFlag {
     new_cancel_flag()
 }
@@ -40,14 +39,8 @@ fn add_and_list_memory() {
 #[test]
 fn add_multiple_and_list() {
     let (_tmp, tool) = setup();
-    tool.execute(
-        serde_json::json!({"action": "add", "content": "first"}),
-        &noop_cancel(),
-    );
-    tool.execute(
-        serde_json::json!({"action": "add", "content": "second"}),
-        &noop_cancel(),
-    );
+    tool.execute(serde_json::json!({"action": "add", "content": "first"}), &noop_cancel());
+    tool.execute(serde_json::json!({"action": "add", "content": "second"}), &noop_cancel());
     let result = tool.execute(serde_json::json!({"action": "list"}), &noop_cancel());
     assert!(result.content.contains("1. first"));
     assert!(result.content.contains("2. second"));
@@ -56,18 +49,10 @@ fn add_multiple_and_list() {
 #[test]
 fn remove_memory() {
     let (_tmp, tool) = setup();
-    tool.execute(
-        serde_json::json!({"action": "add", "content": "keep this"}),
-        &noop_cancel(),
-    );
-    tool.execute(
-        serde_json::json!({"action": "add", "content": "remove this"}),
-        &noop_cancel(),
-    );
-    let result = tool.execute(
-        serde_json::json!({"action": "remove", "content": "2"}),
-        &noop_cancel(),
-    );
+    tool.execute(serde_json::json!({"action": "add", "content": "keep this"}), &noop_cancel());
+    tool.execute(serde_json::json!({"action": "add", "content": "remove this"}), &noop_cancel());
+    let result =
+        tool.execute(serde_json::json!({"action": "remove", "content": "2"}), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("Removed"));
 
@@ -79,10 +64,8 @@ fn remove_memory() {
 #[test]
 fn remove_invalid_index() {
     let (_tmp, tool) = setup();
-    let result = tool.execute(
-        serde_json::json!({"action": "remove", "content": "99"}),
-        &noop_cancel(),
-    );
+    let result =
+        tool.execute(serde_json::json!({"action": "remove", "content": "99"}), &noop_cancel());
     assert!(result.is_error);
 }
 
@@ -115,10 +98,7 @@ fn validate_rejects_empty_add() {
 #[test]
 fn memories_persist_to_file() {
     let (tmp, tool) = setup();
-    tool.execute(
-        serde_json::json!({"action": "add", "content": "persistent"}),
-        &noop_cancel(),
-    );
+    tool.execute(serde_json::json!({"action": "add", "content": "persistent"}), &noop_cancel());
 
     // Read the file directly
     let content = std::fs::read_to_string(tmp.path().join("memory.md")).unwrap();

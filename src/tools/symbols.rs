@@ -52,6 +52,31 @@ impl SymbolsTool {
 }
 
 const MAX_RESULTS: usize = 50;
+const SYMBOLS_ALLOWED_KEYS: &[&str] = &["query", "kind", "file", "references"];
+
+fn normalize_empty_query_literal(raw: &str) -> Option<&'static str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "\"\"" || trimmed == "''" { Some("") } else { None }
+}
+
+fn validate_known_keys(input: &serde_json::Value, allowed: &[&str]) -> Result<(), ToolError> {
+    let Some(obj) = input.as_object() else {
+        return Err(ToolError::InvalidArguments { message: "arguments must be an object".into() });
+    };
+    let mut unknown: Vec<&str> =
+        obj.keys().map(|k| k.as_str()).filter(|k| !allowed.contains(k)).collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort_unstable();
+    Err(ToolError::InvalidArguments {
+        message: format!(
+            "unknown argument(s): {} (allowed: {})",
+            unknown.join(", "),
+            allowed.join(", ")
+        ),
+    })
+}
 
 impl AgentTool for SymbolsTool {
     fn name(&self) -> &str {
@@ -95,15 +120,28 @@ impl AgentTool for SymbolsTool {
     fn prompt_guidelines(&self) -> Vec<String> {
         vec![
             "`symbols` with `query: \"\"` returns every definition (name, kind, file, line, signature). Use to orient before targeted `codemap` calls.".into(),
+            "Canonical empty query is exactly `\"\"`; do not pass the literal quoted text `\"\\\"\\\"\"`.".into(),
             "Use `references: true` only with a non-empty identifier query. References are usages-only (definitions excluded), AST-first for Rust/Go/Python/TS/TSX with per-file fallback.".into(),
         ]
     }
 
+    fn normalize(&self, mut input: serde_json::Value) -> serde_json::Value {
+        if let Some(obj) = input.as_object_mut()
+            && let Some(raw) = obj.get("query").and_then(|v| v.as_str())
+            && let Some(normalized) = normalize_empty_query_literal(raw)
+        {
+            obj.insert("query".into(), serde_json::Value::String(normalized.into()));
+        }
+        input
+    }
+
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        let query = input
+        validate_known_keys(input, SYMBOLS_ALLOWED_KEYS)?;
+        let query_raw = input
             .get("query")
             .and_then(|v| v.as_str())
             .ok_or(ToolError::InvalidArguments { message: "query (string) is required".into() })?;
+        let query = normalize_empty_query_literal(query_raw).unwrap_or(query_raw);
         let want_refs = input.get("references").and_then(|v| v.as_bool()).unwrap_or(false);
         if want_refs && query.trim().is_empty() {
             return Err(ToolError::InvalidArguments {
@@ -114,7 +152,8 @@ impl AgentTool for SymbolsTool {
     }
 
     fn execute(&self, input: serde_json::Value, _cancel: &CancelFlag) -> ToolResult {
-        let query = input["query"].as_str().unwrap_or("");
+        let query_raw = input["query"].as_str().unwrap_or("");
+        let query = normalize_empty_query_literal(query_raw).unwrap_or(query_raw);
         let kind_filter = input.get("kind").and_then(|v| v.as_str()).and_then(parse_kind_filter);
         let file_filter = input.get("file").and_then(|v| v.as_str());
         let want_refs = input.get("references").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -326,5 +365,21 @@ mod tests {
             "file-filtered query should NOT have DOCS: {}",
             result.content
         );
+    }
+
+    #[test]
+    fn normalize_converts_literal_quoted_empty_query() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = SymbolsTool::new(tmp.path().to_path_buf());
+        let normalized = tool.normalize(serde_json::json!({"query": "\"\""}));
+        assert_eq!(normalized["query"], serde_json::json!(""));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_argument() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = SymbolsTool::new(tmp.path().to_path_buf());
+        let err = tool.validate(&serde_json::json!({"query": "hello", "bogus": true})).unwrap_err();
+        assert!(err.to_string().contains("unknown argument"), "{}", err);
     }
 }

@@ -92,7 +92,9 @@ impl AgentTool for LsTool {
     fn name(&self) -> &str {
         "ls"
     }
-    fn is_readonly(&self) -> bool { true }
+    fn is_readonly(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
         "List directory contents as a tree."
     }
@@ -110,11 +112,7 @@ impl AgentTool for LsTool {
     fn validate(&self, _input: &serde_json::Value) -> Result<(), ToolError> {
         Ok(())
     }
-    fn execute(
-        &self,
-        input: serde_json::Value,
-        _cancel: &CancelFlag,
-    ) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _cancel: &CancelFlag) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or(".");
         let resolved = self.resolve_path(path_str);
         let depth = input["depth"]
@@ -134,7 +132,10 @@ impl AgentTool for LsTool {
         render_tree(&resolved, depth, &mut content, &mut entry_count);
 
         let display = format!("{} ({} entries)", path_str, entry_count);
-        ToolResult::ok_with_details(content, ToolDetails { display: Some(display), ..Default::default() })
+        ToolResult::ok_with_details(
+            content,
+            ToolDetails { display: Some(display), ..Default::default() },
+        )
     }
 }
 
@@ -247,8 +248,7 @@ mod tests {
     fn test_tool_not_found() {
         let tool = LsTool::new(std::env::current_dir().unwrap());
         let cancel = crate::agent::provider::new_cancel_flag();
-        let result =
-            tool.execute(serde_json::json!({"path": "/nonexistent_path_xyz"}), &cancel);
+        let result = tool.execute(serde_json::json!({"path": "/nonexistent_path_xyz"}), &cancel);
         assert!(result.content.contains("not found") || result.content.contains("error"));
     }
 }

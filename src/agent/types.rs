@@ -269,7 +269,9 @@ pub enum AgentEvent {
     TurnEnd,
     /// Emitted after tool results are recorded and before the next API call.
     /// Allows the caller to trigger compaction before context overflows.
-    ContextEstimate { estimated_tokens: usize },
+    ContextEstimate {
+        estimated_tokens: usize,
+    },
     /// Emitted when a retryable error (rate limit / overload) triggers a retry.
     Retrying {
         attempt: u32,

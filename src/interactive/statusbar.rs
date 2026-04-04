@@ -281,7 +281,14 @@ impl StatusBar {
         } else if self.input_tokens > 0 {
             // Upload / waiting phase — show ↑ only (from API's message_start)
             let input_delta = self.input_tokens.saturating_sub(self.prev_input_tokens);
-            format!(" {}·{} {}↑{}{}", theme::DIM, r, theme::FOOTER_LABEL, fmt_tokens(input_delta as u64), r,)
+            format!(
+                " {}·{} {}↑{}{}",
+                theme::DIM,
+                r,
+                theme::FOOTER_LABEL,
+                fmt_tokens(input_delta as u64),
+                r,
+            )
         } else {
             // No token data yet — plain spinner
             String::new()

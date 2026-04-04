@@ -53,4 +53,3 @@ pub enum ToolError {
     #[error("tool execution cancelled")]
     Cancelled,
 }
-

@@ -242,10 +242,10 @@ pub fn char_wrap_with_ansi(s: &str, width: u16) -> Vec<String> {
     let mut normal_start = 0;
 
     let flush_char_segment = |segment: &str,
-                               lines: &mut Vec<String>,
-                               current_line: &mut String,
-                               current_width: &mut u16,
-                               active_sgr: &str| {
+                              lines: &mut Vec<String>,
+                              current_line: &mut String,
+                              current_width: &mut u16,
+                              active_sgr: &str| {
         for g in segment.graphemes(true) {
             let gw = UnicodeWidthStr::width(g) as u16;
             if *current_width + gw > width {
@@ -339,13 +339,7 @@ pub fn char_wrap_with_ansi(s: &str, width: u16) -> Vec<String> {
 
     if normal_start < bytes.len() && state == AnsiState::Normal {
         let segment = &s[normal_start..];
-        flush_char_segment(
-            segment,
-            &mut lines,
-            &mut current_line,
-            &mut current_width,
-            &active_sgr,
-        );
+        flush_char_segment(segment, &mut lines, &mut current_line, &mut current_width, &active_sgr);
     }
 
     lines.push(current_line);
@@ -475,7 +469,13 @@ pub fn wrap_text_with_ansi(s: &str, width: u16) -> Vec<String> {
                 if bytes[i] == 0x1B {
                     if normal_start < i {
                         let segment = &s[normal_start..i];
-                        flush_segment(segment, &mut lines, &mut current_line, &mut current_width, &active_sgr);
+                        flush_segment(
+                            segment,
+                            &mut lines,
+                            &mut current_line,
+                            &mut current_width,
+                            &active_sgr,
+                        );
                     }
                     state = AnsiState::Escape;
                     normal_start = i;
@@ -485,9 +485,18 @@ pub fn wrap_text_with_ansi(s: &str, width: u16) -> Vec<String> {
                 }
             }
             AnsiState::Escape => match bytes[i] {
-                b'[' => { state = AnsiState::Csi; i += 1; }
-                b']' => { state = AnsiState::Osc; i += 1; }
-                b'_' => { state = AnsiState::Apc; i += 1; }
+                b'[' => {
+                    state = AnsiState::Csi;
+                    i += 1;
+                }
+                b']' => {
+                    state = AnsiState::Osc;
+                    i += 1;
+                }
+                b'_' => {
+                    state = AnsiState::Apc;
+                    i += 1;
+                }
                 _ => {
                     current_line.push_str(&s[normal_start..=i]);
                     state = AnsiState::Normal;

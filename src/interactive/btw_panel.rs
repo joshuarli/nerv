@@ -8,8 +8,8 @@ use crossbeam_channel as channel;
 use crate::agent::agent::Agent;
 use crate::agent::provider::{CancelFlag, ProviderRegistry, new_cancel_flag};
 use crate::agent::types::{AgentEvent, AgentMessage, ContentItem, Model, StopReason, StreamDelta};
-use crate::interactive::display::{fmt_tokens, fmt_cost};
 use crate::interactive::btw_overlay::wrap_text;
+use crate::interactive::display::{fmt_cost, fmt_tokens};
 use crate::interactive::theme;
 use crate::tui::tui::Component;
 
@@ -217,7 +217,8 @@ impl Component for BtwPanel {
                 fmt_tokens(self.usage.output as u64)
             ));
             if self.cost.total > 0.0 {
-                s.push_str(&format!(" ${}", fmt_cost(self.cost.total)));            }
+                s.push_str(&format!(" ${}", fmt_cost(self.cost.total)));
+            }
             s.push(' ');
             s
         } else {
@@ -230,7 +231,8 @@ impl Component for BtwPanel {
         let total_lines = self.all_content_lines(inner_w).len();
         let scroll_hint = if total_lines > MAX_CONTENT_LINES { " ↑↓ scroll " } else { "" };
         // stats on the left of the dashes, hints on the right
-        let fixed = stats_str.chars().count() + dismiss.len() + copy_hint.len() + scroll_hint.len() + 2; // 2 for ╰ ╯
+        let fixed =
+            stats_str.chars().count() + dismiss.len() + copy_hint.len() + scroll_hint.len() + 2; // 2 for ╰ ╯
         let bottom_dashes = w.saturating_sub(fixed);
         lines.push(format!(
             "{}╰{}{}{}{}{}╯{}",

@@ -174,17 +174,21 @@ fn keychain_service(provider: &str) -> String {
 fn keychain_set(provider: &str, value: &str) {
     let service = keychain_service(provider);
     // -U updates if exists, creates if not
-    let _ = std::process::Command::new(crate::security().unwrap_or(std::path::Path::new("/usr/bin/security")))
-        .args(["add-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", &service, "-w", value, "-U"])
-        .output();
+    let _ = std::process::Command::new(
+        crate::security().unwrap_or(std::path::Path::new("/usr/bin/security")),
+    )
+    .args(["add-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", &service, "-w", value, "-U"])
+    .output();
 }
 
 fn keychain_get(provider: &str) -> Option<String> {
     let service = keychain_service(provider);
-    let output = std::process::Command::new(crate::security().unwrap_or(std::path::Path::new("/usr/bin/security")))
-        .args(["find-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", &service, "-w"])
-        .output()
-        .ok()?;
+    let output = std::process::Command::new(
+        crate::security().unwrap_or(std::path::Path::new("/usr/bin/security")),
+    )
+    .args(["find-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", &service, "-w"])
+    .output()
+    .ok()?;
     if output.status.success() {
         Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
@@ -194,9 +198,11 @@ fn keychain_get(provider: &str) -> Option<String> {
 
 fn keychain_delete(provider: &str) {
     let service = keychain_service(provider);
-    let _ = std::process::Command::new(crate::security().unwrap_or(std::path::Path::new("/usr/bin/security")))
-        .args(["delete-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", &service])
-        .output();
+    let _ = std::process::Command::new(
+        crate::security().unwrap_or(std::path::Path::new("/usr/bin/security")),
+    )
+    .args(["delete-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", &service])
+    .output();
 }
 
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";

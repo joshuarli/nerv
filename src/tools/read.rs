@@ -33,7 +33,9 @@ impl AgentTool for ReadTool {
     fn name(&self) -> &str {
         "read"
     }
-    fn is_readonly(&self) -> bool { true }
+    fn is_readonly(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
         "Read a file with line numbers. Use offset/limit to read specific sections of large files."
     }
@@ -61,11 +63,7 @@ impl AgentTool for ReadTool {
         }
         Ok(())
     }
-    fn execute(
-        &self,
-        input: serde_json::Value,
-        _cancel: &CancelFlag,
-    ) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _cancel: &CancelFlag) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or("");
         let abs_path = self.resolve_path(path_str);
         let offset = input.get("offset").and_then(|v| v.as_u64()).map(|v| v as usize);
@@ -87,7 +85,10 @@ impl AgentTool for ReadTool {
                 );
                 return ToolResult::ok_with_details(
                     msg,
-                    ToolDetails { display: Some(format!("{} (unchanged)", path_str)), ..Default::default() },
+                    ToolDetails {
+                        display: Some(format!("{} (unchanged)", path_str)),
+                        ..Default::default()
+                    },
                 );
             }
             // Range dedup: if this range is fully covered by a previous read, skip.
@@ -103,7 +104,10 @@ impl AgentTool for ReadTool {
                 );
                 return ToolResult::ok_with_details(
                     msg,
-                    ToolDetails { display: Some(format!("{} (already read)", path_str)), ..Default::default() },
+                    ToolDetails {
+                        display: Some(format!("{} (already read)", path_str)),
+                        ..Default::default()
+                    },
                 );
             }
         }
@@ -181,7 +185,10 @@ impl AgentTool for ReadTool {
                     entry.ranges_served.push(range);
                 }
 
-                ToolResult::ok_with_details(content, ToolDetails { display: Some(display), ..Default::default() })
+                ToolResult::ok_with_details(
+                    content,
+                    ToolDetails { display: Some(display), ..Default::default() },
+                )
             }
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::NotFound {
@@ -210,8 +217,8 @@ fn digit_width(line_count: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::path::Path;
+    use std::sync::Arc;
 
     use super::*;
     use crate::agent::agent::AgentTool;

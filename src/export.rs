@@ -2,8 +2,8 @@
 
 use crate::agent::types::{AgentMessage, ContentBlock, ContentItem};
 use crate::interactive::display::fmt_tokens;
-use crate::str::StrExt as _;
 use crate::session::types::{CompactionEntry, SessionEntry};
+use crate::str::StrExt as _;
 
 /// Aggregate token stats across all API calls in a session.
 struct SessionStats {
@@ -88,7 +88,10 @@ impl SessionStats {
 
 /// Find the repo-scoped DB directory that contains a session matching the given prefix.
 /// Searches `nerv_dir/repos/*/sessions.db` and returns the repo dir on the first match.
-fn find_repo_dir_for_session(session_id: &str, nerv_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+fn find_repo_dir_for_session(
+    session_id: &str,
+    nerv_dir: &std::path::Path,
+) -> Option<std::path::PathBuf> {
     let repos_dir = nerv_dir.join("repos");
     let entries = std::fs::read_dir(&repos_dir).ok()?;
     for entry in entries.flatten() {
@@ -98,16 +101,14 @@ fn find_repo_dir_for_session(session_id: &str, nerv_dir: &std::path::Path) -> Op
             continue;
         }
         // Quick prefix check directly against the DB — avoids loading all entries.
-        let check = rusqlite::Connection::open(&db_path)
+        let check = rusqlite::Connection::open(&db_path).ok().and_then(|db| {
+            db.query_row(
+                "SELECT id FROM sessions WHERE id LIKE ?1 LIMIT 1",
+                rusqlite::params![format!("{}%", session_id)],
+                |row| row.get::<_, String>(0),
+            )
             .ok()
-            .and_then(|db| {
-                db.query_row(
-                    "SELECT id FROM sessions WHERE id LIKE ?1 LIMIT 1",
-                    rusqlite::params![format!("{}%", session_id)],
-                    |row| row.get::<_, String>(0),
-                )
-                .ok()
-            });
+        });
         if check.is_some() {
             return Some(repo_dir);
         }
@@ -126,7 +127,8 @@ pub fn export_session_jsonl(
     path: &std::path::Path,
     nerv_dir: &std::path::Path,
 ) -> Result<String, String> {
-    let mut session_manager = crate::session::SessionManager::new(&repo_dir_for(session_id, nerv_dir));
+    let mut session_manager =
+        crate::session::SessionManager::new(&repo_dir_for(session_id, nerv_dir));
     session_manager.load_session(session_id).map_err(|e| e.to_string())?;
     let mut content =
         session_manager.export_jsonl().ok_or_else(|| "no session content".to_string())?;
@@ -164,7 +166,8 @@ pub fn export_session_html(
     path: &std::path::Path,
     nerv_dir: &std::path::Path,
 ) -> Result<String, String> {
-    let mut session_manager = crate::session::SessionManager::new(&repo_dir_for(session_id, nerv_dir));
+    let mut session_manager =
+        crate::session::SessionManager::new(&repo_dir_for(session_id, nerv_dir));
     session_manager.load_session(session_id).map_err(|e| e.to_string())?;
     let entries = session_manager.entries().to_vec();
     render_html_to_file(&entries, path)
@@ -509,15 +512,19 @@ function toggleTool(header) {
     // Build per-compaction fingerprint sets of live verbatim-window messages
     // so we can skip duplicates (old sessions stored the full branch in
     // archived_messages, including the verbatim window that stays in the DB).
-    let mut verbatim_fingerprints: std::collections::HashMap<&str, std::collections::HashSet<String>> =
-        std::collections::HashMap::new();
+    let mut verbatim_fingerprints: std::collections::HashMap<
+        &str,
+        std::collections::HashSet<String>,
+    > = std::collections::HashMap::new();
     for entry in entries {
         if let SessionEntry::Compaction(ce) = entry {
             let mut collecting = false;
             for e2 in entries {
                 match e2 {
                     SessionEntry::Message(me) => {
-                        if me.id == ce.first_kept_entry_id { collecting = true; }
+                        if me.id == ce.first_kept_entry_id {
+                            collecting = true;
+                        }
                         if collecting {
                             let key = serde_json::to_string(&me.message).unwrap_or_default();
                             verbatim_fingerprints.entry(ce.id.as_str()).or_default().insert(key);
@@ -563,25 +570,19 @@ function toggleTool(header) {
                                 ContentBlock::ToolCall { id, name, arguments } => {
                                     let args_str = serde_json::to_string(arguments)
                                         .unwrap_or_else(|_| arguments.to_string());
-                                    let preview =
-                                        args_preview_for(name, arguments, &args_str);
-                                    let output_html =
-                                        if let Some((disp, content_text, is_err)) =
-                                            call_result.get(id.as_str())
-                                        {
-                                            let txt = disp.as_deref().unwrap_or(content_text);
-                                            let style = if *is_err {
-                                                "color:#f87171"
-                                            } else {
-                                                ""
-                                            };
-                                            format!(
-                                                "<div class='tool-output' style='{style}'>{}</div>",
-                                                html_escape(txt)
-                                            )
-                                        } else {
-                                            String::new()
-                                        };
+                                    let preview = args_preview_for(name, arguments, &args_str);
+                                    let output_html = if let Some((disp, content_text, is_err)) =
+                                        call_result.get(id.as_str())
+                                    {
+                                        let txt = disp.as_deref().unwrap_or(content_text);
+                                        let style = if *is_err { "color:#f87171" } else { "" };
+                                        format!(
+                                            "<div class='tool-output' style='{style}'>{}</div>",
+                                            html_escape(txt)
+                                        )
+                                    } else {
+                                        String::new()
+                                    };
                                     html.push_str(&format!(
                                         "<div class='tool-wrapper'>\
                                         <div class='tool-header' onclick='toggleTool(this)'>\
@@ -870,7 +871,9 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::types::{AgentMessage, AssistantMessage, ContentBlock, ContentItem, StopReason};
+    use crate::agent::types::{
+        AgentMessage, AssistantMessage, ContentBlock, ContentItem, StopReason,
+    };
     use crate::session::types::{CompactionEntry, MessageEntry, SessionEntry};
 
     pub(crate) const USER_ENTRY_ID: &str = "u1";
@@ -980,14 +983,8 @@ mod tests {
         let html = render_to_string(&entries);
 
         // Archived content must appear verbatim in the HTML
-        assert!(
-            html.contains("archived question"),
-            "archived user text must be in HTML"
-        );
-        assert!(
-            html.contains("archived answer"),
-            "archived assistant text must be in HTML"
-        );
+        assert!(html.contains("archived question"), "archived user text must be in HTML");
+        assert!(html.contains("archived answer"), "archived assistant text must be in HTML");
     }
 
     #[test]
@@ -1007,7 +1004,8 @@ mod tests {
         // If the text is inside a <details>, a <details> tag would appear before it
         // with no matching </details> before the text. Check it's outside.
         let details_before: Vec<_> = html[..old_turn_pos].match_indices("<details").collect();
-        let details_closed_before: Vec<_> = html[..old_turn_pos].match_indices("</details>").collect();
+        let details_closed_before: Vec<_> =
+            html[..old_turn_pos].match_indices("</details>").collect();
         assert_eq!(
             details_before.len(),
             details_closed_before.len(),
@@ -1019,9 +1017,7 @@ mod tests {
     fn html_archived_messages_appear_before_compaction_banner() {
         let entries = vec![
             user_entry("after compaction"),
-            compaction_entry_with_archived(vec![
-                archived_user("before compaction"),
-            ]),
+            compaction_entry_with_archived(vec![archived_user("before compaction")]),
         ];
 
         let html = render_to_string(&entries);
@@ -1048,7 +1044,8 @@ mod tests {
 
         // Banner contains '⟳ compaction' marker text.
         let banner_pos = html.find("⟳ compaction").expect("compaction banner missing");
-        let surviving_pos = html.find("new question after compaction").expect("surviving text missing");
+        let surviving_pos =
+            html.find("new question after compaction").expect("surviving text missing");
 
         assert!(
             surviving_pos < banner_pos,
@@ -1079,10 +1076,7 @@ mod tests {
 
     #[test]
     fn html_empty_archived_messages_no_crash() {
-        let entries = vec![
-            compaction_entry_with_archived(vec![]),
-            user_entry("clean session"),
-        ];
+        let entries = vec![compaction_entry_with_archived(vec![]), user_entry("clean session")];
 
         let html = render_to_string(&entries);
         assert!(html.contains("clean session"));
@@ -1110,10 +1104,7 @@ mod tests {
 
     #[test]
     fn session_stats_no_archived_messages_unaffected() {
-        let entries = vec![
-            user_entry("q"),
-            assistant_entry("a"),
-        ];
+        let entries = vec![user_entry("q"), assistant_entry("a")];
 
         let stats = SessionStats::from_entries(&entries);
         assert_eq!(stats.api_calls, 1);

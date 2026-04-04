@@ -74,11 +74,7 @@ impl AgentTool for EchoTool {
     fn validate(&self, _input: &serde_json::Value) -> Result<(), ToolError> {
         Ok(())
     }
-    fn execute(
-        &self,
-        input: serde_json::Value,
-        _cancel: &CancelFlag,
-    ) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _cancel: &CancelFlag) -> ToolResult {
         ToolResult::ok(format!("echo: {}", input["text"].as_str().unwrap_or("(no input)")))
     }
 }

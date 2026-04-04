@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
 /// Phase of the plan-mode state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,9 +59,9 @@ impl AllowedDirs {
     }
 }
 
-
 use crossbeam_channel::Sender;
 
+use super::compaction_controller::CompactionController;
 use super::model_registry::ModelRegistry;
 use super::resource_loader::LoadedResources;
 use super::system_prompt::build_system_prompt_for_model;
@@ -72,11 +72,10 @@ use crate::agent::types::{
     AgentEvent, AgentMessage, AssistantMessage, ContentItem, Cost, EffortLevel, Model,
     ModelPricing, StopReason, ThinkingLevel,
 };
-use crate::now_millis;
 use crate::compaction::summarize::{generate_session_name, generate_summary};
 use crate::compaction::{self, CompactionResult};
-use super::compaction_controller::CompactionController;
 use crate::core::config::NervConfig;
+use crate::now_millis;
 use crate::session::SessionManager;
 
 #[derive(Debug, Clone, Copy)]
@@ -392,8 +391,8 @@ impl AgentSession {
             // Read-only tools + write + edit (write/edit are gated to plan_path only
             // via permissions).
             self.tool_registry.set_active(&[
-                "read", "epsh", "grep", "find", "ls", "symbols", "codemap", "memory",
-                "write", "edit",
+                "read", "epsh", "grep", "find", "ls", "symbols", "codemap", "memory", "write",
+                "edit",
             ]);
         } else {
             self.plan_path = None;
@@ -449,11 +448,13 @@ impl AgentSession {
                                     })
                                 } else if let Some(o) = v.as_object() {
                                     let label = o.get("label")?.as_str()?.to_string();
-                                    let subtext = o.get("subtext")
+                                    let subtext = o
+                                        .get("subtext")
                                         .and_then(|s| s.as_str())
                                         .unwrap_or("")
                                         .to_string();
-                                    let recommended = o.get("recommended")
+                                    let recommended = o
+                                        .get("recommended")
                                         .and_then(|r| r.as_bool())
                                         .unwrap_or(false);
                                     Some(PlanOption { label, subtext, recommended })
@@ -499,10 +500,9 @@ impl AgentSession {
 
     /// Inject a follow-up prompt asking the model to dig deeper.
     pub fn inject_plan_followup(&mut self, event_tx: &Sender<AgentSessionEvent>) {
-        let text =
-            "The plan needs more depth. Please ask me more targeted clarifying questions \
+        let text = "The plan needs more depth. Please ask me more targeted clarifying questions \
              to sharpen it further. Use the same questions JSON format."
-                .to_string();
+            .to_string();
         self.plan_phase = PlanPhase::Refine;
         let _ = event_tx.send(AgentSessionEvent::PlanPhaseChanged { phase: PlanPhase::Refine });
         self.prompt(text, event_tx);
@@ -654,10 +654,12 @@ impl AgentSession {
             // Write/edit to the plan file are always allowed without a gate.
             let plan_path = Some(self.resolve_plan_path());
 
-            self.agent.set_permission_fn(
-                Some(std::sync::Arc::new(move |tool: &str, args: &serde_json::Value| {
+            self.agent.set_permission_fn(Some(std::sync::Arc::new(
+                move |tool: &str, args: &serde_json::Value| {
                     // In plan mode, allow write/edit unconditionally to the plan file.
-                    if (tool == "write" || tool == "edit") && let Some(ref pp) = plan_path {
+                    if (tool == "write" || tool == "edit")
+                        && let Some(ref pp) = plan_path
+                    {
                         let target = args["path"].as_str().unwrap_or("");
                         let target_path = std::path::Path::new(target);
                         if target_path == pp.as_path() {
@@ -666,8 +668,7 @@ impl AgentSession {
                         // Absolute comparison via canonicalize fallback
                         let canon_target = std::fs::canonicalize(target_path)
                             .unwrap_or_else(|_| target_path.to_path_buf());
-                        let canon_plan = std::fs::canonicalize(pp)
-                            .unwrap_or_else(|_| pp.clone());
+                        let canon_plan = std::fs::canonicalize(pp).unwrap_or_else(|_| pp.clone());
                         if canon_target == canon_plan {
                             return true;
                         }
@@ -719,7 +720,8 @@ impl AgentSession {
                             approved
                         }
                     }
-                })));
+                },
+            )));
         }
 
         // Output gate: fires after bash executes when filtered output exceeds
@@ -727,8 +729,8 @@ impl AgentSession {
         // the TUI.
         {
             let output_tx = event_tx.clone();
-            self.agent.set_output_gate_fn(
-                Some(std::sync::Arc::new(move |info: crate::agent::agent::OutputGateInfo| {
+            self.agent.set_output_gate_fn(Some(std::sync::Arc::new(
+                move |info: crate::agent::agent::OutputGateInfo| {
                     let (resp_tx, resp_rx) = crossbeam_channel::bounded(1);
                     let _ = output_tx.send(AgentSessionEvent::OutputGateRequest {
                         command: info.command.clone(),
@@ -741,13 +743,14 @@ impl AgentSession {
                     } else {
                         crate::agent::agent::OutputGateDecision::Deny
                     }
-                })));
+                },
+            )));
         }
 
         // Context gate (circuit breaker for context growth)
         let gate_tx = event_tx.clone();
-        self.agent.set_context_gate_fn(
-            Some(std::sync::Arc::new(move |info: crate::agent::agent::ContextGateInfo| {
+        self.agent.set_context_gate_fn(Some(std::sync::Arc::new(
+            move |info: crate::agent::agent::ContextGateInfo| {
                 if info.tool_rounds < 4 || info.prev_tokens == 0 {
                     return true;
                 }
@@ -767,7 +770,8 @@ impl AgentSession {
                     response_tx: resp_tx,
                 });
                 resp_rx.recv().unwrap_or(false)
-            })));
+            },
+        )));
     }
 
     /// Handle overflow compaction and session naming after a completed prompt.
@@ -858,9 +862,7 @@ impl AgentSession {
 
         // Plan mode: extract questions from the last assistant message.
         // Only fire during Research/Refine — not once we've reached Interview or Ready.
-        if self.plan_mode
-            && matches!(self.plan_phase, PlanPhase::Research | PlanPhase::Refine)
-        {
+        if self.plan_mode && matches!(self.plan_phase, PlanPhase::Research | PlanPhase::Refine) {
             self.handle_plan_turn(new_messages, event_tx);
         }
     }
@@ -873,28 +875,25 @@ impl AgentSession {
         new_messages: Vec<AgentMessage>,
         event_tx: &Sender<AgentSessionEvent>,
     ) {
-        let last_text = new_messages
-            .iter()
-            .rev()
-            .find_map(|m| {
-                if let AgentMessage::Assistant(a) = m {
-                    let t: String = a
-                        .content
-                        .iter()
-                        .filter_map(|b| {
-                            if let crate::agent::types::ContentBlock::Text { text } = b {
-                                Some(text.as_str())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("");
-                    if t.is_empty() { None } else { Some(t) }
-                } else {
-                    None
-                }
-            });
+        let last_text = new_messages.iter().rev().find_map(|m| {
+            if let AgentMessage::Assistant(a) = m {
+                let t: String = a
+                    .content
+                    .iter()
+                    .filter_map(|b| {
+                        if let crate::agent::types::ContentBlock::Text { text } = b {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                if t.is_empty() { None } else { Some(t) }
+            } else {
+                None
+            }
+        });
 
         let Some(text) = last_text else { return };
 
@@ -909,13 +908,10 @@ impl AgentSession {
                 // Questions found — move to Interview phase.
                 self.plan_phase = PlanPhase::Interview;
                 let plan_path = self.resolve_plan_path();
-                let _ = event_tx.send(AgentSessionEvent::PlanPhaseChanged {
-                    phase: PlanPhase::Interview,
-                });
-                let _ = event_tx.send(AgentSessionEvent::PlanQuestionsReady {
-                    questions,
-                    plan_path,
-                });
+                let _ = event_tx
+                    .send(AgentSessionEvent::PlanPhaseChanged { phase: PlanPhase::Interview });
+                let _ =
+                    event_tx.send(AgentSessionEvent::PlanQuestionsReady { questions, plan_path });
             }
             None => {
                 // No JSON block — inject a one-shot correction prompt.
@@ -926,7 +922,9 @@ impl AgentSession {
                      Each option must have label, subtext, and recommended fields. \
                      Use an empty array if you are satisfied: {\"questions\":[]}"
                         .to_string();
-                crate::log::info("plan mode: missing questions block — injecting correction prompt");
+                crate::log::info(
+                    "plan mode: missing questions block — injecting correction prompt",
+                );
                 self.prompt(correction, event_tx);
             }
         }
@@ -938,7 +936,8 @@ impl AgentSession {
         if self.talk_mode {
             self.agent.set_tools(Vec::new());
             self.agent.set_system_prompt(
-                "You are a helpful assistant. Answer clearly and concisely.".to_string());
+                "You are a helpful assistant. Answer clearly and concisely.".to_string(),
+            );
             return;
         }
 
@@ -1123,7 +1122,8 @@ impl AgentSession {
 
         // Notify the UI that the assistant turn has been persisted so /copy knows the node ID.
         if let Some(node_id) = self.session_manager.leaf_id() {
-            let _ = event_tx.send(AgentSessionEvent::ResponseSaved { node_id: node_id.to_string() });
+            let _ =
+                event_tx.send(AgentSessionEvent::ResponseSaved { node_id: node_id.to_string() });
         }
 
         // Fire onResponseComplete for successful, non-error turns.
@@ -1145,16 +1145,18 @@ impl AgentSession {
     /// Rebuild agent message history from the current session entries.
     pub(crate) fn reload_agent_context(&mut self) {
         let entries = self.session_manager.entries();
-        self.agent.set_messages(entries
-            .iter()
-            .filter_map(|e| {
-                if let crate::session::types::SessionEntry::Message(me) = e {
-                    Some(me.message.clone())
-                } else {
-                    None
-                }
-            })
-            .collect());
+        self.agent.set_messages(
+            entries
+                .iter()
+                .filter_map(|e| {
+                    if let crate::session::types::SessionEntry::Message(me) = e {
+                        Some(me.message.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        );
     }
 
     /// Resolve the provider and model id to use for background utility tasks
@@ -1178,7 +1180,10 @@ impl AgentSession {
 
         // 2. Default utility model (haiku) on anthropic
         if let Some(provider) = registry.get("anthropic") {
-            return Some((provider, crate::core::model_registry::DEFAULT_COMPACTION_MODEL.to_string()));
+            return Some((
+                provider,
+                crate::core::model_registry::DEFAULT_COMPACTION_MODEL.to_string(),
+            ));
         }
 
         // 3. Fall back to the current session model
@@ -1198,13 +1203,8 @@ impl AgentSession {
             .config
             .lite_compact_age
             .unwrap_or(crate::agent::transform::LITE_COMPACT_AGE_THRESHOLD);
-        let tokens_before_lite: usize = self
-            .agent
-            .state
-            .messages
-            .iter()
-            .map(compaction::estimate_tokens)
-            .sum();
+        let tokens_before_lite: usize =
+            self.agent.state.messages.iter().map(compaction::estimate_tokens).sum();
         let compactable = self.tool_registry.lite_compactable_names();
         let snapshot = self.agent.state.messages.clone();
         let zeroed = crate::agent::transform::lite_compact(
@@ -1214,20 +1214,10 @@ impl AgentSession {
         );
         if zeroed > 0 {
             crate::log::info(&format!("lite-compact: zeroed {zeroed} stale tool results"));
-            let context_window = self
-                .agent
-                .state
-                .model
-                .as_ref()
-                .map(|m| m.context_window)
-                .unwrap_or(200_000);
-            let estimated: usize = self
-                .agent
-                .state
-                .messages
-                .iter()
-                .map(compaction::estimate_tokens)
-                .sum();
+            let context_window =
+                self.agent.state.model.as_ref().map(|m| m.context_window).unwrap_or(200_000);
+            let estimated: usize =
+                self.agent.state.messages.iter().map(compaction::estimate_tokens).sum();
             if !compaction::should_compact(estimated, context_window, &self.compaction.settings) {
                 let _ = self.session_manager.append_lite_compaction(
                     zeroed as u32,
@@ -1276,11 +1266,9 @@ impl AgentSession {
                         self.compaction.settings.keep_recent_tokens,
                         self.compaction.settings.verbatim_window_tokens,
                     );
-                    let first_kept_id =
-                        branch[cut.first_kept_entry_index].id().to_string();
+                    let first_kept_id = branch[cut.first_kept_entry_index].id().to_string();
                     let tokens_before = compaction::tokens_before_compaction(&branch);
-                    let to_summarize: Vec<AgentMessage> = branch
-                        [..cut.verbatim_start_index]
+                    let to_summarize: Vec<AgentMessage> = branch[..cut.verbatim_start_index]
                         .iter()
                         .filter_map(|e| {
                             if let crate::session::types::SessionEntry::Message(me) = e {
@@ -1318,32 +1306,28 @@ impl AgentSession {
                         super::notifications::NotificationMatcher::OnCompactionDone,
                         &self.config.notifications,
                     );
-                    return Ok(compaction::CompactionOutcome::Full(
-                        compaction::CompactionResult {
-                            summary,
-                            structured: None,
-                            first_kept_entry_id: first_kept_id,
-                            tokens_before,
-                            tokens_after,
-                            model_id: String::new(),
-                        },
-                    ));
+                    return Ok(compaction::CompactionOutcome::Full(compaction::CompactionResult {
+                        summary,
+                        structured: None,
+                        first_kept_entry_id: first_kept_id,
+                        tokens_before,
+                        tokens_after,
+                        model_id: String::new(),
+                    }));
                 }
             }
         }
 
         // Full compact: resolve the summariser provider and model.
-        let (provider, model_id) =
-            self.resolve_utility_provider(self.config.compaction_model.as_deref()).ok_or_else(|| {
+        let (provider, model_id) = self
+            .resolve_utility_provider(self.config.compaction_model.as_deref())
+            .ok_or_else(|| {
                 "No provider available for compaction. \
                      Set compaction_model in ~/.nerv/config.json or log in to Anthropic (/login)."
                     .to_string()
             })?;
-        let summarizer_context_window: u32 = self
-            .model_registry
-            .find_model(&model_id)
-            .map(|m| m.context_window)
-            .unwrap_or(200_000);
+        let summarizer_context_window: u32 =
+            self.model_registry.find_model(&model_id).map(|m| m.context_window).unwrap_or(200_000);
 
         // The kept window is split into two parts for cache efficiency:
         //   [first_kept_entry_index .. verbatim_start_index)  → summarized by LLM

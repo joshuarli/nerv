@@ -185,8 +185,7 @@ fn bench_codemap_single_file(c: &mut Criterion) {
 
 fn bench_codemap_query_filter(c: &mut Criterion) {
     let index = real_index();
-    let params =
-        CodemapParams { query: "agent", kind: None, file: None, depth: Depth::Full };
+    let params = CodemapParams { query: "agent", kind: None, file: None, depth: Depth::Full };
     c.bench_function("codemap_full_query_agent", |b| {
         b.iter(|| black_box(codemap::codemap(&index, src_dir(), &params)));
     });

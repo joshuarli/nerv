@@ -23,7 +23,9 @@ impl AgentTool for FindTool {
     fn name(&self) -> &str {
         "find"
     }
-    fn is_readonly(&self) -> bool { true }
+    fn is_readonly(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
         "Find files by name pattern using fd."
     }
@@ -42,11 +44,7 @@ impl AgentTool for FindTool {
         }
         Ok(())
     }
-    fn execute(
-        &self,
-        input: serde_json::Value,
-        _cancel: &CancelFlag,
-    ) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _cancel: &CancelFlag) -> ToolResult {
         let pattern = input["pattern"].as_str().unwrap_or("");
         let path = input["path"].as_str().unwrap_or(".");
         let resolved_path = self.resolve_path(path);
@@ -82,7 +80,10 @@ impl AgentTool for FindTool {
                         .filter(|l| !l.starts_with("[stderr]") && !l.is_empty())
                         .count();
                     let display = format!("{} files", file_count);
-                    ToolResult::ok_with_details(content, ToolDetails { display: Some(display), ..Default::default() })
+                    ToolResult::ok_with_details(
+                        content,
+                        ToolDetails { display: Some(display), ..Default::default() },
+                    )
                 }
             }
             Err(e) => ToolResult::error(format!("Error running fd: {}", e)),

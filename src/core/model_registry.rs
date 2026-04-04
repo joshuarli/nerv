@@ -75,8 +75,7 @@ impl ModelRegistry {
         // Codex uses the ChatGPT backend Responses API, not the public OpenAI API.
         if let Some((api_key, _)) = codex_cred {
             let extra_headers = config.effective_headers("codex");
-            let provider =
-                crate::agent::CodexProvider::new(api_key).with_headers(extra_headers);
+            let provider = crate::agent::CodexProvider::new(api_key).with_headers(extra_headers);
             registry.register("codex", Arc::new(provider));
         }
 
@@ -311,7 +310,16 @@ fn builtin_anthropic_models() -> Vec<Model> {
 
 fn builtin_codex_models() -> Vec<Model> {
     #[allow(clippy::too_many_arguments)]
-    fn m(id: &str, name: &str, ctx: u32, max_out: u32, reasoning: bool, inp: f64, out: f64, cr: f64) -> Model {
+    fn m(
+        id: &str,
+        name: &str,
+        ctx: u32,
+        max_out: u32,
+        reasoning: bool,
+        inp: f64,
+        out: f64,
+        cr: f64,
+    ) -> Model {
         Model {
             id: id.into(),
             name: name.into(),
@@ -325,16 +333,16 @@ fn builtin_codex_models() -> Vec<Model> {
         }
     }
     vec![
-        m("gpt-5",               "GPT-5",               272_000, 128_000, true,  3.0,  12.0, 0.3),
-        m("gpt-5.1",             "GPT-5.1",             272_000, 128_000, true,  1.25, 10.0, 0.125),
-        m("gpt-5.1-codex-max",   "GPT-5.1 Codex Max",   272_000, 128_000, true,  1.25, 10.0, 0.125),
-        m("gpt-5.1-codex-mini",  "GPT-5.1 Codex Mini",  272_000, 128_000, true,  0.25,  2.0, 0.025),
-        m("gpt-5.2",             "GPT-5.2",             272_000, 128_000, true,  1.75, 14.0, 0.175),
-        m("gpt-5.2-codex",       "GPT-5.2 Codex",       272_000, 128_000, true,  1.75, 14.0, 0.175),
-        m("gpt-5.3-codex",       "GPT-5.3 Codex",       272_000, 128_000, true,  1.75, 14.0, 0.175),
-        m("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark", 128_000, 128_000, true,  0.0,   0.0, 0.0),
-        m("gpt-5.4",             "GPT-5.4",             272_000, 128_000, true,  2.5,  15.0, 0.25),
-        m("gpt-5.4-mini",        "GPT-5.4 Mini",        272_000, 128_000, true,  0.75,  4.5, 0.075),
+        m("gpt-5", "GPT-5", 272_000, 128_000, true, 3.0, 12.0, 0.3),
+        m("gpt-5.1", "GPT-5.1", 272_000, 128_000, true, 1.25, 10.0, 0.125),
+        m("gpt-5.1-codex-max", "GPT-5.1 Codex Max", 272_000, 128_000, true, 1.25, 10.0, 0.125),
+        m("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini", 272_000, 128_000, true, 0.25, 2.0, 0.025),
+        m("gpt-5.2", "GPT-5.2", 272_000, 128_000, true, 1.75, 14.0, 0.175),
+        m("gpt-5.2-codex", "GPT-5.2 Codex", 272_000, 128_000, true, 1.75, 14.0, 0.175),
+        m("gpt-5.3-codex", "GPT-5.3 Codex", 272_000, 128_000, true, 1.75, 14.0, 0.175),
+        m("gpt-5.3-codex-spark", "GPT-5.3 Codex Spark", 128_000, 128_000, true, 0.0, 0.0, 0.0),
+        m("gpt-5.4", "GPT-5.4", 272_000, 128_000, true, 2.5, 15.0, 0.25),
+        m("gpt-5.4-mini", "GPT-5.4 Mini", 272_000, 128_000, true, 0.75, 4.5, 0.075),
     ]
 }
 
@@ -346,7 +354,16 @@ impl ModelPricing {
 
 fn builtin_openrouter_models() -> Vec<Model> {
     #[allow(clippy::too_many_arguments)]
-    fn m(id: &str, name: &str, ctx: u32, max_out: u32, reasoning: bool, inp: f64, out: f64, cr: f64) -> Model {
+    fn m(
+        id: &str,
+        name: &str,
+        ctx: u32,
+        max_out: u32,
+        reasoning: bool,
+        inp: f64,
+        out: f64,
+        cr: f64,
+    ) -> Model {
         Model {
             id: id.into(),
             name: name.into(),
@@ -361,27 +378,108 @@ fn builtin_openrouter_models() -> Vec<Model> {
     }
     vec![
         // Auto-router: OpenRouter picks the best available model for each request.
-        m("auto",                           "Auto (OpenRouter)",                2_000_000, 30_000,  true,  0.0,  0.0,  0.0),
+        m("auto", "Auto (OpenRouter)", 2_000_000, 30_000, true, 0.0, 0.0, 0.0),
         // Anthropic via OpenRouter
-        m("anthropic/claude-sonnet-4.6",    "Claude Sonnet 4.6 (OpenRouter)",   1_000_000, 128_000, true,  3.0,  15.0, 0.3),
-        m("anthropic/claude-opus-4.6",      "Claude Opus 4.6 (OpenRouter)",     1_000_000, 128_000, true,  5.0,  25.0, 0.5),
-        m("anthropic/claude-haiku-4.5",     "Claude Haiku 4.5 (OpenRouter)",    200_000,   64_000,  true,  1.0,  5.0,  0.1),
+        m(
+            "anthropic/claude-sonnet-4.6",
+            "Claude Sonnet 4.6 (OpenRouter)",
+            1_000_000,
+            128_000,
+            true,
+            3.0,
+            15.0,
+            0.3,
+        ),
+        m(
+            "anthropic/claude-opus-4.6",
+            "Claude Opus 4.6 (OpenRouter)",
+            1_000_000,
+            128_000,
+            true,
+            5.0,
+            25.0,
+            0.5,
+        ),
+        m(
+            "anthropic/claude-haiku-4.5",
+            "Claude Haiku 4.5 (OpenRouter)",
+            200_000,
+            64_000,
+            true,
+            1.0,
+            5.0,
+            0.1,
+        ),
         // Google via OpenRouter
-        m("google/gemini-2.5-pro",          "Gemini 2.5 Pro (OpenRouter)",      1_048_576, 65_536,  true,  1.25, 10.0, 0.125),
-        m("google/gemini-2.5-flash",        "Gemini 2.5 Flash (OpenRouter)",    1_048_576, 65_535,  true,  0.3,  2.5,  0.03),
+        m(
+            "google/gemini-2.5-pro",
+            "Gemini 2.5 Pro (OpenRouter)",
+            1_048_576,
+            65_536,
+            true,
+            1.25,
+            10.0,
+            0.125,
+        ),
+        m(
+            "google/gemini-2.5-flash",
+            "Gemini 2.5 Flash (OpenRouter)",
+            1_048_576,
+            65_535,
+            true,
+            0.3,
+            2.5,
+            0.03,
+        ),
         // DeepSeek via OpenRouter
-        m("deepseek/deepseek-r1",           "DeepSeek R1 (OpenRouter)",         64_000,    16_000,  true,  0.7,  2.5,  0.0),
-        m("deepseek/deepseek-chat-v3-0324", "DeepSeek V3 (OpenRouter)",         163_840,   4_096,   false, 0.2,  0.77, 0.135),
+        m("deepseek/deepseek-r1", "DeepSeek R1 (OpenRouter)", 64_000, 16_000, true, 0.7, 2.5, 0.0),
+        m(
+            "deepseek/deepseek-chat-v3-0324",
+            "DeepSeek V3 (OpenRouter)",
+            163_840,
+            4_096,
+            false,
+            0.2,
+            0.77,
+            0.135,
+        ),
         // OpenAI via OpenRouter
-        m("openai/gpt-4o",                  "GPT-4o (OpenRouter)",              128_000,   16_384,  false, 2.5,  10.0, 1.25),
-        m("openai/gpt-4.1",                 "GPT-4.1 (OpenRouter)",             1_047_576, 32_768,  false, 2.0,  8.0,  0.5),
-        m("openai/o3",                      "o3 (OpenRouter)",                  200_000,   100_000, true,  2.0,  8.0,  0.5),
-        m("openai/o4-mini",                 "o4 Mini (OpenRouter)",             200_000,   100_000, true,  1.1,  4.4,  0.275),
-        m("openai/gpt-5",                   "GPT-5 (OpenRouter)",               400_000,   128_000, true,  1.25, 10.0, 0.125),
-        m("openai/gpt-5.1",                 "GPT-5.1 (OpenRouter)",             400_000,   128_000, true,  1.25, 10.0, 0.125),
+        m("openai/gpt-4o", "GPT-4o (OpenRouter)", 128_000, 16_384, false, 2.5, 10.0, 1.25),
+        m("openai/gpt-4.1", "GPT-4.1 (OpenRouter)", 1_047_576, 32_768, false, 2.0, 8.0, 0.5),
+        m("openai/o3", "o3 (OpenRouter)", 200_000, 100_000, true, 2.0, 8.0, 0.5),
+        m("openai/o4-mini", "o4 Mini (OpenRouter)", 200_000, 100_000, true, 1.1, 4.4, 0.275),
+        m("openai/gpt-5", "GPT-5 (OpenRouter)", 400_000, 128_000, true, 1.25, 10.0, 0.125),
+        m("openai/gpt-5.1", "GPT-5.1 (OpenRouter)", 400_000, 128_000, true, 1.25, 10.0, 0.125),
         // Meta via OpenRouter
-        m("meta-llama/llama-4-maverick",    "Llama 4 Maverick (OpenRouter)",    1_048_576, 16_384,  false, 0.15, 0.6,  0.0),
-        m("meta-llama/llama-4-scout",       "Llama 4 Scout (OpenRouter)",       327_680,   16_384,  false, 0.08, 0.3,  0.0),
-        m("qwen/qwen3.6-plus-preview:free", "Qwen3.6 Plus Preview Free (OpenRouter)", 131_072, 16_384, false, 0.0,  0.0,  0.0),
+        m(
+            "meta-llama/llama-4-maverick",
+            "Llama 4 Maverick (OpenRouter)",
+            1_048_576,
+            16_384,
+            false,
+            0.15,
+            0.6,
+            0.0,
+        ),
+        m(
+            "meta-llama/llama-4-scout",
+            "Llama 4 Scout (OpenRouter)",
+            327_680,
+            16_384,
+            false,
+            0.08,
+            0.3,
+            0.0,
+        ),
+        m(
+            "qwen/qwen3.6-plus-preview:free",
+            "Qwen3.6 Plus Preview Free (OpenRouter)",
+            131_072,
+            16_384,
+            false,
+            0.0,
+            0.0,
+            0.0,
+        ),
     ]
 }

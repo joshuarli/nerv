@@ -166,7 +166,8 @@ fn compaction_preserves_messages_after_cut_point() {
         archived_messages: vec![],
         preserved_user_messages: vec![],
         compaction_type: "full".into(),
-    }).unwrap();
+    })
+    .unwrap();
 
     let ctx = mgr.build_session_context();
     // compaction summary + msgs 7,8,9 = 4
@@ -199,7 +200,8 @@ fn compaction_survives_reload() {
         archived_messages: vec![],
         preserved_user_messages: vec![],
         compaction_type: "full".into(),
-    }).unwrap();
+    })
+    .unwrap();
 
     let session_id = mgr.session_id().to_string();
     let ctx = mgr.load_session(&session_id).unwrap();
@@ -235,7 +237,8 @@ fn compaction_with_tool_calls_across_boundary() {
         archived_messages: vec![],
         preserved_user_messages: vec![],
         compaction_type: "full".into(),
-    }).unwrap();
+    })
+    .unwrap();
 
     let ctx = mgr.build_session_context();
     assert_eq!(ctx.messages.len(), 5);
@@ -449,7 +452,8 @@ fn compaction_only_removes_current_branch_entries() {
         archived_messages: vec![],
         preserved_user_messages: vec![],
         compaction_type: "full".into(),
-    }).unwrap();
+    })
+    .unwrap();
 
     // Branch B sentinel should still be in the DB
     let all_entries = mgr.entries();
@@ -485,7 +489,8 @@ fn compaction_removes_pre_cut_entries_on_current_branch() {
         archived_messages: vec![],
         preserved_user_messages: vec![],
         compaction_type: "full".into(),
-    }).unwrap();
+    })
+    .unwrap();
 
     let ctx = mgr.build_session_context();
     // summary + 3 kept messages
@@ -791,7 +796,8 @@ fn compaction_removes_fts_entries() {
         archived_messages: vec![],
         preserved_user_messages: vec![],
         compaction_type: "full".into(),
-    }).unwrap();
+    })
+    .unwrap();
 
     // The compacted message's text should be gone from search
     let results = mgr.search_sessions("garblotz");

@@ -17,8 +17,8 @@ use crate::core::agent_session::{
 use crate::core::config::NervConfig;
 use crate::core::model_registry::ModelRegistry;
 use crate::session::types::SessionTreeNode;
-use crate::tui;
 use crate::str::StrExt as _;
+use crate::tui;
 
 /// Returned by [`InteractiveMode::handle_event`] when a full-screen picker
 /// should be launched by the caller.
@@ -43,10 +43,7 @@ pub enum PickerRequest {
     /// Toggle the nervHud line on/off.
     ToggleHud,
     /// Launch the plan interview TUI.
-    PlanInterview {
-        questions: Vec<PlanQuestion>,
-        plan_path: PathBuf,
-    },
+    PlanInterview { questions: Vec<PlanQuestion>, plan_path: PathBuf },
 }
 
 pub struct InteractiveMode {
@@ -208,7 +205,8 @@ impl InteractiveMode {
                 self.plan_phase = PlanPhase::Research;
                 self.pending_plan_ready = false;
                 layout.footer.set_plan_mode(enabled);
-                let label = if enabled { "Plan mode on — researching…" } else { "Plan mode off" };
+                let label =
+                    if enabled { "Plan mode on — researching…" } else { "Plan mode off" };
                 self.status_message = Some(label.into());
             }
             AgentSessionEvent::PlanPhaseChanged { phase } => {
@@ -281,8 +279,8 @@ impl InteractiveMode {
                 };
                 // Compute which directory 'a' would grant, for display.
                 // Only offer 'a' when we can extract a concrete path from the args.
-                let allow_dir = crate::core::permissions::path_for_args(&tool, &args)
-                    .map(|path_str| {
+                let allow_dir =
+                    crate::core::permissions::path_for_args(&tool, &args).map(|path_str| {
                         let dir = crate::core::permissions::allow_dir_for_path(&path_str);
                         (dir.clone(), crate::core::permissions::path_to_display(&dir))
                     });
@@ -292,13 +290,13 @@ impl InteractiveMode {
                     Some((_, label)) if is_write_tool => {
                         format!("y = allow, n = deny, a = allow write access ({})", label)
                     }
-                    Some((_, label)) => format!("y = allow, n = deny, a = allow read access ({})", label),
+                    Some((_, label)) => {
+                        format!("y = allow, n = deny, a = allow read access ({})", label)
+                    }
                     None => "y = allow, n = deny".to_string(),
                 };
-                self.status_message = Some(format!(
-                    "⚠ Permission: {}\n  {}\n  {}",
-                    tool, detail, prompt_line
-                ));
+                self.status_message =
+                    Some(format!("⚠ Permission: {}\n  {}\n  {}", tool, detail, prompt_line));
                 self.status_is_error = true;
                 self.pending_permission = Some(response_tx);
                 self.pending_permission_details = Some((tool.clone(), args.clone()));
@@ -513,7 +511,12 @@ impl InteractiveMode {
                 layout.footer.set_compacting(true);
                 tui.request_render(false);
             }
-            AgentSessionEvent::AutoCompactionEnd { summary, structured: _, will_retry, messages } => {
+            AgentSessionEvent::AutoCompactionEnd {
+                summary,
+                structured: _,
+                will_retry,
+                messages,
+            } => {
                 layout.footer.set_compacting(false);
                 self.is_compacting = false;
                 if will_retry {
@@ -861,9 +864,8 @@ impl InteractiveMode {
                 // The main key handler watches pending_plan_confirm_text and handles
                 // y (enter plan mode + resend) and n (resend as normal).
                 self.pending_plan_confirm_text = Some(text);
-                self.status_message = Some(
-                    "Switch to plan mode for this request?  y = yes  n = no".into(),
-                );
+                self.status_message =
+                    Some("Switch to plan mode for this request?  y = yes  n = no".into());
                 self.status_is_error = true;
                 return None;
             }
@@ -1114,8 +1116,7 @@ impl InteractiveMode {
                         Some("Usage: /login <provider>  (available: anthropic, codex)  — note: openrouter requires OPENROUTER_API_KEY env var, not OAuth".into());
                 } else {
                     self.status_message = Some(format!("Starting {} login...", args));
-                    let _ =
-                        self.cmd_tx.send(SessionCommand::Login { provider: args.to_string() });
+                    let _ = self.cmd_tx.send(SessionCommand::Login { provider: args.to_string() });
                 }
             }
             "/logout" => {
@@ -1123,8 +1124,7 @@ impl InteractiveMode {
                     self.status_message =
                         Some("Usage: /logout <provider>  (available: anthropic, codex)".into());
                 } else {
-                    let _ =
-                        self.cmd_tx.send(SessionCommand::Logout { provider: args.to_string() });
+                    let _ = self.cmd_tx.send(SessionCommand::Logout { provider: args.to_string() });
                 }
             }
             "/fork" => {
@@ -1135,16 +1135,19 @@ impl InteractiveMode {
             }
             "/copy" => {
                 if let Some(ref text) = self.last_response.clone() {
-                    let file_path = self.session_id.as_deref().zip(self.last_node_id.as_deref())
+                    let file_path = self
+                        .session_id
+                        .as_deref()
+                        .zip(self.last_node_id.as_deref())
                         .map(|(sid, nid)| {
                             let path = std::path::PathBuf::from(format!("/tmp/{}/{}", sid, nid));
                             let _ = std::fs::create_dir_all(&path);
                             path.join("response.md")
                         });
 
-                    let wrote = file_path.as_ref().and_then(|p| {
-                        std::fs::write(p, text.as_bytes()).ok().map(|_| p.clone())
-                    });
+                    let wrote = file_path
+                        .as_ref()
+                        .and_then(|p| std::fs::write(p, text.as_bytes()).ok().map(|_| p.clone()));
 
                     match copy_to_clipboard(text) {
                         Ok(()) => {
@@ -1418,11 +1421,29 @@ pub fn has_planning_intent(text: &str) -> bool {
     let t = text.to_lowercase();
     // Explicit plan/design/architect triggers
     let triggers = [
-        "plan ", "plan\n", "design ", "architect ", "draft a plan", "write a plan",
-        "create a plan", "make a plan", "help me plan", "let's plan", "let's design",
-        "think through", "before we start", "before you start", "outline ",
-        "figure out how", "how should we", "how should i", "what's the best way",
-        "what is the best way", "propose a", "suggest a", "explore options",
+        "plan ",
+        "plan\n",
+        "design ",
+        "architect ",
+        "draft a plan",
+        "write a plan",
+        "create a plan",
+        "make a plan",
+        "help me plan",
+        "let's plan",
+        "let's design",
+        "think through",
+        "before we start",
+        "before you start",
+        "outline ",
+        "figure out how",
+        "how should we",
+        "how should i",
+        "what's the best way",
+        "what is the best way",
+        "propose a",
+        "suggest a",
+        "explore options",
     ];
     triggers.iter().any(|&t2| t.contains(t2))
 }

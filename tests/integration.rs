@@ -630,8 +630,9 @@ fn compaction_archived_messages_includes_full_branch() {
 /// expected entry types, including a compaction entry with archived_messages.
 #[test]
 fn export_jsonl_structure() {
-    use nerv::session::types::SessionEntry;
     use std::io::{BufRead, BufReader};
+
+    use nerv::session::types::SessionEntry;
 
     let (tmp, mut session, event_tx) = setup_session(vec![
         simple_response("Hello from turn one."),
@@ -684,10 +685,7 @@ fn parse_jsonl_script_runs_on_export() {
     session.prompt("Script question one".into(), &event_tx);
     session.prompt("Script question two".into(), &event_tx);
 
-    let jsonl = session
-        .session_manager
-        .export_jsonl()
-        .expect("export_jsonl should return Some");
+    let jsonl = session.session_manager.export_jsonl().expect("export_jsonl should return Some");
 
     let export_path = tmp.path().join("test_export.jsonl");
     std::fs::write(&export_path, &jsonl).expect("write export file");

@@ -249,12 +249,7 @@ impl Component for ChatWriter {
                 // No content yet — show animated "awaiting response" dots
                 let step = (s.start.elapsed().as_millis() / 400) as usize % 4;
                 let dots = ["..", "...", "..", "."][step];
-                out.push(format!(
-                    "{}awaiting response{}{}",
-                    theme::DIM,
-                    dots,
-                    theme::RESET,
-                ));
+                out.push(format!("{}awaiting response{}{}", theme::DIM, dots, theme::RESET,));
             } else {
                 if !s.thinking.is_empty() && !s.thinking_committed {
                     for line in s.thinking.lines() {

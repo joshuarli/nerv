@@ -84,11 +84,7 @@ impl AgentTool for MemoryTool {
         Ok(())
     }
 
-    fn execute(
-        &self,
-        input: serde_json::Value,
-        _cancel: &CancelFlag,
-    ) -> ToolResult {
+    fn execute(&self, input: serde_json::Value, _cancel: &CancelFlag) -> ToolResult {
         let action = input["action"].as_str().unwrap_or("list");
         let mut memories = self.read_memories();
 

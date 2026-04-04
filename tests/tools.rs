@@ -8,7 +8,6 @@ use nerv::agent::provider::{CancelFlag, new_cancel_flag};
 use nerv::tools::*;
 use tempfile::TempDir;
 
-
 fn noop_cancel() -> CancelFlag {
     new_cancel_flag()
 }
@@ -25,8 +24,7 @@ fn read_tool_returns_numbered_lines() {
     std::fs::write(&file, "line1\nline2\nline3\n").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result =
-        tool.execute(serde_json::json!({"path": "test.txt"}), &noop_cancel());
+    let result = tool.execute(serde_json::json!({"path": "test.txt"}), &noop_cancel());
 
     assert!(!result.is_error);
     assert!(result.content.contains("line1"));
@@ -43,10 +41,8 @@ fn read_tool_offset_and_limit() {
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
     // offset is 1-based: offset=3, limit=2 → lines 3 and 4 (c, d)
-    let result = tool.execute(
-        serde_json::json!({"path": "test.txt", "offset": 3, "limit": 2}),
-        &noop_cancel(),
-    );
+    let result = tool
+        .execute(serde_json::json!({"path": "test.txt", "offset": 3, "limit": 2}), &noop_cancel());
 
     assert!(!result.is_error);
     assert!(result.content.contains("c"));
@@ -58,8 +54,7 @@ fn read_tool_offset_and_limit() {
 fn read_tool_nonexistent_file() {
     let tmp = TempDir::new().unwrap();
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result =
-        tool.execute(serde_json::json!({"path": "nonexistent.txt"}), &noop_cancel());
+    let result = tool.execute(serde_json::json!({"path": "nonexistent.txt"}), &noop_cancel());
 
     assert!(result.is_error);
     assert!(
@@ -603,8 +598,7 @@ fn edit_multi_deletion_and_insertion() {
 fn bash_tool_runs_command() {
     let tmp = TempDir::new().unwrap();
     let tool = EpshTool::new(tmp.path().to_path_buf());
-    let result =
-        tool.execute(serde_json::json!({"command": "echo hello"}), &noop_cancel());
+    let result = tool.execute(serde_json::json!({"command": "echo hello"}), &noop_cancel());
 
     assert!(!result.is_error, "bash failed: {}", result.content);
     assert!(result.content.contains("hello"));
@@ -614,8 +608,7 @@ fn bash_tool_runs_command() {
 fn bash_tool_reports_nonzero_exit() {
     let tmp = TempDir::new().unwrap();
     let tool = EpshTool::new(tmp.path().to_path_buf());
-    let result =
-        tool.execute(serde_json::json!({"command": "exit 42"}), &noop_cancel());
+    let result = tool.execute(serde_json::json!({"command": "exit 42"}), &noop_cancel());
 
     assert!(result.is_error);
     assert!(result.content.contains("42"));
@@ -926,8 +919,7 @@ fn read_empty_file() {
     std::fs::write(tmp.path().join("empty.txt"), "").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result =
-        tool.execute(serde_json::json!({"path": "empty.txt"}), &noop_cancel());
+    let result = tool.execute(serde_json::json!({"path": "empty.txt"}), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.is_empty() || result.content.trim().is_empty());
 }
@@ -948,8 +940,7 @@ fn read_unicode() {
     std::fs::write(tmp.path().join("uni.txt"), "héllo 世界\nñ\n").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result =
-        tool.execute(serde_json::json!({"path": "uni.txt"}), &noop_cancel());
+    let result = tool.execute(serde_json::json!({"path": "uni.txt"}), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("héllo"));
     assert!(result.content.contains("世界"));
@@ -961,10 +952,8 @@ fn read_offset_past_end() {
     std::fs::write(tmp.path().join("small.txt"), "one\ntwo\n").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(
-        serde_json::json!({"path": "small.txt", "offset": 999}),
-        &noop_cancel(),
-    );
+    let result =
+        tool.execute(serde_json::json!({"path": "small.txt", "offset": 999}), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.is_empty() || result.content.trim().is_empty());
 }
@@ -976,10 +965,7 @@ fn read_absolute_path() {
     std::fs::write(&file, "content\n").unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(
-        serde_json::json!({"path": file.to_str().unwrap()}),
-        &noop_cancel(),
-    );
+    let result = tool.execute(serde_json::json!({"path": file.to_str().unwrap()}), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("content"));
 }
@@ -992,8 +978,7 @@ fn read_output_token_efficiency() {
     std::fs::write(tmp.path().join("code.rs"), lines.join("\n")).unwrap();
 
     let tool = ReadTool::new(tmp.path().to_path_buf());
-    let result =
-        tool.execute(serde_json::json!({"path": "code.rs"}), &noop_cancel());
+    let result = tool.execute(serde_json::json!({"path": "code.rs"}), &noop_cancel());
     assert!(!result.is_error);
 
     let tokens = approx_tokens(&result);
@@ -1016,10 +1001,8 @@ fn write_overwrites_existing() {
     std::fs::write(&file, "old content").unwrap();
 
     let tool = WriteTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(
-        serde_json::json!({"path": "test.txt", "content": "new content"}),
-        &noop_cancel(),
-    );
+    let result = tool
+        .execute(serde_json::json!({"path": "test.txt", "content": "new content"}), &noop_cancel());
     assert!(!result.is_error);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "new content");
 }
@@ -1029,10 +1012,8 @@ fn write_empty_content() {
     let tmp = TempDir::new().unwrap();
 
     let tool = WriteTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(
-        serde_json::json!({"path": "empty.txt", "content": ""}),
-        &noop_cancel(),
-    );
+    let result =
+        tool.execute(serde_json::json!({"path": "empty.txt", "content": ""}), &noop_cancel());
     assert!(!result.is_error);
     assert_eq!(std::fs::read_to_string(tmp.path().join("empty.txt")).unwrap(), "");
 }
@@ -1042,10 +1023,8 @@ fn write_unicode_content() {
     let tmp = TempDir::new().unwrap();
 
     let tool = WriteTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(
-        serde_json::json!({"path": "uni.txt", "content": "héllo 世界\n"}),
-        &noop_cancel(),
-    );
+    let result = tool
+        .execute(serde_json::json!({"path": "uni.txt", "content": "héllo 世界\n"}), &noop_cancel());
     assert!(!result.is_error);
     assert!(std::fs::read_to_string(tmp.path().join("uni.txt")).unwrap().contains("世界"));
 }
@@ -1055,10 +1034,8 @@ fn write_deeply_nested_path() {
     let tmp = TempDir::new().unwrap();
 
     let tool = WriteTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(
-        serde_json::json!({"path": "a/b/c/d/e.txt", "content": "deep"}),
-        &noop_cancel(),
-    );
+    let result = tool
+        .execute(serde_json::json!({"path": "a/b/c/d/e.txt", "content": "deep"}), &noop_cancel());
     assert!(!result.is_error);
     assert_eq!(std::fs::read_to_string(tmp.path().join("a/b/c/d/e.txt")).unwrap(), "deep");
 }
@@ -1344,8 +1321,7 @@ fn symbols_tool_finds_definitions() {
     let tool = SymbolsTool::new(tmp.path().to_path_buf());
 
     // Search by type name
-    let result =
-        tool.execute(serde_json::json!({"query": "Config"}), &noop_cancel());
+    let result = tool.execute(serde_json::json!({"query": "Config"}), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("struct"), "should find struct: {}", result.content);
 
@@ -1362,10 +1338,8 @@ fn symbols_tool_kind_filter() {
     std::fs::write(tmp.path().join("lib.rs"), "fn foo() {}\nstruct Foo;\n").unwrap();
 
     let tool = SymbolsTool::new(tmp.path().to_path_buf());
-    let result = tool.execute(
-        serde_json::json!({"query": "foo", "kind": "function"}),
-        &noop_cancel(),
-    );
+    let result =
+        tool.execute(serde_json::json!({"query": "foo", "kind": "function"}), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("fn foo"), "{}", result.content);
     assert!(
@@ -1381,8 +1355,7 @@ fn symbols_tool_no_results() {
     std::fs::write(tmp.path().join("lib.rs"), "fn hello() {}\n").unwrap();
 
     let tool = SymbolsTool::new(tmp.path().to_path_buf());
-    let result =
-        tool.execute(serde_json::json!({"query": "nonexistent"}), &noop_cancel());
+    let result = tool.execute(serde_json::json!({"query": "nonexistent"}), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("No definitions found"), "{}", result.content);
 }
@@ -1400,10 +1373,8 @@ fn codemap_tool_full_depth() {
         .unwrap();
 
     let tool = codemap_tool(&tmp);
-    let result = tool.execute(
-        serde_json::json!({"query": "hello", "depth": "full"}),
-        &noop_cancel(),
-    );
+    let result =
+        tool.execute(serde_json::json!({"query": "hello", "depth": "full"}), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("fn hello()"), "{}", result.content);
     assert!(result.content.contains("println!"), "should contain body: {}", result.content);
@@ -1416,10 +1387,8 @@ fn codemap_tool_signatures_depth() {
         .unwrap();
 
     let tool = codemap_tool(&tmp);
-    let result = tool.execute(
-        serde_json::json!({"query": "hello", "depth": "signatures"}),
-        &noop_cancel(),
-    );
+    let result =
+        tool.execute(serde_json::json!({"query": "hello", "depth": "signatures"}), &noop_cancel());
     assert!(!result.is_error);
     assert!(result.content.contains("fn hello()"), "{}", result.content);
     assert!(!result.content.contains("println!"), "should NOT contain body: {}", result.content);
@@ -1431,8 +1400,7 @@ fn codemap_tool_no_results() {
     std::fs::write(tmp.path().join("lib.rs"), "fn hello() {}\n").unwrap();
 
     let tool = codemap_tool(&tmp);
-    let result =
-        tool.execute(serde_json::json!({"query": "nonexistent"}), &noop_cancel());
+    let result = tool.execute(serde_json::json!({"query": "nonexistent"}), &noop_cancel());
     assert!(!result.is_error);
     // Non-empty query with definitions in scope → redirect message
     assert!(result.content.contains("No symbols matching"), "{}", result.content);

@@ -294,10 +294,7 @@ impl SessionManager {
         self.append_entry(entry)
     }
 
-    pub fn append_compaction(
-        &mut self,
-        record: CompactionRecord,
-    ) -> anyhow::Result<()> {
+    pub fn append_compaction(&mut self, record: CompactionRecord) -> anyhow::Result<()> {
         if self.session_id.is_none() {
             anyhow::bail!("no active session");
         }
@@ -507,7 +504,8 @@ impl SessionManager {
 
         // Seed accumulated stats from the compaction snapshot, then add all
         // surviving (post-compaction) MessageEntry records on top.
-        let mut cost_usd: f64 = last_compact.as_ref().map(|(_, c)| c.cost_usd_before).unwrap_or(0.0);
+        let mut cost_usd: f64 =
+            last_compact.as_ref().map(|(_, c)| c.cost_usd_before).unwrap_or(0.0);
         let mut total_input: u64 = 0;
         let mut total_output: u64 = 0;
         let mut api_calls: u32 = 0;
@@ -1212,8 +1210,10 @@ impl SessionManager {
         // Build per-compaction fingerprint sets of live verbatim-window messages
         // so we can skip duplicates (old sessions stored the full branch in
         // archived_messages, including the verbatim window that stays in the DB).
-        let mut verbatim_fingerprints: std::collections::HashMap<String, std::collections::HashSet<String>> =
-            std::collections::HashMap::new();
+        let mut verbatim_fingerprints: std::collections::HashMap<
+            String,
+            std::collections::HashSet<String>,
+        > = std::collections::HashMap::new();
         for entry in &branch {
             if let SessionEntry::Compaction(ce) = entry {
                 // Collect all Message entries from first_kept_entry_id onward
@@ -1222,7 +1222,9 @@ impl SessionManager {
                 for e2 in &branch {
                     match e2 {
                         SessionEntry::Message(me) => {
-                            if me.id == ce.first_kept_entry_id { collecting = true; }
+                            if me.id == ce.first_kept_entry_id {
+                                collecting = true;
+                            }
                             if collecting {
                                 let key = serde_json::to_string(&me.message).unwrap_or_default();
                                 verbatim_fingerprints.entry(ce.id.clone()).or_default().insert(key);
@@ -1407,13 +1409,7 @@ fn summarize_entry(entry: &SessionEntry) -> (String, String, String, bool, bool)
             false,
             false,
         ),
-        SessionEntry::Btw(b) => (
-            "btw".into(),
-            truncate(&b.note, 80),
-            String::new(),
-            false,
-            false,
-        ),
+        SessionEntry::Btw(b) => ("btw".into(), truncate(&b.note, 80), String::new(), false, false),
     }
 }
 
@@ -1448,7 +1444,11 @@ fn truncate(s: &str, max: usize) -> String {
     let s = s.trim();
     // Take first line only
     let line = s.lines().next().unwrap_or("");
-    if line.len() <= max { line.to_string() } else { format!("{}...", line.truncate_chars(max - 3)) }
+    if line.len() <= max {
+        line.to_string()
+    } else {
+        format!("{}...", line.truncate_chars(max - 3))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1870,17 +1870,17 @@ mod tests {
         mgr.append_compaction(record).unwrap();
 
         let jsonl = mgr.export_jsonl().unwrap();
-        let lines: Vec<serde_json::Value> = jsonl
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
+        let lines: Vec<serde_json::Value> =
+            jsonl.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
 
         // Find archived message lines
-        let archived_lines: Vec<_> = lines
-            .iter()
-            .filter(|l| l["archived"] == serde_json::Value::Bool(true))
-            .collect();
-        assert_eq!(archived_lines.len(), 2, "both archived messages must appear as top-level lines");
+        let archived_lines: Vec<_> =
+            lines.iter().filter(|l| l["archived"] == serde_json::Value::Bool(true)).collect();
+        assert_eq!(
+            archived_lines.len(),
+            2,
+            "both archived messages must appear as top-level lines"
+        );
 
         // First archived line is the user turn
         let role0 = archived_lines[0]["message"]["role"].as_str().unwrap();
@@ -1904,15 +1904,11 @@ mod tests {
         mgr.append_compaction(record).unwrap();
 
         let jsonl = mgr.export_jsonl().unwrap();
-        let lines: Vec<serde_json::Value> = jsonl
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
+        let lines: Vec<serde_json::Value> =
+            jsonl.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
 
-        let marker = lines
-            .iter()
-            .find(|l| l["type"] == "compaction")
-            .expect("compaction marker must exist");
+        let marker =
+            lines.iter().find(|l| l["type"] == "compaction").expect("compaction marker must exist");
 
         assert!(
             marker.get("archived_messages").is_none(),
@@ -1937,10 +1933,8 @@ mod tests {
         mgr.append_compaction(record).unwrap();
 
         let jsonl = mgr.export_jsonl().unwrap();
-        let lines: Vec<serde_json::Value> = jsonl
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
+        let lines: Vec<serde_json::Value> =
+            jsonl.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
 
         let archived_pos = lines
             .iter()
@@ -1969,18 +1963,14 @@ mod tests {
         mgr.append_compaction(record).unwrap();
 
         let jsonl = mgr.export_jsonl().unwrap();
-        let lines: Vec<serde_json::Value> = jsonl
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
+        let lines: Vec<serde_json::Value> =
+            jsonl.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
 
         // Every archived assistant message must have a tokens object with the
         // expected fields reconstructed from usage.
         let archived_assistants: Vec<_> = lines
             .iter()
-            .filter(|l| {
-                l["archived"] == true && l["message"]["role"] == "assistant"
-            })
+            .filter(|l| l["archived"] == true && l["message"]["role"] == "assistant")
             .collect();
 
         assert!(
@@ -2007,9 +1997,7 @@ mod tests {
         // User/toolResult archived messages must NOT have a tokens field.
         let archived_non_assistant: Vec<_> = lines
             .iter()
-            .filter(|l| {
-                l["archived"] == true && l["message"]["role"] != "assistant"
-            })
+            .filter(|l| l["archived"] == true && l["message"]["role"] != "assistant")
             .collect();
         for line in &archived_non_assistant {
             assert!(
@@ -2039,23 +2027,17 @@ mod tests {
         mgr.append_message(&assistant_msg("post compaction reply"), None).unwrap();
 
         let jsonl = mgr.export_jsonl().unwrap();
-        let lines: Vec<serde_json::Value> = jsonl
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
+        let lines: Vec<serde_json::Value> =
+            jsonl.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
 
-        let marker_pos = lines
-            .iter()
-            .position(|l| l["type"] == "compaction")
-            .expect("compaction marker");
+        let marker_pos =
+            lines.iter().position(|l| l["type"] == "compaction").expect("compaction marker");
 
         // The kept-boundary entry (first_kept_entry_id) sits before the
         // compaction marker in branch order — the compaction was appended
         // after it, summarising the history that preceded it.
         let surviving_pos = lines.iter().position(|l| {
-            l.get("archived").is_none()
-                && l["type"] == "message"
-                && l["message"]["role"] == "user"
+            l.get("archived").is_none() && l["type"] == "message" && l["message"]["role"] == "user"
         });
 
         if let Some(pos) = surviving_pos {
@@ -2102,10 +2084,7 @@ mod tests {
         mgr.append_compaction(record).unwrap();
 
         let jsonl = mgr.export_jsonl().unwrap();
-        let archived_count = jsonl
-            .lines()
-            .filter(|l| l.contains("\"archived\":true"))
-            .count();
+        let archived_count = jsonl.lines().filter(|l| l.contains("\"archived\":true")).count();
         assert_eq!(archived_count, 0);
     }
 
@@ -2139,7 +2118,11 @@ mod tests {
         let ctx = mgr.build_session_context();
 
         // Messages should be: CompactionSummary, Custom(preserved), kept message
-        assert!(ctx.messages.len() >= 3, "expected at least 3 messages, got {}", ctx.messages.len());
+        assert!(
+            ctx.messages.len() >= 3,
+            "expected at least 3 messages, got {}",
+            ctx.messages.len()
+        );
 
         // First message: CompactionSummary
         assert!(
