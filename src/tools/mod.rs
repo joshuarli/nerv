@@ -24,3 +24,26 @@ pub use memory::MemoryTool;
 pub use read::ReadTool;
 pub use symbols::SymbolsTool;
 pub use write::WriteTool;
+
+/// Reject any JSON object key not in `allowed`. Returns a sorted, deterministic
+/// error listing the unknown keys — makes mistyped argument names actionable.
+pub fn validate_known_keys(input: &serde_json::Value, allowed: &[&str]) -> Result<(), crate::errors::ToolError> {
+    let Some(obj) = input.as_object() else {
+        return Err(crate::errors::ToolError::InvalidArguments {
+            message: "arguments must be an object".into(),
+        });
+    };
+    let mut unknown: Vec<&str> =
+        obj.keys().map(|k| k.as_str()).filter(|k| !allowed.contains(k)).collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort_unstable();
+    Err(crate::errors::ToolError::InvalidArguments {
+        message: format!(
+            "unknown argument(s): {} (allowed: {})",
+            unknown.join(", "),
+            allowed.join(", "),
+        ),
+    })
+}

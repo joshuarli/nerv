@@ -20,24 +20,6 @@ fn normalize_empty_query_literal(raw: &str) -> Option<&'static str> {
     if trimmed.is_empty() || trimmed == "\"\"" || trimmed == "''" { Some("") } else { None }
 }
 
-fn validate_known_keys(input: &serde_json::Value, allowed: &[&str]) -> Result<(), ToolError> {
-    let Some(obj) = input.as_object() else {
-        return Err(ToolError::InvalidArguments { message: "arguments must be an object".into() });
-    };
-    let mut unknown: Vec<&str> =
-        obj.keys().map(|k| k.as_str()).filter(|k| !allowed.contains(k)).collect();
-    if unknown.is_empty() {
-        return Ok(());
-    }
-    unknown.sort_unstable();
-    Err(ToolError::InvalidArguments {
-        message: format!(
-            "unknown argument(s): {} (allowed: {})",
-            unknown.join(", "),
-            allowed.join(", ")
-        ),
-    })
-}
 
 impl CodemapTool {
     pub fn new(cwd: PathBuf, index: Arc<RwLock<SymbolIndex>>) -> Self {
@@ -153,7 +135,7 @@ impl AgentTool for CodemapTool {
     }
 
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        validate_known_keys(input, CODEMAP_ALLOWED_KEYS)?;
+        super::validate_known_keys(input, CODEMAP_ALLOWED_KEYS)?;
         let query_raw = input
             .get("query")
             .and_then(|v| v.as_str())

@@ -155,9 +155,10 @@ Goal: prevent silent drift from malformed or ambiguous arguments.
 - [x] `grep`: enforce canonical key as `path`; decide one policy:
   - strict error on unknown `file`, or
   - compatibility alias `file -> path` with explicit warning in tool output.
-- [ ] Add unknown-argument detection for all tool JSON inputs used by agentic loop.
-  - Implemented for `symbols`, `codemap`, and `grep`; still pending repo-wide rollout.
-- [ ] Include "effective normalized args" in debug logging to aid postmortems.
+- [x] Add unknown-argument detection for all tool JSON inputs used by agentic loop.
+  - Shared `validate_known_keys` in `src/tools/mod.rs`; applied to all tools (read, edit, write, find, ls, epsh, memory, symbols, codemap, grep).
+- [x] Include "effective normalized args" in debug logging to aid postmortems.
+  - `src/agent/agent.rs` logs `tool={name} args={args}` at DEBUG level after normalization.
 
 #### Candidate files
 - `src/tools/symbols.rs`
@@ -177,19 +178,21 @@ Goal: prevent silent drift from malformed or ambiguous arguments.
 Goal: reduce wasted calls and loop churn after read cache signals.
 
 #### Tasks
-- [ ] Add per-turn duplicate-read detection in tool orchestration:
+- [x] Add per-turn duplicate-read detection in tool orchestration:
   - same `(path, offset/limit or equivalent range)` should be dropped or downgraded.
-- [ ] Surface a compact advisory message:
-  - "range already present; use grep for localization."
-- [ ] Keep override path for intentional rereads after edit mutation events.
+  - Implemented in `src/tools/read.rs` via mtime + range cache (`ReadCacheEntry`).
+- [x] Surface a compact advisory message:
+  - Full-file re-reads: `[unchanged since last read: ...]`; range re-reads: `[already read ... — use grep to locate specific text]`.
+- [x] Keep override path for intentional rereads after edit mutation events.
+  - mtime-based invalidation: any file write changes mtime and clears the dedup guard.
 
 #### Candidate files
 - `src/agent/agent.rs`
 - `src/tools/read.rs`
 
 #### Acceptance criteria
-- Tests confirm repeated identical reads in a turn are blocked/deduped.
-- No regression for valid reread after file mutation.
+- Tests confirm repeated identical reads in a turn are blocked/deduped. ✓ (range_dedup_*, mtime_cache_* tests in read.rs)
+- No regression for valid reread after file mutation. ✓ (range_dedup_invalidated_by_edit)
 
 ### WS9: Evaluation harness additions for first-turn efficiency (P1/P2)
 

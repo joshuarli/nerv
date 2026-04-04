@@ -70,23 +70,7 @@ impl AgentTool for GrepTool {
     }
 
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
-        let Some(obj) = input.as_object() else {
-            return Err(ToolError::InvalidArguments {
-                message: "arguments must be an object".into(),
-            });
-        };
-        let mut unknown: Vec<&str> =
-            obj.keys().map(|k| k.as_str()).filter(|k| !GREP_ALLOWED_KEYS.contains(k)).collect();
-        if !unknown.is_empty() {
-            unknown.sort_unstable();
-            return Err(ToolError::InvalidArguments {
-                message: format!(
-                    "unknown argument(s): {} (allowed: {})",
-                    unknown.join(", "),
-                    GREP_ALLOWED_KEYS.join(", ")
-                ),
-            });
-        }
+        super::validate_known_keys(input, GREP_ALLOWED_KEYS)?;
         if input.get("pattern").and_then(|v| v.as_str()).is_none() {
             let keys: Vec<&str> = input
                 .as_object()

@@ -28,6 +28,8 @@ impl MemoryTool {
     }
 }
 
+const MEMORY_ALLOWED_KEYS: &[&str] = &["action", "content"];
+
 impl AgentTool for MemoryTool {
     fn name(&self) -> &str {
         "memory"
@@ -61,6 +63,7 @@ impl AgentTool for MemoryTool {
     }
 
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
+        super::validate_known_keys(input, MEMORY_ALLOWED_KEYS)?;
         let action = input["action"].as_str().unwrap_or("");
         if !["list", "add", "remove"].contains(&action) {
             return Err(ToolError::InvalidArguments {
@@ -127,5 +130,20 @@ impl AgentTool for MemoryTool {
             }
             _ => ToolResult::error("Unknown action"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_unknown_argument() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = MemoryTool::new(tmp.path().to_path_buf());
+        let err = tool
+            .validate(&serde_json::json!({"action": "list", "bogus": true}))
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown argument"), "{}", err);
     }
 }

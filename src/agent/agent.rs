@@ -655,6 +655,7 @@ impl Agent {
             }
         } else if let Some(tool) = tool {
             let args = tool.normalize(args.clone());
+            crate::log::debug(&format!("tool={} args={}", name, args));
             match tool.validate(&args) {
                 Ok(()) => tool.execute(args, &self.cancel),
                 Err(e) => ToolResult {

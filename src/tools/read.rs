@@ -15,6 +15,8 @@ struct ReadCacheEntry {
     ranges_served: Vec<(usize, usize)>,
 }
 
+const READ_ALLOWED_KEYS: &[&str] = &["path", "offset", "limit"];
+
 pub struct ReadTool {
     cwd: PathBuf,
     cache: Mutex<std::collections::HashMap<PathBuf, ReadCacheEntry>>,
@@ -52,6 +54,7 @@ impl AgentTool for ReadTool {
         })
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
+        super::validate_known_keys(input, READ_ALLOWED_KEYS)?;
         if input.get("path").and_then(|v| v.as_str()).is_none() {
             let keys: Vec<&str> = input
                 .as_object()
@@ -451,5 +454,13 @@ mod tests {
         let r = read(tool.as_ref(), "nope.txt");
         assert!(r.is_error);
         assert!(r.content.contains("not found"));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_argument() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = make_tool(dir.path());
+        let err = tool.validate(&serde_json::json!({"path": "f.txt", "bogus": true})).unwrap_err();
+        assert!(err.to_string().contains("unknown argument"), "{}", err);
     }
 }

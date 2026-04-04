@@ -23,6 +23,7 @@ impl EditTool {
 }
 
 const MAX_EDIT_FILE_SIZE: usize = 10 * 1024 * 1024; // 10MB
+const EDIT_ALLOWED_KEYS: &[&str] = &["path", "old_text", "new_text", "edits"];
 
 struct Edit {
     old_text: String,
@@ -83,6 +84,7 @@ impl AgentTool for EditTool {
         input
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
+        super::validate_known_keys(input, EDIT_ALLOWED_KEYS)?;
         if input.get("path").and_then(|v| v.as_str()).is_none() {
             let keys: Vec<&str> = input
                 .as_object()
@@ -523,4 +525,26 @@ fn normalize_for_fuzzy(s: &str) -> String {
         .map(|l| l.trim_end())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::tools::file_mutation_queue::FileMutationQueue;
+
+    fn make_tool(dir: &std::path::Path) -> EditTool {
+        EditTool::new(dir.to_path_buf(), Arc::new(FileMutationQueue::new()))
+    }
+
+    #[test]
+    fn validate_rejects_unknown_argument() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = make_tool(tmp.path());
+        let err = tool
+            .validate(&serde_json::json!({"path": "f.txt", "old_text": "a", "new_text": "b", "bogus": true}))
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown argument"), "{}", err);
+    }
 }

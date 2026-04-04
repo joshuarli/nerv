@@ -17,6 +17,8 @@ impl WriteTool {
     }
 }
 
+const WRITE_ALLOWED_KEYS: &[&str] = &["path", "content"];
+
 impl AgentTool for WriteTool {
     fn name(&self) -> &str {
         "write"
@@ -28,6 +30,7 @@ impl AgentTool for WriteTool {
         serde_json::json!({"type":"object","properties":{"path":{"type":"string","description":"Path to the file to write"},"content":{"type":"string","description":"Content to write"}},"required":["path","content"],"additionalProperties":false})
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
+        super::validate_known_keys(input, WRITE_ALLOWED_KEYS)?;
         if input.get("path").and_then(|v| v.as_str()).is_none() {
             let keys: Vec<&str> = input
                 .as_object()
@@ -61,5 +64,20 @@ impl AgentTool for WriteTool {
             Ok(()) => ToolResult::ok(format!("Wrote {} bytes to {}", content.len(), path_str)),
             Err(e) => ToolResult::error(format!("Error writing {}: {}", path_str, e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_unknown_argument() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = WriteTool::new(tmp.path().to_path_buf());
+        let err = tool
+            .validate(&serde_json::json!({"path": "f.txt", "content": "x", "bogus": true}))
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown argument"), "{}", err);
     }
 }

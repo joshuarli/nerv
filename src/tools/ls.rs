@@ -22,6 +22,7 @@ impl LsTool {
 const DEFAULT_DEPTH: usize = 2;
 const MAX_DEPTH: usize = 5;
 const MAX_ENTRIES: usize = 2000;
+const LS_ALLOWED_KEYS: &[&str] = &["path", "depth"];
 
 /// Render a directory tree like `eza --tree -L{depth}`.
 ///
@@ -109,8 +110,8 @@ impl AgentTool for LsTool {
             "additionalProperties": false
         })
     }
-    fn validate(&self, _input: &serde_json::Value) -> Result<(), ToolError> {
-        Ok(())
+    fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
+        super::validate_known_keys(input, LS_ALLOWED_KEYS)
     }
     fn execute(&self, input: serde_json::Value, _cancel: &CancelFlag) -> ToolResult {
         let path_str = input["path"].as_str().unwrap_or(".");
@@ -250,5 +251,12 @@ mod tests {
         let cancel = crate::agent::provider::new_cancel_flag();
         let result = tool.execute(serde_json::json!({"path": "/nonexistent_path_xyz"}), &cancel);
         assert!(result.content.contains("not found") || result.content.contains("error"));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_argument() {
+        let tool = LsTool::new(std::env::current_dir().unwrap());
+        let err = tool.validate(&serde_json::json!({"path": ".", "bogus": true})).unwrap_err();
+        assert!(err.to_string().contains("unknown argument"), "{}", err);
     }
 }

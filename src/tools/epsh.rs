@@ -57,6 +57,8 @@ impl Write for CappedBuffer {
     }
 }
 
+const EPSH_ALLOWED_KEYS: &[&str] = &["command", "timeout"];
+
 pub struct EpshTool {
     cwd: PathBuf,
 }
@@ -106,6 +108,7 @@ impl AgentTool for EpshTool {
         ]
     }
     fn validate(&self, input: &serde_json::Value) -> Result<(), ToolError> {
+        super::validate_known_keys(input, EPSH_ALLOWED_KEYS)?;
         if input.get("command").and_then(|v| v.as_str()).is_none() {
             let keys: Vec<&str> = input
                 .as_object()
@@ -242,4 +245,19 @@ fn word_to_literal(word: &epsh::ast::Word) -> Option<String> {
         }
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_unknown_argument() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let tool = EpshTool::new(tmp.path().to_path_buf());
+        let err = tool
+            .validate(&serde_json::json!({"command": "echo hi", "bogus": true}))
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown argument"), "{}", err);
+    }
 }
