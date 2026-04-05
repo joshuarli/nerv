@@ -540,14 +540,21 @@ fn main() {
             render_frame!(tui, layout);
         }
 
-        if should_quit {
+        if should_quit && !interactive.is_streaming {
             break;
         }
 
         // Poll all sources with a short timeout
         crossbeam_channel::select! {
             recv(stdin_rx) -> msg => {
-                let Ok(bytes) = msg else { break };
+                // stdin EOF (Ok(0) in the reader thread) closes stdin_tx, making
+                // recv return Err here. Treat this as a graceful quit request rather
+                // than an immediate exit — if the agent is mid-turn we let it finish
+                // so the session is saved cleanly before we exit.
+                let Ok(bytes) = msg else {
+                    should_quit = true;
+                    continue;
+                };
 
                 let events = stdin_buf.process(&bytes);
                 for event in events {
