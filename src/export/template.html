@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>nerv session</title>
+  <style>{{CSS}}</style>
+</head>
+<body>
+  <script>var __SESSION_B64__='{{SESSION_DATA}}';</script>
+
+  <div id="app">
+    <aside id="sidebar">
+      <div id="sidebar-header">
+        <div id="filter-bar">
+          <button class="filter-btn active" data-filter="default">Default</button>
+          <button class="filter-btn" data-filter="no-tools">No tools</button>
+          <button class="filter-btn" data-filter="user-only">User only</button>
+          <button class="filter-btn" data-filter="labeled">Labeled</button>
+          <button class="filter-btn" data-filter="all">All</button>
+        </div>
+        <input id="search-input" type="search" placeholder="Search…" autocomplete="off">
+      </div>
+      <div id="tree"></div>
+    </aside>
+
+    <div id="resize-handle" title="Drag to resize"></div>
+
+    <main id="content">
+      <div id="session-header"></div>
+      <div id="messages"></div>
+    </main>
+  </div>
+
+  <button id="menu-btn" aria-label="Toggle sidebar">☰</button>
+
+  <script>{{MARKED_JS}}</script>
+  <script>{{HIGHLIGHT_JS}}</script>
+  <script>{{APP_JS}}</script>
+</body>
+</html>

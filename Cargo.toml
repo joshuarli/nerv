@@ -15,7 +15,7 @@ pulldown-cmark = "0.12"
 unicode-segmentation = "1"
 unicode-width = "0.2"
 libc = "0.2"
-epsh = "0.0.3"
+epsh = "0.0.5"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 sha2 = "0.10"
 tree-sitter = "0.25"
