@@ -3,7 +3,7 @@ use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagE
 use crate::tui::highlight;
 use crate::tui::tui::Component;
 use crate::tui::utils::{
-    char_wrap_with_ansi, truncate_to_width, visible_width, wrap_text_with_ansi,
+    char_wrap_with_ansi, visible_width, wrap_text_with_ansi,
 };
 
 /// Theme functions for markdown rendering. Each takes raw text and returns
@@ -330,7 +330,7 @@ impl Markdown {
                 }
                 Event::End(TagEnd::Table) => {
                     if let Some(ts) = table_state.take() {
-                        let rendered = render_table(&ts, content_width, &padding, &self.theme);
+                        let rendered = render_table(&ts, &padding, &self.theme);
                         lines.extend(rendered);
                         lines.push(String::new());
                     }
@@ -355,12 +355,7 @@ impl Markdown {
     }
 }
 
-fn render_table(
-    ts: &TableState,
-    content_width: u16,
-    padding: &str,
-    theme: &MarkdownTheme,
-) -> Vec<String> {
+fn render_table(ts: &TableState, padding: &str, theme: &MarkdownTheme) -> Vec<String> {
     if ts.rows.is_empty() {
         return vec![];
     }
@@ -381,43 +376,6 @@ fn render_table(
                 col_widths[ci] = w;
             }
         }
-    }
-
-    // Each column is padded 1 space on each side: " content "
-    // Border: │ col │ col │ ...  │
-    // Total width = 1 + sum(col_w + 2) + ncols * 1 = 1 + sum(col_w) + 3*ncols
-    // We must fit within content_width. If too wide, shrink the widest columns.
-    let border_overhead = 1 + 3 * ncols as u16; // left │, then (space + content + space + │) × N
-    let available_for_content = content_width.saturating_sub(border_overhead);
-
-    // Simple proportional shrink: if total natural width exceeds available,
-    // repeatedly trim the widest column until it fits.
-    let total_natural: u16 = col_widths.iter().sum();
-    if total_natural > available_for_content {
-        let mut widths = col_widths.clone();
-        let mut total: u16 = widths.iter().sum();
-        while total > available_for_content {
-            let max_w = *widths.iter().max().unwrap_or(&1);
-            if max_w == 0 {
-                break;
-            }
-            let second_max = widths.iter().filter(|&&w| w < max_w).copied().max().unwrap_or(0);
-            let target = second_max.max(1);
-            let excess = total.saturating_sub(available_for_content);
-            let reducible: u16 = widths.iter().filter(|&&w| w == max_w).count() as u16;
-            let new_max = max_w.saturating_sub((excess + reducible - 1) / reducible).max(target);
-            for w in widths.iter_mut() {
-                if *w > new_max {
-                    *w = new_max;
-                }
-            }
-            let new_total: u16 = widths.iter().sum();
-            if new_total >= total {
-                break; // Safety: no progress
-            }
-            total = new_total;
-        }
-        col_widths = widths;
     }
 
     let border = |s: &str| (theme.table_border)(s);
@@ -443,9 +401,7 @@ fn render_table(
     let fmt_cell = |content: &str, col: usize, is_header: bool| -> String {
         let w = col_widths[col];
         let align = ts.alignments.get(col).copied().unwrap_or(Alignment::None);
-        // Truncate to column width, then pad.
-        let truncated = truncate_to_width(content, w);
-        let visible = visible_width(&truncated);
+        let visible = visible_width(content) as u16;
         let pad_total = w.saturating_sub(visible);
         let (pad_left, pad_right) = match align {
             Alignment::Center => {
@@ -458,7 +414,7 @@ fn render_table(
         let cell_str = format!(
             " {}{}{} ",
             " ".repeat(pad_left as usize),
-            truncated,
+            content,
             " ".repeat(pad_right as usize)
         );
         if is_header { (theme.table_header)(&cell_str) } else { cell_str }
@@ -550,18 +506,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn table_truncates_at_width() {
-        // Very narrow width — cells must be truncated, not overflow
-        let text = "| Very long column header | Another long header |\n|---|---|\n| long cell content here | more content |\n";
-        let lines = md(text).render_markdown(40);
-        for line in &lines {
-            assert!(
-                visible_width(line) <= 40,
-                "line too wide ({}): {:?}",
-                visible_width(line),
-                line
-            );
-        }
-    }
 }
