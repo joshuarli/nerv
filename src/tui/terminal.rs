@@ -1,5 +1,6 @@
 use std::io::{self, Stdout, Write};
 use std::mem::MaybeUninit;
+use std::os::unix::io::RawFd;
 
 pub trait Terminal: Send {
     fn start(&mut self);
@@ -88,7 +89,22 @@ impl Terminal for ProcessTerminal {
     }
 
     fn restart(&mut self) {
-        self.start();
+        // Re-enter raw mode using TCSAFLUSH to discard any bytes that
+        // accumulated in the input queue while the external editor was running
+        // (echoed text, editor status output, etc.). Without the flush those
+        // bytes would be processed as key events and corrupt the editor buffer.
+        if let Some(ref original) = self.original_termios {
+            enter_raw_mode(libc::STDIN_FILENO, original);
+        }
+        // Re-enable TUI escape sequences (cursor hide, bracketed paste, no wrap,
+        // modifyOtherKeys).
+        let _ = self.stdout.write_all(b"\x1b[?25l\x1b[?2004h\x1b[?7l");
+        if std::env::var_os("TMUX").is_some() {
+            let _ = self.stdout.write_all(b"\x1bPtmux;\x1b\x1b[>4;2m\x1b\\");
+        } else {
+            let _ = self.stdout.write_all(b"\x1b[>4;2m");
+        }
+        let _ = self.stdout.flush();
     }
 
     fn write_bytes(&mut self, data: &[u8]) {
@@ -149,6 +165,17 @@ impl Drop for ProcessTerminal {
     }
 }
 
+/// Enter raw mode on `fd`, discarding any bytes already in the input queue
+/// (`TCSAFLUSH`). Used by `restart()` to prevent bytes that arrived while an
+/// external editor was running from leaking into the TUI as key events.
+pub fn enter_raw_mode(fd: RawFd, original: &libc::termios) {
+    unsafe {
+        let mut raw = *original;
+        libc::cfmakeraw(&mut raw);
+        libc::tcsetattr(fd, libc::TCSAFLUSH, &raw);
+    }
+}
+
 fn terminal_size() -> (u16, u16) {
     unsafe {
         let mut ws = MaybeUninit::<libc::winsize>::uninit();
@@ -160,3 +187,5 @@ fn terminal_size() -> (u16, u16) {
         }
     }
 }
+
+
