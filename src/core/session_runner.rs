@@ -170,10 +170,31 @@ fn handle_login(provider: &str, session: &mut AgentSession, event_tx: &Sender<Ag
 
 /// The session task — runs in a dedicated thread, processes commands
 /// sequentially.
+///
+/// Wraps the command loop in `catch_unwind` so that an unexpected panic (e.g.
+/// a malformed API response triggering an unwrap deep in provider code) sends a
+/// visible Status error event before the channel closes. Without this, the
+/// event_tx drop caused by an unwinding panic makes the main event loop's
+/// `let Ok(event) = msg else { break }` fire silently — nerv exits with no
+/// message shown to the user.
 pub fn session_task(
     cmd_rx: crossbeam_channel::Receiver<SessionCommand>,
     event_tx: Sender<AgentSessionEvent>,
     mut session: AgentSession,
+) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        session_task_inner(&cmd_rx, &event_tx, &mut session);
+    }));
+    if result.is_err() {
+        let msg = "nerv encountered an internal error. The session has been saved — use /resume to continue.";
+        let _ = event_tx.send(AgentSessionEvent::Status { message: msg.into(), is_error: true });
+    }
+}
+
+fn session_task_inner(
+    cmd_rx: &crossbeam_channel::Receiver<SessionCommand>,
+    event_tx: &Sender<AgentSessionEvent>,
+    mut session: &mut AgentSession,
 ) {
     while let Ok(cmd) = cmd_rx.recv() {
         match cmd {
